@@ -56,6 +56,13 @@ Two PKGs are built:
 | `thug-ps3.pkg` | The game. |
 | `thug-ps3-headless.pkg` | Test build: loads and runs the game logic without video, audio or pad, writing everything to the log. Useful for checking the data loads before the renderer is finished. |
 
+## Quick testing with ps3load / PS3LoadX
+
+Each CI run also has `thug-ps3.self` (and `thug-ps3-headless.self` in the headless zip). Send it
+to PS3LoadX on the console with the `ps3load` client instead of installing a PKG. The game still
+needs the PKG installed once: started from elsewhere, it uses the installed game's `USRDIR` for
+`Data` and the log.
+
 ## Building
 
 Every push builds both PKGs on GitHub Actions (**Actions** tab → latest run → artifacts). The

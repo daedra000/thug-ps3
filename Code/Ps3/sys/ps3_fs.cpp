@@ -65,6 +65,18 @@ void SetAppPath(const char* argv0)
 	char* slash = strrchr(s_appDir, '/');
 	if (slash && slash != s_appDir)
 		*slash = '\0';
+
+	// Started from somewhere else (ps3load / PS3LoadX runs the EBOOT from its own folder):
+	// the PC data and the log live in the installed game's USRDIR.
+	char data[600];
+	snprintf(data, sizeof(data), "%s/Data", s_appDir);
+	bool isDir = false;
+	if (!(Exists(data, &isDir) && isDir) && strcmp(s_appDir, PS3_USRDIR) != 0)
+	{
+		bool installed = false;
+		if (Exists(PS3_USRDIR "/Data", &installed) && installed)
+			snprintf(s_appDir, sizeof(s_appDir), "%s", PS3_USRDIR);
+	}
 }
 
 const char* AppDir()
