@@ -101,7 +101,7 @@ jobs:
         run: |
           git clone -q https://github.com/ps3dev/PSL1GHT "$RUNNER_TEMP/psl1ght"
           git -C "$RUNNER_TEMP/psl1ght" checkout -q "$PSL1GHT_REF"
-      - name: Same bytes as cgcomp -a; every generated program assembles
+      - name: Same bytes as cgcomp -a; generated programs assemble and match D3D9 maths
         run: tools/rsx-asm-test/run.sh "$RUNNER_TEMP/psl1ght"
 
   game:

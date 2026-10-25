@@ -197,7 +197,7 @@ std::string VertexProgram(const VsKey& k)
 				w.Op("MUL", R(11, "xyz"), R(11), R(11, "w"));
 			}
 			else
-				w.Op("MOV", R(11), C(kVcConsts, "xxyx"));	// (0, 0, 1)
+				w.Op("MOV", R(11), "-" + C(kVcConsts, "xxyx"));	// (0, 0, -1): towards a viewer at infinity (D3D's eye space looks down +z)
 		}
 		for (int l = 0; l < 4 && k.light[l] != kLightNone; ++l)
 		{
