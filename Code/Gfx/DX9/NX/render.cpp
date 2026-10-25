@@ -317,6 +317,12 @@ void Swog(char const* format, ...)
 	static bool bFirst = true;
 	FILE* logFile;
 
+#ifdef __PLAT_PS3__
+	// A debug log of every generated pixel shader, on F:\ (kisak's machine). No such drive
+	// here: fopen fails, and the code below used the NULL FILE. Off on PS3.
+	(void)format; (void)bFirst; (void)logFile;
+	return;
+#endif
 	if (bFirst) {
 		logFile = fopen("F:\\thugpixelshaders.txt", "w"); // create new log
 		fprintf(logFile, "--Start of log--\n");
@@ -325,6 +331,7 @@ void Swog(char const* format, ...)
 	else {
 		logFile = fopen("F:\\thugpixelshaders.txt", "a"); // append to log
 	}
+	if (!logFile) return;	// no F: drive
 	setbuf(logFile, NULL); // Turn off buffered I/O, decreases performance but if crash occurs, no unflushed buffer.
 	va_list args;
 	va_start(args, format);
