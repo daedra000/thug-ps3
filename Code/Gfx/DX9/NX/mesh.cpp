@@ -1155,7 +1155,7 @@ DISABLE_FOG:
 	}
 
 DRAW_SHIT:
-	Dbg_Assert(D3D_OK == D3DDevice_SetIndices(mp_index_buffer[idx]->indexBuffer));
+	{ HRESULT hr_ = D3DDevice_SetIndices(mp_index_buffer[idx]->indexBuffer); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 
 #ifdef _DEBUG
 	// lwss TEST -- Ensure none of the indexes in the indexbuffer are out of range
@@ -1176,7 +1176,7 @@ DRAW_SHIT:
 	if (EngineGlobals.hasHLSLv101)
 	{
 		int prim_count = m_num_indices[idx] - 2;
-		Dbg_Assert(D3D_OK == D3DDevice_DrawIndexedPrimitive(m_primitive_type, 0, 0, m_num_vertices, 0, prim_count));
+		{ HRESULT hr_ = D3DDevice_DrawIndexedPrimitive(m_primitive_type, 0, 0, m_num_vertices, 0, prim_count); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 	}
 	else
 	{

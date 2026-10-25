@@ -582,7 +582,7 @@ ASSEMBLE:
 	Swog("%s\n\n\n", shader_buffer);
 
 	IDirect3DPixelShader9* shader_handle;
-	Dbg_Assert(D3D_OK == D3DDevice_CreatePixelShader((DWORD*)p_shader_buffer->GetBufferPointer(), &shader_handle));
+	{ HRESULT hr_ = D3DDevice_CreatePixelShader((DWORD*)p_shader_buffer->GetBufferPointer(), &shader_handle); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 	p_shader_buffer->Release();
 
 	sPixelShaderTable.PutItem(code, shader_handle);
@@ -1716,7 +1716,7 @@ void set_vertex_shader( DWORD shader_id )
 		{
 			// Set vertex shader.
 			//D3DDevice_SetVertexShader( shader_id );
-			Dbg_Assert(D3D_OK == D3DDevice_SetFVF(shader_id)); // lwss add for PC
+			{ HRESULT hr_ = D3DDevice_SetFVF(shader_id); Dbg_Assert(hr_ == D3D_OK); (void)hr_; } // lwss add for PC
 			EngineGlobals.vertex_shader_id = shader_id;
 		}
 	}
@@ -1774,7 +1774,7 @@ void set_pixel_shader(IDirect3DPixelShader9* shader_id, uint32 num_passes )
 		if( EngineGlobals.pixel_shader_id != shader_id )
 		{
 			// Set pixel shader.
-			Dbg_Assert(D3DDevice_SetPixelShader(shader_id) == D3D_OK);
+			{ HRESULT hr_ = D3DDevice_SetPixelShader(shader_id); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 			EngineGlobals.pixel_shader_id = shader_id;
 
 			// Changing pixel shader invalidates the constants, so we need to upload.

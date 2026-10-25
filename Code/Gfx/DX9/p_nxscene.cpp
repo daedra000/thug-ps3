@@ -57,7 +57,7 @@ void CXboxScene::plat_post_load(void* p_meat)
 	if (p_meat)
 	{
 		NxXbox::VertexMysteryMeat* meat = (NxXbox::VertexMysteryMeat*)p_meat;
-		Dbg_Assert(D3D_OK == D3DDevice_CreateVertexBuffer(meat->length, 8, 0, D3DPOOL_DEFAULT, &meat->vertexBuffer, 0));
+		{ HRESULT hr_ = D3DDevice_CreateVertexBuffer(meat->length, 8, 0, D3DPOOL_DEFAULT, &meat->vertexBuffer, 0); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 		meat->vertexBuffer->Lock(0, 0, &meat->lockedPtr, 0);
 		meat->streamOffset = 0;
 		this->p_vertex_buffer = meat->vertexBuffer;

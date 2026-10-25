@@ -557,7 +557,7 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 
 		// LWSS: Change for DX9
 		//if( D3D_OK != D3DDevice_CreateTexture(	p_texture->BaseWidth, p_texture->BaseHeight, p_texture->Levels,	0, texture_format, 0, &p_texture->pD3DTexture ))
-		Dbg_Assert(D3D_OK == D3DDevice_CreateTexture(p_texture->BaseWidth, p_texture->BaseHeight, p_texture->Levels, 0, texture_format, D3DPOOL_MANAGED, &p_texture->pD3DTexture, 0))
+		{ HRESULT hr_ = D3DDevice_CreateTexture(p_texture->BaseWidth, p_texture->BaseHeight, p_texture->Levels, 0, texture_format, D3DPOOL_MANAGED, &p_texture->pD3DTexture, 0); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }	// (the call outside the assert: asserts compile away)
 
 		p_texture->texrawdata = NULL;
 

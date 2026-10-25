@@ -404,7 +404,7 @@ struct VertexBufferWrapper
 				this->d3dlockFlags) >= 0)
 			{
 				memcpy(v2, this->rawdata, this->lockedSize);
-				Dbg_Assert(this->vertexBuffer->Unlock() == D3D_OK);
+				{ HRESULT hr_ = this->vertexBuffer->Unlock(); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
 			}
 			else
 			{
