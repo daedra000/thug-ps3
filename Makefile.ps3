@@ -12,7 +12,8 @@
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 
-ROOT      := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+THIS_MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
+ROOT      := $(patsubst %/,%,$(dir $(THIS_MAKEFILE)))
 SRC       := $(ROOT)/Code
 HEADLESS  ?= 0
 DEBUG     ?= 0
@@ -123,8 +124,8 @@ OFILES := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(basename $(SOURCES))))
 ELF    := $(BUILD)/$(TARGET).elf
 
 all: case-includes
-	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) $(BUILD)/$(TARGET).pkg
-	@cp $(BUILD)/$(TARGET).pkg $(ROOT)/$(TARGET)$(if $(filter release,$(VARIANT)),,-$(VARIANT)).pkg
+	@$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) $(BUILD)/$(TARGET).pkg
+	@cp $(BUILD)/$(TARGET).gnpdrm.pkg $(ROOT)/$(TARGET)$(if $(filter release,$(VARIANT)),,-$(VARIANT)).pkg
 	@echo "==> $(TARGET)$(if $(filter release,$(VARIANT)),,-$(VARIANT)).pkg"
 
 # Compiler flags are part of every object's dependencies.
@@ -147,7 +148,7 @@ $(BUILD)/obj/%.o: $(SRC)/%.c $(BUILD)/flags.txt
 $(ELF): $(OFILES)
 	@echo "LD  $(notdir $@)"
 	@$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
-	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) check-toc
+	@$(MAKE) --no-print-directory -f $(THIS_MAKEFILE) check-toc
 
 check-toc:
 	@got=$$(ppu-readelf -SW $(ELF) | awk '$$2==".got"{print $$6}'); \
