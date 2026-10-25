@@ -27,7 +27,10 @@ Work in progress. **It does not run on a console yet.**
 - [x] Builds and links with the PPU GCC; both PKGs are produced by CI
 - [x] Little-endian PC data on the big-endian PS3: every known loader converts (see
       [docs/ps3-byte-order.md](docs/ps3-byte-order.md)); untested on a console
-- [ ] RSX rendering: 2D (menus, loading screens), then 3D meshes and shaders
+- [x] RSX renderer (untested on a console): textures, vertex/index buffers, programs generated
+      from the fixed-function state, texture stages and the game's ps_1_1 shaders, assembled
+      at run time by an embedded copy of PSL1GHT's cgcomp
+- [ ] Drawing to textures (shadows, screen effects), point sprites
 - [ ] Saves (`USRDIR/Save`), music
 
 ## Installing (once it runs)
@@ -64,6 +67,12 @@ make -f Makefile.ps3 HEADLESS=1 -j$(nproc)   # thug-ps3-headless.pkg
 
 `tools/ps3-check-all.sh` type-checks the whole tree with clang and the PSL1GHT headers, without
 the PS3 toolchain.
+
+## Testing switches
+
+Empty files in `USRDIR` change how the RSX renderer works, to help narrow down problems:
+`rsx_linear_textures.txt` (no texture swizzling or mipmaps), `rsx_flip_cull.txt` (cull the
+other triangle winding), `rsx_no_draw.txt` (clear and flip only).
 
 ## How the port is put together
 
