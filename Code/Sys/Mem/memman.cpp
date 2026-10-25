@@ -180,8 +180,16 @@ Manager::Manager( void )
 	_std_mem_end	= _mem_end;
 #	elif defined ( __PLAT_WN32__ )
 	// Nasty hack for WN32 for now - just grab ~38mb~50mb of main memory via a malloc.
-	_mem_start	= (char *)malloc( 50 * 1024 * 1024 );
-	_mem_end	= _mem_start + ( 50 * 1024 * 1024 );
+#ifdef __PLAT_PS3__
+	// PS3: more than PC's 50 MB. The PC sizes assume 4-byte pointers; on the PS3 (LP64) every
+	// object holding pointers is bigger, and the per-system heaps below are doubled. Textures
+	// and vertex data live in RSX memory, so there is room (about 155 MB free at start-up).
+	const size_t main_block = 96 * 1024 * 1024;
+#else
+	const size_t main_block = 50 * 1024 * 1024;
+#endif
+	_mem_start	= (char *)malloc( main_block );
+	_mem_end	= _mem_start + ( main_block );
 
 	_std_mem_end = _mem_end;
 
@@ -293,6 +301,14 @@ void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 	{
 		// Release builds have no asserts: say so before the NULL is used.
 		printf( "[mem] out of memory: %u bytes from %s (%d free)\n", (unsigned)size, pAlloc->GetName() ? pAlloc->GetName() : "?", pAlloc->available() );
+		static bool s_listed;
+		if ( !s_listed )
+		{
+			// Once: every heap's free space, to size the PS3 heaps from (Sk/heap_sizes_win32.h).
+			s_listed = true;
+			for ( Heap* heap = FirstHeap(); heap != NULL; heap = NextHeap( heap ) )
+				printf( "[mem]   heap %-16s %d bytes free\n", heap->GetName() ? heap->GetName() : "?", heap->available() );
+		}
 		Ps3Platform::FlushLog();
 	}
 #endif

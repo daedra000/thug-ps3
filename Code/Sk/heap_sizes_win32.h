@@ -139,6 +139,30 @@
 #define	SCRIPT_HEAP_SIZE _SCRIPT_HEAP_SIZE
 #endif // __PLAT_NGC__
 
+#ifdef __PLAT_PS3__
+// PS3 (LP64): pointers are 8 bytes, so the script system's structures, the frontend's
+// screen elements and the skater data take up to twice the PC's room. The console ran out
+// of script heap during "Game Singletons" with the PC size.
+#undef	SCRIPT_HEAP_SIZE
+#define	SCRIPT_HEAP_SIZE				( _SCRIPT_HEAP_SIZE * 2 )
+#undef	FRONTEND_HEAP_SIZE
+#define	FRONTEND_HEAP_SIZE				( 2550000 * 2 )
+#undef	SKATERINFO_HEAP_SIZE
+#define	SKATERINFO_HEAP_SIZE			( (60000+100000+20000) * 2 )
+#undef	SKATER_HEAP_SIZE
+#define	SKATER_HEAP_SIZE				( 120000 * 2 * 2 )
+#undef	SKATER_GEOM_HEAP_SIZE
+#define	SKATER_GEOM_HEAP_SIZE			( 900000 * 2 )
+#undef	THEME_HEAP_SIZE
+#define	THEME_HEAP_SIZE					( 307200 * 2 )
+#undef	NETMISC_HEAP_SIZE
+#define	NETMISC_HEAP_SIZE				( 160000 * 2 )
+#undef	INTERNET_HEAP_SIZE
+#define	INTERNET_HEAP_SIZE				( 450000 * 2 )
+#undef	PROFILER_HEAP_SIZE
+#define	PROFILER_HEAP_SIZE				( 60000 * 2 )
+#endif // __PLAT_PS3__
+
 
 #endif // __SK_HEAP_SIZES_H
 
