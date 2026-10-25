@@ -15,6 +15,7 @@
 #include	"core\macros.h"
 
 #include "NX/nx_init.h"
+#include <Core/Defines_IDA.h>	// LODWORD, __int8 (MSVC got these indirectly)
 
 namespace	Nx
 {
