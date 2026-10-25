@@ -11,6 +11,11 @@ extern volatile bool g_ps3TraceTasks;
 // Main loop progress, shown on the [alive] lines: the frame number and the task running now.
 extern volatile unsigned g_ps3Frame;
 extern volatile const void* g_ps3CurrentTask;
+// Where the game thread is (a label set along the main loop's path) and the spawned script
+// being updated, for the [alive] lines.
+extern volatile const char* g_ps3Where;
+extern volatile const char* g_ps3ScriptName;
+#define PS3_WHERE(label) (g_ps3Where = (label))
 
 namespace Ps3Platform
 {

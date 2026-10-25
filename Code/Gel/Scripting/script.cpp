@@ -9,6 +9,9 @@
 #include <gel/scripting/script.h>
 #include <gel/scripting/scriptcache.h>
 #include <gel/scripting/tokens.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 #include <gel/scripting/struct.h>
 #include <gel/scripting/array.h>
 #include <gel/scripting/parse.h>
@@ -3189,6 +3192,12 @@ void UpdateSpawnedScripts()
 		if (p_next == p_script)
 		{
 			Dbg_MsgAssert(0,("%s\nLoop in list of spawned scripts!!",p_script->GetScriptInfo()));
+#ifdef __PLAT_PS3__
+			// Without asserts this would spin forever: say so once and stop this frame's update.
+			static bool s_reported;
+			if (!s_reported) { s_reported = true; Ps3Platform::Trace("[script] loop in the spawned script list at %s", FindChecksumName(p_script->mScriptChecksum)); }
+			break;
+#endif
 		}
 		
 		// K: Added the || !p_script->GotScript() so that spawned scripts which have been cleared still get
@@ -3197,6 +3206,9 @@ void UpdateSpawnedScripts()
 		// killed. 
 		if (p_script->mIsSpawned && (!p_script->mPaused || !p_script->GotScript()) && (!p_script->mPauseWithObject || !p_script->mpObject || p_script->mpObject->ShouldUpdatePauseWithObjectScripts()))
 		{
+#ifdef __PLAT_PS3__
+			g_ps3ScriptName = FindChecksumName(p_script->mScriptChecksum);
+#endif
 			if (p_script->Update()==ESCRIPTRETURNVAL_FINISHED)
 			{
 				// just doing the assertion before we delete the script  
@@ -3227,6 +3239,9 @@ void UpdateSpawnedScripts()
 
 
 	s_updating_scripts = false;
+#ifdef __PLAT_PS3__
+	g_ps3ScriptName = 0;
+#endif
 	if( s_delete_scripts_pending )
 	{
 		DeleteSpawnedScripts();

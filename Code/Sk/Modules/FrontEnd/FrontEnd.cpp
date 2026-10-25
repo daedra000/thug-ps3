@@ -32,6 +32,9 @@
 #include <core/defines.h>
 #include <core/singleton.h>
 #include <core/support.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 #include <core/task.h>
 
 #include <gfx/gfxman.h>
@@ -564,6 +567,9 @@ void FrontEnd::s_logic_code ( const Tsk::Task< FrontEnd >& task )
 
 	FrontEnd&	mdl = task.GetData();
 
+#ifdef __PLAT_PS3__
+	PS3_WHERE("FrontEnd::update");
+#endif
 	mdl.update(mdl.m_paused);
 	
 	
@@ -573,7 +579,13 @@ void FrontEnd::s_logic_code ( const Tsk::Task< FrontEnd >& task )
 	
 	
 	Front::CScreenElementManager* p_screen_elem_man = Front::CScreenElementManager::Instance();
+#ifdef __PLAT_PS3__
+	PS3_WHERE("CScreenElementManager::Update");
+#endif
 	p_screen_elem_man->Update();
+#ifdef __PLAT_PS3__
+	PS3_WHERE("FrontEnd logic done");
+#endif
 
 
 
@@ -664,7 +676,13 @@ void FrontEnd::update(bool game_is_paused)
 
 	
 	// Call these functions every frame:
+#ifdef __PLAT_PS3__
+	PS3_WHERE("Pcm::Update");
+#endif
 	Pcm::Update( );	
+#ifdef __PLAT_PS3__
+	PS3_WHERE("CSfxManager::Update");
+#endif
 
 	Sfx::CSfxManager * sfx_manager = Sfx::CSfxManager::Instance();
 	sfx_manager->Update();
@@ -681,6 +699,9 @@ void FrontEnd::update(bool game_is_paused)
 		Sys::CPUProfiler->PushContext( 128, 0, 0 ); 	// red under green = Positional Sounds
 #		endif // __USE_PROFILER__
 
+#ifdef __PLAT_PS3__
+		PS3_WHERE("UpdatePositionalSounds");
+#endif
 		sfx_manager->UpdatePositionalSounds( );
 
 #		ifdef __USE_PROFILER__
@@ -698,10 +719,19 @@ void FrontEnd::update(bool game_is_paused)
 #	endif // __USE_PROFILER__
 
 	// And call these functions every game frame:
+#ifdef __PLAT_PS3__
+	PS3_WHERE("UpdateSpawnedScripts");
+#endif
 	Script::UpdateSpawnedScripts();
 	
 	Mdl::Skate * skate_mod = Mdl::Skate::Instance();
+#ifdef __PLAT_PS3__
+	PS3_WHERE("UpdateGameFlow");
+#endif
 	skate_mod->UpdateGameFlow();
+#ifdef __PLAT_PS3__
+	PS3_WHERE("FrontEnd::update done");
+#endif
 
 	// mick: run the special script I use for command line scripting	
 	if (run_runmenow)
