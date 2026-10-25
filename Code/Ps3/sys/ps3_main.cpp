@@ -13,6 +13,9 @@
 #include <sysmodule/sysmodule.h>
 #include <net/net.h>
 #include <sys/process.h>
+#include <ppu-lv2.h>
+#include <exception>
+#include <stdlib.h>
 
 // Main thread: priority 1001, 1 MB stack (lv2's default is 64 KB; the game was built for
 // Windows' 1 MB). Same as the GridSiege ports.
@@ -100,14 +103,50 @@ namespace
 namespace Ps3Platform
 {
 
+void MemoryInfo(unsigned* freeKB, unsigned* totalKB)
+{
+	struct { u32 total, available; } info = { 0, 0 };
+	lv2syscall1(352, (u64)&info);	// sys_memory_get_user_memory_size
+	if (freeKB) *freeKB = info.available / 1024;
+	if (totalKB) *totalKB = info.total / 1024;
+}
+
+void Step(const char* what)
+{
+	unsigned freeKB = 0;
+	MemoryInfo(&freeKB, NULL);
+	printf("[step] %s (system memory free: %u KB)\n", what ? what : "?", freeKB);
+	fflush(stdout);
+}
+
+static void OnTerminate()
+{
+	// An exception nobody caught (std::bad_alloc from newlib's heap, say): say which.
+	const char* what = "unknown";
+	try { if (std::current_exception()) std::rethrow_exception(std::current_exception()); }
+	catch (const std::exception& e) { what = e.what(); }
+	catch (...) {}
+	printf("[fatal] uncaught C++ exception: %s\n", what);
+	BootMark("fatal: uncaught C++ exception");
+	BootMark(what);
+	fflush(stdout);
+	abort();
+}
+
 void Init(int argc, char** argv)
 {
+	std::set_terminate(OnTerminate);
 	BootMark("main() reached");
 	if (argc > 0 && argv && argv[0]) BootMark(argv[0]);
 	if (argc > 0)
 		Ps3Fs::SetAppPath(argv[0]);
 	OpenLog();
 	printf("THUG PS3 (%s build), running from %s\n", PS3_HEADLESS ? "headless" : "normal", Ps3Fs::AppDir());
+	{
+		unsigned freeKB, totalKB;
+		MemoryInfo(&freeKB, &totalKB);
+		printf("[mem] system memory: %u KB free of %u KB\n", freeKB, totalKB);
+	}
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, SystemCallback, NULL);
 

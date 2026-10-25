@@ -23,6 +23,12 @@ namespace Ps3Platform
 
 	// Flush the log (before a likely crash, or at exit).
 	void FlushLog();
+
+	// A start-up step for the log (with free system memory), written straight to disc.
+	void Step(const char* what);
+
+	// Free / total user memory in KB (lv2), for the log.
+	void MemoryInfo(unsigned* freeKB, unsigned* totalKB);
 }
 
 #endif // PS3_PLATFORM_H

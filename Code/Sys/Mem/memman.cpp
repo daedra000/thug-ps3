@@ -51,6 +51,9 @@ extern "C"
 #endif
 
 #include <sk/heap_sizes.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 
 #ifdef	__PLAT_NGPS__
@@ -269,6 +272,14 @@ void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 	{
 		Allocator::s_set_id( p_ret );		// stamp ID; used by Mem::Handle
 	}
+#ifdef __PLAT_PS3__
+	else if ( assert_on_fail )
+	{
+		// Release builds have no asserts: say so before the NULL is used.
+		printf( "[mem] out of memory: %u bytes from %s (%d free)\n", (unsigned)size, pAlloc->GetName() ? pAlloc->GetName() : "?", pAlloc->available() );
+		Ps3Platform::FlushLog();
+	}
+#endif
 
 #if 0 
 	if ( mp_process_man )
@@ -1707,6 +1718,9 @@ void	FreeMemProfile(Allocator::BlockHeader* p_block)
 
 void	PushMemProfile(char *p_type)
 {
+#ifdef __PLAT_PS3__
+	Ps3Platform::Step(p_type);	// start-up breadcrumbs in the log
+#endif
 }
 
 void	PopMemProfile()
