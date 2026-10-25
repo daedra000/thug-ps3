@@ -11,6 +11,7 @@
 #include <gel/scripting/tokens.h>
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+#include <sys/systime.h>
 #endif
 #include <gel/scripting/struct.h>
 #include <gel/scripting/array.h>
@@ -2647,6 +2648,15 @@ EScriptReturnVal CScript::Update()
 		Tmr::CPUCycles instruction_start_time = Tmr::GetTimeInCPUCycles();
 		#endif
 		
+#ifdef __PLAT_PS3__
+		// For the [alive] lines: which script (or called script) and line the interpreter is on,
+		// and a step count that shows whether it is still moving.
+		++g_ps3ScriptSteps;
+		g_ps3ScriptToken = *mp_pc;
+		g_ps3ScriptSub = mScriptChecksum;
+		if (*mp_pc == ESCRIPTTOKEN_ENDOFLINENUMBER)
+			g_ps3ScriptLine = mp_pc[1] | (mp_pc[2] << 8) | (mp_pc[3] << 16) | ((unsigned)mp_pc[4] << 24);
+#endif
 		switch (*mp_pc)
 		{
 		case ESCRIPTTOKEN_KEYWORD_IF:
@@ -3076,6 +3086,14 @@ void RunScript(uint32 scriptChecksum, CStruct *p_params, Obj::CObject *p_object,
 			p_script->SetScript(scriptChecksum,p_params,p_object);
 			Mem::Manager::sHandle().PopContext();
 		
+#ifdef __PLAT_PS3__
+			// A script run to completion here must not wait on game frames or get blocked (the
+			// asserts below are compiled out), or this loops forever. Log which one did.
+			unsigned ps3Passes = 0;
+			unsigned ps3OuterRun = g_ps3RunScript;
+			g_ps3RunScript = scriptChecksum;
+			u64 ps3Start = sysGetSystemTime();
+#endif
 			while (true)
 			{
 				EScriptReturnVal ret_val=p_script->Update();
@@ -3083,12 +3101,29 @@ void RunScript(uint32 scriptChecksum, CStruct *p_params, Obj::CObject *p_object,
 				{
 					break;
 				}
+#ifdef __PLAT_PS3__
+				if (++ps3Passes == 1 || ret_val == ESCRIPTRETURNVAL_BLOCKED || (ps3Passes & 0xFFFFF) == 0)
+				{
+					u64 ps3Elapsed = sysGetSystemTime() - ps3Start;
+					if (ret_val == ESCRIPTRETURNVAL_BLOCKED || ps3Elapsed > 5000000)
+					{
+						printf("[script] RunScript %s (0x%08x) did not finish: %s, in 0x%08x line %u, after %u passes: giving up on it\n",
+							FindChecksumName(scriptChecksum), scriptChecksum,
+							ret_val == ESCRIPTRETURNVAL_BLOCKED ? "blocked" : "still waiting",
+							g_ps3ScriptSub, g_ps3ScriptLine, ps3Passes);
+						break;
+					}
+				}
+#endif
 				//Dbg_MsgAssert(0,("\n%s\nScript did not finish when run by RunScript.",p_script->GetScriptInfo()));
 				// Script must not get blocked, otherwise it'll hang in this loop forever.
 				Dbg_MsgAssert(ret_val!=ESCRIPTRETURNVAL_BLOCKED,("\n%s\nScript got blocked when being run by RunScript.",p_script->GetScriptInfo()));
 				// Note: OK if the script returns ESCRIPTRETURNVAL_WAITING, because the wait period will eventually end.
 			
 			}
+#ifdef __PLAT_PS3__
+			g_ps3RunScript = ps3OuterRun;
+#endif
 			delete p_script;
 			break;
 		}	

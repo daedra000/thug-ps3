@@ -19,6 +19,14 @@ extern volatile const char* g_ps3ScriptName;
 // (checksum) running now, 0 when none.
 extern volatile const void* g_ps3CFunction;
 extern volatile unsigned g_ps3MemberFunction;
+// The script interpreter's position: steps executed (all scripts), the script whose code is
+// running (a called script's checksum, not the spawned one's), its last line number and token.
+extern volatile unsigned g_ps3ScriptSteps;
+extern volatile unsigned g_ps3ScriptSub;
+extern volatile unsigned g_ps3ScriptLine;
+extern volatile unsigned g_ps3ScriptToken;
+// The script being run to completion by RunScript (checksum), 0 when none.
+extern volatile unsigned g_ps3RunScript;
 #define PS3_WHERE(label) (g_ps3Where = (label))
 
 namespace Ps3Platform

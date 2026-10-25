@@ -181,11 +181,13 @@ namespace
 			if (now - lastBeat >= 5000000)
 			{
 				lastBeat = now;
-				char line[256];
+				char line[384];
 				if (g_ps3Frame)
-					snprintf(line, sizeof(line), "[alive] %u s, main loop frame %u, task %p, at %s, script %s, cfunc %p, member 0x%08x, last step: %s\n",
+					snprintf(line, sizeof(line), "[alive] %u s, main loop frame %u, task %p, at %s, script %s, cfunc %p, member 0x%08x, "
+						"interp steps %u in 0x%08x line %u token %u, runscript 0x%08x, last step: %s\n",
 						(unsigned)((now - start) / 1000000), g_ps3Frame, (const void*)g_ps3CurrentTask, g_ps3Where ? (const char*)g_ps3Where : "-",
-						g_ps3ScriptName ? (const char*)g_ps3ScriptName : "-", (const void*)g_ps3CFunction, g_ps3MemberFunction, (const char*)s_lastStep);
+						g_ps3ScriptName ? (const char*)g_ps3ScriptName : "-", (const void*)g_ps3CFunction, g_ps3MemberFunction,
+						g_ps3ScriptSteps, g_ps3ScriptSub, g_ps3ScriptLine, g_ps3ScriptToken, g_ps3RunScript, (const char*)s_lastStep);
 				else
 					snprintf(line, sizeof(line), "[alive] %u s, last step: %s%s%s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep,
 						s_traceText[0] ? " | last trace: " : "", s_traceText);
@@ -211,6 +213,11 @@ volatile const char* g_ps3Where = 0;
 volatile const char* g_ps3ScriptName = 0;
 volatile const void* g_ps3CFunction = 0;
 volatile unsigned g_ps3MemberFunction = 0;
+volatile unsigned g_ps3ScriptSteps = 0;
+volatile unsigned g_ps3ScriptSub = 0;
+volatile unsigned g_ps3ScriptLine = 0;
+volatile unsigned g_ps3ScriptToken = 0;
+volatile unsigned g_ps3RunScript = 0;
 
 namespace Ps3Platform
 {
