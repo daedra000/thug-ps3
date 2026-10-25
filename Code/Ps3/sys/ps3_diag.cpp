@@ -30,11 +30,49 @@ extern "C"
 
 // The boot trail files: the first write of a run truncates each (the game's memory manager
 // may write before main(), so main() can't simply delete last run's).
+// The first USB drive plugged in (/dev_usb000 ... /dev_usb007), or NULL: the boot trail and
+// the log are written there too, so a stick can be checked on a PC without FTP.
+extern "C" const char* Ps3UsbRoot()
+{
+	static char root[16];
+	static volatile int state;	// 0 not looked yet, 1 found, 2 none
+	if (state == 0)
+	{
+		state = 2;
+		for (int i = 0; i < 8; ++i)
+		{
+			char path[16] = "/dev_usb000";
+			path[10] = (char)('0' + i);
+			sysFSStat st;
+			if (sysFsStat(path, &st) == 0)
+			{
+				memcpy(root, path, sizeof(path));
+				state = 1;
+				break;
+			}
+		}
+	}
+	return state == 1 ? root : 0;
+}
+
 extern "C" s32 Ps3TrailOpen(int which, s32* fd)
 {
-	static const char* paths[2] = { PS3_USRDIR "/thug-ps3-boot.txt", "/dev_hdd0/tmp/thug-ps3-boot.txt" };
-	static volatile bool started[2];
-	if (which < 0 || which > 1) return -1;
+	static char usbPath[48];
+	static const char* paths[3] = { PS3_USRDIR "/thug-ps3-boot.txt", "/dev_hdd0/tmp/thug-ps3-boot.txt", usbPath };
+	static volatile bool started[3];
+	if (which < 0 || which > 2) return -1;
+	if (which == 2)
+	{
+		const char* usb = Ps3UsbRoot();
+		if (!usb) return -1;
+		if (!usbPath[0])
+		{
+			char* p = usbPath;
+			for (const char* s = usb; *s; ) *p++ = *s++;
+			for (const char* s = "/thug-ps3-boot.txt"; *s; ) *p++ = *s++;
+			*p = 0;
+		}
+	}
 	s32 flags = SYS_O_WRONLY | SYS_O_CREAT | (started[which] ? SYS_O_APPEND : SYS_O_TRUNC);
 	s32 r = sysFsOpen(paths[which], flags, fd, NULL, 0);
 	if (r == 0 && !started[which])
@@ -83,7 +121,7 @@ namespace
 
 	void Trail(const char* text, size_t len)
 	{
-		for (int i = 0; i < 2; ++i)
+		for (int i = 0; i < 3; ++i)
 		{
 			s32 fd;
 			if (Ps3TrailOpen(i, &fd) != 0) continue;

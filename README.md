@@ -93,6 +93,8 @@ For start-up problems: `nothreads.txt` (none of the port's threads; the game's
 start-up). `thug-ps3-boot.txt` (in `USRDIR` and `/dev_hdd0/tmp`) is written from the first
 line of `main()` and lists every allocation of 1 MB or more during start-up; the log has a
 `[step]` line per start-up phase and an `[alive]` line every 5 seconds.
+With a USB drive plugged in, both are also written to its root (`thug-ps3.log`,
+`thug-ps3-boot.txt`), so they can be read on a PC without FTP.
 
 ## How the port is put together
 

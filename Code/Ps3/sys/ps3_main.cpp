@@ -33,6 +33,7 @@ namespace Audio { void Shutdown(bool wait); }	// Code/Ps3/audio/ps3_audio.cpp
 // but builds with it never reached main() on a console: it ran before the C library
 // was set up.)
 extern "C" s32 Ps3TrailOpen(int which, s32* fd);	// ps3_diag.cpp: truncates on a run's first write
+extern "C" const char* Ps3UsbRoot();				// ps3_diag.cpp: first USB drive, or NULL
 
 static void BootMarkTo(int which, const char* what)
 {
@@ -50,6 +51,7 @@ static void BootMark(const char* what)
 {
 	BootMarkTo(0, what);	// USRDIR
 	BootMarkTo(1, what);	// /dev_hdd0/tmp
+	BootMarkTo(2, what);	// a USB drive, if one is plugged in
 }
 
 
@@ -61,6 +63,7 @@ namespace
 	// The log: everything printed to stdout/stderr goes to USRDIR/thug-ps3.log
 	// and to the TTY (visible with a debug console or ps3load).
 	s32 s_logFd = -1;
+	s32 s_usbLogFd = -1;		// a copy of the log on a USB drive, if one is plugged in
 	// Every write is fsync'd during start-up (a hung headless build is often switched off);
 	// once the game runs, the system thread syncs about once a second instead.
 	volatile bool s_syncEveryWrite = true;
@@ -69,10 +72,16 @@ namespace
 
 	void WriteLogFile(const char* text, size_t n)
 	{
-		if (s_logFd < 0) return;
+		const bool sync = s_syncEveryWrite || sysGetSystemTime() < s_syncUntil;
 		u64 put;
+		if (s_usbLogFd >= 0)
+		{
+			sysFsWrite(s_usbLogFd, text, n, &put);
+			if (sync) sysLv2FsFsync(s_usbLogFd);
+		}
+		if (s_logFd < 0) return;
 		sysFsWrite(s_logFd, text, n, &put);
-		if (s_syncEveryWrite || sysGetSystemTime() < s_syncUntil)
+		if (sync)
 			sysLv2FsFsync(s_logFd);
 		else
 			s_logDirty = true;
@@ -104,6 +113,16 @@ namespace
 		if (s_logFd >= 0) sysFsChmod(path, 0100666);
 		if (s_logFd >= 0) sysFsChmod(PS3_USRDIR "/thug-ps3.log", 0100666);	// the fallback, if used
 		BootMark(s_logFd >= 0 ? "log open" : "log could not be opened");
+
+		// A copy on the first USB drive, if any (checked on a PC without FTP).
+		if (const char* usb = Ps3UsbRoot())
+		{
+			char usbPath[64];
+			snprintf(usbPath, sizeof(usbPath), "%s/thug-ps3.log", usb);
+			if (sysFsOpen(usbPath, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &s_usbLogFd, NULL, 0) != 0)
+				s_usbLogFd = -1;
+			BootMark(s_usbLogFd >= 0 ? "USB log open" : "USB log could not be opened");
+		}
 
 		FILE* f = funopen(NULL, NULL, LogWrite, NULL, NULL);
 		if (f)
@@ -157,6 +176,7 @@ namespace
 			{
 				s_logDirty = false;
 				sysLv2FsFsync(s_logFd);
+				if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
 			}
 			if (now - lastBeat >= 5000000)
 			{
@@ -176,6 +196,7 @@ namespace
 				RawLog("[quit] the game did not exit within 3 s of Quit Game: exiting now\n");
 				Audio::Shutdown(false);	// stop the port; don't wait for a mixer the game may be blocking
 				if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
 				sysProcessExit(0);
 			}
 			usleep(50000);
@@ -359,6 +380,7 @@ void ExitGame(int code)
 	Audio::Shutdown(true);
 	fflush(stdout);
 	if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
 	sysProcessExit(code);
 }
 
