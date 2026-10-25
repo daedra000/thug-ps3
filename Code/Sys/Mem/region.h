@@ -133,7 +133,7 @@ inline int Region::TotalSize( void )
 {
 	
 		
-	return ((int)mp_end - (int)mp_start);
+	return (int)((char*)mp_end - (char*)mp_start);	// (LP64: no pointer-to-int casts)
 }
 
 /******************************************************************/

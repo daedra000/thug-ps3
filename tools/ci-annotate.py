@@ -55,7 +55,10 @@ for i in range(0, min(len(items), 400), PER):
     print(f'::error title=build errors {i // PER + 1}::{chunk}')
 
 # Nothing recognisable (e.g. make stopped before compiling): show the end of the log.
-if not errors and not undefined:
+# Not when the build worked (a PKG was made): the tail is then just warnings.
+import glob
+built = bool(glob.glob(os.path.join(os.path.dirname(os.path.abspath(log_path)), 'thug-ps3*.pkg')))
+if not errors and not undefined and not built:
     with open(log_path, errors='replace') as f:
         tail = [l.rstrip('\n') for l in f.readlines()[-40:]]
     for i, l in enumerate(tail):
