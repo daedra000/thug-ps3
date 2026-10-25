@@ -91,7 +91,7 @@ namespace
 		FILE* f = funopen(NULL, NULL, LogWrite, NULL, NULL);
 		if (f)
 		{
-			setvbuf(f, NULL, _IOLBF, 1024);
+			setvbuf(f, NULL, _IONBF, 0);	// every write goes straight to the log (and is fsync'd)
 			stdout = f;
 			stderr = f;
 		}
@@ -189,15 +189,23 @@ static void OnTerminate()
 
 void Init(int argc, char** argv)
 {
+	// Unbuffered from the first line: nothing is lost if the next instruction crashes.
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
 	sysFsUnlink(PS3_USRDIR "/thug-ps3-boot.txt");
 	sysFsUnlink("/dev_hdd0/tmp/thug-ps3-boot.txt");
-	BootMark("main() reached");
+	BootMark("MAIN STARTED");
+	fprintf(stderr, "MAIN STARTED\n");
 	std::set_terminate(OnTerminate);
 	if (argc > 0 && argv && argv[0]) BootMark(argv[0]);
 	if (argc > 0)
 		Ps3Fs::SetAppPath(argv[0]);
 	OpenLog();
+	printf("MAIN STARTED\n");
 	printf("THUG PS3 (%s build), running from %s\n", PS3_HEADLESS ? "headless" : "normal", Ps3Fs::AppDir());
+	ReadDiagnosticSwitches();
+	if (NoThreads()) printf("[diag] nothreads.txt: no threads of our own; the game's CreateThread calls are refused\n");
+	if (MemoryCap()) printf("[diag] memcap.txt: allocations over 10 MB fail during start-up\n");
 	{
 		unsigned freeKB, totalKB;
 		MemoryInfo(&freeKB, &totalKB);
@@ -205,6 +213,7 @@ void Init(int argc, char** argv)
 	}
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, SystemCallback, NULL);
+	if (!NoThreads())
 	{
 		sys_ppu_thread_t tid;
 		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 1000, 64 * 1024, 0, (char*)"thug-sysutil") == 0;

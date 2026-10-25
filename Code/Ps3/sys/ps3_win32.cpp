@@ -1,3 +1,4 @@
+#include <ps3_platform.h>
 // THUG PS3: Win32 API stand-ins on lv2 (see ps3_win32.h).
 
 #include <ps3_compat.h>
@@ -178,6 +179,11 @@ static void ThreadTrampoline(void* arg)
 
 HANDLE CreateThread(LPSECURITY_ATTRIBUTES, size_t stackSize, LPTHREAD_START_ROUTINE start, LPVOID param, DWORD, LPDWORD threadId)
 {
+	if (Ps3Platform::NoThreads())
+	{
+		printf("[diag] CreateThread refused (nothreads.txt), entry %p\n", (void*)start);
+		return NULL;
+	}
 	ThreadHandle* h = new ThreadHandle;
 	h->kind = kThread;
 	h->start = start;
@@ -349,6 +355,11 @@ namespace
 
 MMRESULT timeSetEvent(UINT delayMs, UINT, LPTIMECALLBACK cb, DWORD_PTR user, UINT flags)
 {
+	if (Ps3Platform::NoThreads())
+	{
+		printf("[diag] timeSetEvent refused (nothreads.txt)\n");
+		return 0;
+	}
 	for (int i = 0; i < kMaxTimers; ++i)
 	{
 		if (s_timers[i]) continue;

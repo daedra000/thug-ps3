@@ -29,6 +29,15 @@ namespace Ps3Platform
 
 	// Free / total user memory in KB (lv2), for the log.
 	void MemoryInfo(unsigned* freeKB, unsigned* totalKB);
+
+	// Diagnostic switches (empty files in USRDIR, read at the top of main(); ps3_diag.cpp):
+	// nothreads.txt - none of our threads, and the game's CreateThread calls refused;
+	// memcap.txt - allocations over 10 MB fail during start-up. Allocations of 1 MB or
+	// more are written to the boot trail during start-up either way.
+	void ReadDiagnosticSwitches();
+	bool NoThreads();
+	bool MemoryCap();
+	void StartupFinished();		// the game's main loop is running
 }
 
 #endif // PS3_PLATFORM_H

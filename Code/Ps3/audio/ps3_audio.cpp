@@ -153,6 +153,11 @@ void Init()
 	audioPortStart(s_port);
 
 	s_quit = false;
+	if (Ps3Platform::NoThreads())
+	{
+		printf("[audio] nothreads.txt: no mixer thread, so no sound\n");
+		return;
+	}
 	// Above the game thread's priority so audio keeps up while levels load.
 	if (sysThreadCreate(&s_thread, MixThread, NULL, 200, 64 * 1024, THREAD_JOINABLE, (char*)"thugaudio") != 0)
 		printf("[audio] mixer thread failed to start\n");

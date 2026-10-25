@@ -59,6 +59,9 @@ Dbg_DefineProject( GEL, "GEL Library" )
 // lwss add
 #ifdef __PLAT_WN32__
 void Win32_ApplyInputs();
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 void Win32_ProcessMsgPump();
 void Win32_GameNetUpdate();
 
@@ -257,6 +260,10 @@ inline	void		Manager::render_frame( void )
 
 void		Manager::MainLoop( void )
 {
+#ifdef __PLAT_PS3__
+	Ps3Platform::StartupFinished();
+	Ps3Platform::Step("main loop started");
+#endif
 	bool old_flag = done;	// push the current done flag
 
 	done = false;
