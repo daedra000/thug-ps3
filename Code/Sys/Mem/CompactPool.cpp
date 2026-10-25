@@ -25,6 +25,12 @@ CCompactPool::CCompactPool(int item_size, int desired_num_items, char *name)
 {
 	m_totalItems = desired_num_items;
 	m_itemSize = item_size;
+#ifdef __PLAT_PS3__
+	// Free items hold an 8-byte next pointer (LP64): items at least that big, and 8-byte
+	// aligned so the pointer and the objects' own pointer members are aligned.
+	if (m_itemSize < (int)sizeof(void*)) m_itemSize = sizeof(void*);
+	m_itemSize = (m_itemSize + 7) & ~7;
+#endif
 	Dbg_MsgAssert(m_itemSize >= 4, ("item size too small (%d)", m_itemSize));
 
 #ifdef __PLAT_NGC__
@@ -127,7 +133,9 @@ void * CCompactPool::Allocate()
 		//printf("CCompactPool::Allocate(), now %d used items out of %d\n", m_currentUsedItems, m_totalItems);
 		
 		void *pItem = mp_freeList;
-		mp_freeList = (uint32 *) *mp_freeList;
+		// The link is a whole pointer (written as uint32* below). Reading it as a uint32 got
+		// only its high half on a big-endian 64-bit CPU, i.e. 0: every pool ran dry after one item.
+		mp_freeList = *(uint32 **) mp_freeList;
 		//#ifdef	__NOPT_ASSERT__
 		//if ((int)pItem == REPORT_ON)
 		//{
