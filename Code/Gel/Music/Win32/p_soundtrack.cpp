@@ -97,6 +97,7 @@ int gNumSoundtracks = 0;
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+#ifndef __PLAT_PS3__	// same symbol as the SDL music backend's Pcm::GetNumSoundtracks (return types are not mangled)
 int GetNumSoundtracks( void )
 {
 	return 0;
@@ -131,6 +132,7 @@ int GetNumSoundtracks( void )
 	//
 	//return gNumSoundtracks;
 }
+#endif
 
 
 

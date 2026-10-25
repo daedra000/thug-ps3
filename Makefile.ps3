@@ -44,7 +44,7 @@ PC_ONLY := \
 # Online play is out of scope for now (GameSpy's servers are long gone); LAN play
 # goes through Gel/Net, which is kept.
 PC_ONLY_DIRS := Sk/GameNet/GameSpy/
-PC_ONLY += Sk/GameNet/Lobby.cpp Sk/GameNet/ServerList.cpp
+PC_ONLY += Sk/GameNet/Lobby.cpp	# ServerList.cpp is kept: it also runs the LAN server list
 
 # Resolved case-insensitively: the list was written on Windows.
 CMAKE_SOURCES := $(shell python3 $(ROOT)/tools/resolve-sources.py $(ROOT))
