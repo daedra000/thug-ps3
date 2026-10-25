@@ -1,6 +1,7 @@
 // THUG PS3: path resolution (see ps3_fs.h).
 
 #include <ps3_fs.h>
+#include <ps3_platform.h>
 
 #include <string.h>
 #include <strings.h>
@@ -60,10 +61,20 @@ const char* AppDir()
 	return s_appDir;
 }
 
+static volatile bool s_trace;
+
+void SetTrace(bool on)
+{
+	s_trace = on;
+}
+
 bool Exists(const char* absPath, bool* isDir, unsigned long long* size)
 {
 	sysFSStat st;
-	if (sysFsStat(absPath, &st) != 0)
+	if (s_trace) Ps3Platform::Trace("[fs] stat %s", absPath);
+	s32 r = sysFsStat(absPath, &st);
+	if (s_trace) Ps3Platform::Trace("[fs]   -> %d, mode %o", (int)r, r == 0 ? (unsigned)st.st_mode : 0u);
+	if (r != 0)
 		return false;
 	if (isDir) *isDir = (st.st_mode & 0170000) == 0040000;
 	if (size) *size = st.st_size;
@@ -99,7 +110,10 @@ bool ListDirectory(const char* absDir, std::vector<std::string>& names)
 	if (!Exists(absDir, &isDir) || !isDir)
 		return false;
 	s32 fd;
-	if (sysFsOpendir(absDir, &fd) != 0)
+	if (s_trace) Ps3Platform::Trace("[fs] opendir %s", absDir);
+	s32 r = sysFsOpendir(absDir, &fd);
+	if (s_trace) Ps3Platform::Trace("[fs]   -> %d, fd %d", (int)r, (int)fd);
+	if (r != 0)
 		return false;
 	sysFSDirent ent;
 	std::string last;
@@ -108,7 +122,11 @@ bool ListDirectory(const char* absDir, std::vector<std::string>& names)
 	{
 		u64 read = 0;
 		memset(&ent, 0, sizeof(ent));
-		if (sysFsReaddir(fd, &ent, &read) != 0 || read == 0 || ent.d_namlen == 0 || ent.d_name[0] == 0)
+		if (s_trace && n < 4) Ps3Platform::Trace("[fs] readdir %d", n);
+		r = sysFsReaddir(fd, &ent, &read);
+		if (s_trace && (n < 4 || r != 0 || read == 0))
+			Ps3Platform::Trace("[fs]   -> %d, read %u, type %u, namlen %u, '%.40s'", (int)r, (unsigned)read, (unsigned)ent.d_type, (unsigned)ent.d_namlen, ent.d_name);
+		if (r != 0 || read == 0 || ent.d_namlen == 0 || ent.d_name[0] == 0)
 			break;
 		std::string name(ent.d_name, ent.d_namlen);
 		if (name == last && ++repeats > 2)
@@ -118,6 +136,7 @@ bool ListDirectory(const char* absDir, std::vector<std::string>& names)
 		if (name != "." && name != "..")
 			names.push_back(name);
 	}
+	if (s_trace) Ps3Platform::Trace("[fs] closedir after %u names", (unsigned)names.size());
 	sysFsClosedir(fd);
 	return true;
 }

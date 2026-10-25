@@ -172,6 +172,7 @@ BOOL ResetEvent(HANDLE hh)
 static void ThreadTrampoline(void* arg)
 {
 	ThreadHandle* h = (ThreadHandle*)arg;
+	Ps3Platform::AttachThreadLog();
 	h->exitCode = h->start(h->param);
 	h->done = true;
 	sysThreadExit(0);
@@ -333,6 +334,7 @@ namespace
 
 	void TimerThread(void* arg)
 	{
+		Ps3Platform::AttachThreadLog();
 		Timer* t = (Timer*)arg;
 		u64 next = sysGetSystemTime() + (u64)t->delayMs * 1000;
 		while (!t->stop)

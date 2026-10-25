@@ -352,12 +352,18 @@ namespace Pcm
 
 	static std::unordered_map<uint32, stdfs::path> Index(stdfs::path path)
 	{
+#ifdef __PLAT_PS3__
+		Ps3Platform::Trace("[music] index %s", path.c_str());
+#endif
 		if (!stdfs::exists(path))
 			return {};
 
 		std::unordered_map<uint32, stdfs::path> paths;
 		for (auto &i : stdfs::recursive_directory_iterator(path))
 		{
+#ifdef __PLAT_PS3__
+			Ps3Platform::Trace("[music]   %s", i.path().c_str());
+#endif
 			if (i.is_regular_file())
 			{
 				std::string name = i.path().stem().string();
@@ -381,9 +387,13 @@ namespace Pcm
 #ifdef __PLAT_PS3__
 		Ps3Platform::Step("indexing music and streams");
 #endif
+#ifdef __PLAT_PS3__
+		Ps3Fs::SetTrace(true);	// the console hung here: log every file system call
+#endif
 		music_paths = Index(File::DataPath() / "music");
 		stream_paths = Index(File::DataPath() / "streams");
 #ifdef __PLAT_PS3__
+		Ps3Fs::SetTrace(false);
 		printf("[music] %u music files, %u streams\n", (unsigned)music_paths.size(), (unsigned)stream_paths.size());
 #endif
 	}

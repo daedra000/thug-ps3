@@ -19,6 +19,7 @@
 #include <ppu-lv2.h>
 #include <exception>
 #include <stdlib.h>
+#include <stdarg.h>
 
 // No SYS_PROCESS_PARAM: builds that set one (priority 1001, 1 MB stack, 1 MB malloc
 // pages, as GridSiege does) went back to the XMB before main() on a console, while
@@ -57,6 +58,7 @@ namespace
 	// The log: everything printed to stdout/stderr goes to USRDIR/thug-ps3.log
 	// and to the TTY (visible with a debug console or ps3load).
 	s32 s_logFd = -1;
+	FILE* s_logFile = NULL;		// the funopen'd log, for AttachThreadLog
 
 	int LogWrite(void*, const char* buf, int n)
 	{
@@ -94,11 +96,14 @@ namespace
 			setvbuf(f, NULL, _IONBF, 0);	// every write goes straight to the log (and is fsync'd)
 			stdout = f;
 			stderr = f;
+			s_logFile = f;
 		}
 	}
 
 	volatile u64 s_quitTime;
 	volatile const char* s_lastStep = "start";
+	char s_stepText[160] = "start";
+	char s_traceText[200] = "";
 	volatile bool s_sysThread;
 
 	// Written straight to the log file, bypassing stdio (used from the system thread).
@@ -140,7 +145,8 @@ namespace
 			{
 				lastBeat = now;
 				char line[256];
-				snprintf(line, sizeof(line), "[alive] %u s, last step: %s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep);
+				snprintf(line, sizeof(line), "[alive] %u s, last step: %s%s%s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep,
+					s_traceText[0] ? " | last trace: " : "", s_traceText);
 				RawLog(line);
 			}
 			if (s_quit && s_quitTime && now - s_quitTime > 3000000)
@@ -160,6 +166,28 @@ namespace Ps3Platform
 static char* volatile s_stackTop = NULL;
 static const u64 kGameStack = 1024 * 1024;
 
+void AttachThreadLog()
+{
+	if (s_logFile)
+	{
+		stdout = s_logFile;
+		stderr = s_logFile;
+	}
+}
+
+void Trace(const char* fmt, ...)
+{
+	char text[200];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+	memcpy(s_traceText, text, sizeof(text));
+	char line[210];
+	snprintf(line, sizeof(line), "%s\n", text);
+	RawLog(line);
+}
+
 void MemoryInfo(unsigned* freeKB, unsigned* totalKB)
 {
 	struct { u32 total, available; } info = { 0, 0 };
@@ -172,11 +200,17 @@ void Step(const char* what)
 {
 	unsigned freeKB = 0;
 	MemoryInfo(&freeKB, NULL);
-	if (what) s_lastStep = what;
+	if (what)
+	{
+		snprintf(s_stepText, sizeof(s_stepText), "%s", what);
+		s_lastStep = s_stepText;
+	}
 	unsigned stackKB = 0;
 	if (s_stackTop) stackKB = (unsigned)((s_stackTop - (char*)__builtin_frame_address(0)) / 1024);
-	printf("[step] %s (system memory free: %u KB, stack used: %u KB of %u KB)\n", what ? what : "?", freeKB, stackKB, (unsigned)(kGameStack / 1024));
-	fflush(stdout);
+	// Straight to the log, not printf: it works on any thread, whatever stdio is doing.
+	char line[300];
+	snprintf(line, sizeof(line), "[step] %s (system memory free: %u KB, stack used: %u KB of %u KB)\n", what ? what : "?", freeKB, stackKB, (unsigned)(kGameStack / 1024));
+	RawLog(line);
 }
 
 static void OnTerminate()
@@ -273,6 +307,7 @@ namespace
 	{
 		GameArgs* a = (GameArgs*)p;
 		Ps3Platform::s_stackTop = (char*)__builtin_frame_address(0);
+		Ps3Platform::AttachThreadLog();
 		Ps3Platform::Step("game thread started");
 		a->result = GameMain(a->argc, a->argv);
 		fflush(stdout);

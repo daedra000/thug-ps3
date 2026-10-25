@@ -97,6 +97,7 @@ static void Fill(float* out)
 
 static void MixThread(void*)
 {
+	Ps3Platform::AttachThreadLog();
 	u32 blocks = (u32)s_config.numBlocks;
 	u32 next = 1;
 	sys_event_t ev;

@@ -37,6 +37,9 @@ namespace Ps3Fs
 	// directory doesn't exist or can't be opened. Never loops forever: it stops at the
 	// first error, empty entry or repeated name, and after 20000 entries.
 	bool ListDirectory(const char* absDir, std::vector<std::string>& names);
+
+	// Log every stat and directory read (Ps3Platform::Trace) while on.
+	void SetTrace(bool on);
 }
 
 #endif // PS3_FS_H

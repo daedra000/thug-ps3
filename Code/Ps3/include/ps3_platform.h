@@ -38,6 +38,14 @@ namespace Ps3Platform
 	bool NoThreads();
 	bool MemoryCap();
 	void StartupFinished();		// the game's main loop is running
+
+	// newlib gives every thread its own stdout/stderr: call at the start of each new thread
+	// so its printf output goes to the log too.
+	void AttachThreadLog();
+
+	// A line written straight to the log from any thread (no stdio); the latest one is also
+	// shown on the [alive] heartbeat lines.
+	void Trace(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 }
 
 #endif // PS3_PLATFORM_H
