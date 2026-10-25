@@ -6,6 +6,7 @@
 //****************************************************************************
 
 #include <core/defines.h>
+#include <core/endian.h>
 #include <core/string/stringutils.h>
 #include <sys/file/filesys.h>
 #include <gfx/nx.h>
@@ -72,14 +73,14 @@ bool CXboxMesh::build_casdata_table( const char* pFileName )
 	Dbg_MsgAssert( pFile, ( "Couldn't open CAS data file %s\n", pFileName ));
 
 	uint32 version;
-	File::Read( &version, sizeof( uint32 ), 1, pFile );
+	File::Read( &version, sizeof( uint32 ), 1, pFile ); Endian::Fix( version );
 
 	if( version >= 2 )
 	{
-		File::Read( &m_CASRemovalMask, sizeof( uint32 ), 1, pFile );
+		File::Read( &m_CASRemovalMask, sizeof( uint32 ), 1, pFile ); Endian::Fix( m_CASRemovalMask );
 	}
 	
-	File::Read( &m_numCASData, sizeof( int ), 1, pFile );
+	File::Read( &m_numCASData, sizeof( int ), 1, pFile ); Endian::Fix( m_numCASData );
 
 	if( m_numCASData > 0 )
 	{
@@ -88,7 +89,7 @@ bool CXboxMesh::build_casdata_table( const char* pFileName )
 
 		for( uint32 i = 0; i < m_numCASData; ++i )
 		{
-			File::Read( &mp_CASData[i].mask, sizeof( uint32 ) * 3, 1, pFile );
+			File::Read( &mp_CASData[i].mask, sizeof( uint32 ) * 3, 1, pFile ); Endian::Fix32Array( &mp_CASData[i].mask, 3 );
 		}
 
 		// Sort the CAS data based first on mesh, then on the first tri index, lowest to highest. This allows some efficient early-out checking
@@ -115,14 +116,14 @@ bool CXboxMesh::build_casdata_table_from_memory( void **pp_mem )
 	uint8 *p_data = (uint8*)( *pp_mem );
 
 	uint32 version;
-	MemoryRead( &version, sizeof( uint32 ), 1, p_data );
+	MemoryRead( &version, sizeof( uint32 ), 1, p_data ); Endian::Fix( version );
 
 	if( version >= 2 )
 	{
-		MemoryRead( &m_CASRemovalMask, sizeof( uint32 ), 1, p_data );
+		MemoryRead( &m_CASRemovalMask, sizeof( uint32 ), 1, p_data ); Endian::Fix( m_CASRemovalMask );
 	}
 	
-	MemoryRead( &m_numCASData, sizeof( int ), 1, p_data );
+	MemoryRead( &m_numCASData, sizeof( int ), 1, p_data ); Endian::Fix( m_numCASData );
 
 	if( m_numCASData > 0 )
 	{
@@ -131,7 +132,7 @@ bool CXboxMesh::build_casdata_table_from_memory( void **pp_mem )
 
 		for( uint32 i = 0; i < m_numCASData; ++i )
 		{
-			MemoryRead( &mp_CASData[i].mask, sizeof( uint32 ) * 3, 1, p_data );
+			MemoryRead( &mp_CASData[i].mask, sizeof( uint32 ) * 3, 1, p_data ); Endian::Fix32Array( &mp_CASData[i].mask, 3 );
 		}
 
 		// Sort the CAS data based first on mesh, then on the first tri index, lowest to highest. This allows some efficient early-out checking

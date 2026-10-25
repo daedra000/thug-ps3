@@ -58,18 +58,18 @@ words. DXT blocks and 8-bit indices are copied as they are.
 | Scene headers, `CHierarchyObject` array | `Gfx/DX9/p_nx.cpp` `s_plat_load_scene(_from_memory)` | ✅ (size assert: 80 bytes) |
 | Materials (incl. `uint64` reg_alpha, VC-wibble keyframes) | `Gfx/DX9/NX/material.cpp` (both loaders) | ✅ |
 | Sectors: vertex/normal/weight/colour/UV arrays, index arrays | `Gfx/DX9/p_nxsector.cpp` | ✅ (material checksum now read as 4 bytes) |
-| CAS tables `.cas.xbx` | `Gfx/DX9/p_NxMesh.cpp` | ⬜ |
+| CAS tables `.cas.xbx` | `Gfx/DX9/p_NxMesh.cpp` | ✅ |
 | Cutscene head weights `.wgt` | `Sk/Objects/cutscenedetails.cpp` | ⬜ |
 
 ## Animation
 
 | Data | Code | Status |
 |------|------|--------|
-| `.ska` headers, frame tables, standard keys (incl. `timestamp:15` bitfield) | `Gfx/BonedAnim.cpp`, `Gfx/BonedAnimTypes.h`, `Gfx/NxQuickAnim.cpp` | ⬜ |
+| `.ska` headers, frame tables, standard keys (incl. `timestamp:15` bitfield) | `Gfx/BonedAnim.cpp` `s_fix_anim_byte_order`, `Gfx/BonedAnimTypes.h` | ✅ (big-endian bitfield order on PS3) |
 | Compressed keyframes | `BonedAnim.cpp` `get_compressed_q/t_frame` | ➖ |
-| Q48/T48 tables | `BonedAnim.cpp` `init_48_table` | ⬜ (swaps only for NGC) |
-| Custom keys | `Gfx/CustomAnimKey.cpp` | ⬜ |
-| Skeletons `.ske` | `Gfx/Skeleton.cpp` | ⬜ |
+| Q48/T48 tables | `BonedAnim.cpp` `init_48_table` | ✅ |
+| Custom keys | `Gfx/CustomAnimKey.cpp` `ReadCustomAnimKey` | ✅ |
+| Skeletons `.ske` | `Gfx/Skeleton.cpp` | ✅ |
 | Cutscene CIF | `Sk/Objects/cutscenedetails.cpp` `create_objects` | ⬜ |
 
 ## Sound

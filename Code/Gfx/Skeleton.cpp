@@ -14,6 +14,7 @@
 
 #include <gfx/skeleton.h>
 
+#include <core/endian.h>
 #include <gel/scripting/script.h>
 #include <gel/scripting/array.h>
 #include <gel/scripting/checksum.h>
@@ -1347,26 +1348,26 @@ bool CSkeletonData::Load( uint32* p_data32, int data_size, bool assertOnFail )
 	bool success = false;
 
 #ifdef __NOPT_ASSERT__
-	int versionNumber = *((int*)p_data);
+	int versionNumber = Endian::ReadLeS32( p_data );
 	Dbg_MsgAssert( versionNumber >= 2, ( "No longer supporting old SKE format" ) );
 #endif
 	p_data += sizeof(int);
 		
-	m_flags = *((uint32*)p_data);
+	m_flags = Endian::ReadLe32( p_data );
 	p_data += sizeof(uint32);
 
-	m_numBones = *((int*)p_data);
+	m_numBones = Endian::ReadLeS32( p_data );
 	p_data += sizeof(int);
     
     Dbg_MsgAssert( m_numBones < vMAX_BONES, ( "Too many bones in skeleton (raise vMAX_BONES from %d to %d)", vMAX_BONES, m_numBones ) );
 
-	memcpy( m_boneNameTable, p_data, m_numBones * sizeof(uint32) );
+	memcpy( m_boneNameTable, p_data, m_numBones * sizeof(uint32) ); Endian::Fix32Array( m_boneNameTable, m_numBones );
 	p_data += ( m_numBones * sizeof(uint32) );
 
-	memcpy( m_parentNameTable, p_data, m_numBones * sizeof(uint32) );
+	memcpy( m_parentNameTable, p_data, m_numBones * sizeof(uint32) ); Endian::Fix32Array( m_parentNameTable, m_numBones );
 	p_data += ( m_numBones * sizeof(uint32) );
 
-	memcpy( m_flipNameTable, p_data, m_numBones * sizeof(uint32) );
+	memcpy( m_flipNameTable, p_data, m_numBones * sizeof(uint32) ); Endian::Fix32Array( m_flipNameTable, m_numBones );
 	p_data += ( m_numBones * sizeof(uint32) );
 	
 	Dbg_MsgAssert( mp_inverseNeutralPoseMatrices == NULL, ( "Inverse neutral pose matrices not NULL?!?" ) );
@@ -1379,18 +1380,18 @@ bool CSkeletonData::Load( uint32* p_data32, int data_size, bool assertOnFail )
 // so we can optimize with that assumption	
 //		Mth::Quat theQuat = *((Mth::Quat*)p_data);
 		Mth::Quat theQuat;
-		theQuat[X] = *((float*)p_data);
-		theQuat[Y] = *((float*)(p_data+4));
-		theQuat[Z] = *((float*)(p_data+8));
-		theQuat[W] = *((float*)(p_data+12));
+		theQuat[X] = Endian::ReadLeF( p_data );
+		theQuat[Y] = Endian::ReadLeF( p_data+4 );
+		theQuat[Z] = Endian::ReadLeF( p_data+8 );
+		theQuat[W] = Endian::ReadLeF( p_data+12 );
 		p_data += sizeof(Mth::Quat);
 		
 //		Mth::Vector theVector = *((Mth::Vector*)p_data);
 		Mth::Vector theVector;
-		theVector[X] = *((float*)(p_data));
-		theVector[Y] = *((float*)(p_data+4));
-		theVector[Z] = *((float*)(p_data+8));
-		theVector[W] = *((float*)(p_data+12));
+		theVector[X] = Endian::ReadLeF( p_data );
+		theVector[Y] = Endian::ReadLeF( p_data+4 );
+		theVector[Z] = Endian::ReadLeF( p_data+8 );
+		theVector[W] = Endian::ReadLeF( p_data+12 );
 		p_data += sizeof(Mth::Vector);
 
 		Mth::Matrix theNeutralPoseMatrix;

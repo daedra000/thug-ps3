@@ -11,6 +11,7 @@
 
 #include <gfx/customanimkey.h>
 								   
+#include <core/endian.h>
 #include <gel/scripting/script.h>
 #include <gel/scripting/struct.h>
 #include <gel/scripting/symboltable.h>
@@ -597,13 +598,14 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 	SIntermediateCustomAnimKeyHeader theIntermediateHeader;
 	memcpy(&theIntermediateHeader, *pData, sizeof(SIntermediateCustomAnimKeyHeader));
 	*pData += sizeof(SIntermediateCustomAnimKeyHeader);
+	Endian::Fix( theIntermediateHeader.timeStamp ); Endian::Fix( theIntermediateHeader.keyType ); Endian::Fix( theIntermediateHeader.size );	// PS3: PC data is little-endian
 
 	switch ( theIntermediateHeader.keyType )
 	{
 		case vCHANGE_FOCAL_LENGTH:
 			{
 				float fov;
-				memcpy(&fov, *pData, sizeof(float));				// May not be word-aligned in memory
+				memcpy(&fov, *pData, sizeof(float)); Endian::Fix( fov );				// May not be word-aligned in memory
 				*pData += sizeof(float);
 				return new CChangeFOVKey( theIntermediateHeader.timeStamp, fov );
 			}
@@ -611,7 +613,7 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 		case vRUN_SCRIPT:
 			{
 				uint32 script_name;
-				memcpy(&script_name, *pData, sizeof(uint32));		// May not be word-aligned in memory
+				memcpy(&script_name, *pData, sizeof(uint32)); Endian::Fix( script_name );		// May not be word-aligned in memory
 				*pData += sizeof(uint32);
 				return new CRunScriptKey( theIntermediateHeader.timeStamp, script_name );
 			}
@@ -620,9 +622,9 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 			{
 				Mth::Quat theQuat;
 				Mth::Vector theVector;
-				memcpy(&theVector, *pData, sizeof(Mth::Vector));
+				memcpy(&theVector, *pData, sizeof(Mth::Vector)); for( int c = 0; c < 4; ++c ) theVector[c] = Endian::LeF( theVector[c] );
 				*pData += sizeof(Mth::Vector);
-				memcpy(&theQuat, *pData, sizeof(Mth::Quat));
+				memcpy(&theQuat, *pData, sizeof(Mth::Quat)); for( int c = 0; c < 4; ++c ) theQuat[c] = Endian::LeF( theQuat[c] );
 				*pData += sizeof(Mth::Quat);
 				return new CChangeCameraRTKey( theIntermediateHeader.timeStamp, theQuat, theVector, false );
 			}
@@ -631,9 +633,9 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 			{
 				Mth::Quat theQuat;
 				Mth::Vector theVector;
-				memcpy(&theVector, *pData, sizeof(Mth::Vector));
+				memcpy(&theVector, *pData, sizeof(Mth::Vector)); for( int c = 0; c < 4; ++c ) theVector[c] = Endian::LeF( theVector[c] );
 				*pData += sizeof(Mth::Vector);
-				memcpy(&theQuat, *pData, sizeof(Mth::Quat));
+				memcpy(&theQuat, *pData, sizeof(Mth::Quat)); for( int c = 0; c < 4; ++c ) theQuat[c] = Endian::LeF( theQuat[c] );
 				*pData += sizeof(Mth::Quat);
 				return new CChangeCameraRTKey( theIntermediateHeader.timeStamp, theQuat, theVector, true );
 			}
@@ -655,7 +657,7 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 		case vCREATE_OBJECT_FROM_STRUCT:
 			{
 				uint32 object_struct_name;
-				memcpy(&object_struct_name, *pData, sizeof(uint32));		// May not be word-aligned in memory
+				memcpy(&object_struct_name, *pData, sizeof(uint32)); Endian::Fix( object_struct_name );		// May not be word-aligned in memory
 				*pData += sizeof(uint32);
 				return new CCreateObjectFromStructKey( theIntermediateHeader.timeStamp, object_struct_name );
 			}
@@ -663,7 +665,7 @@ CCustomAnimKey* ReadCustomAnimKey( uint8** pData )
 		case vKILL_OBJECT_FROM_STRUCT:
 			{
 				uint32 object_struct_name;
-				memcpy(&object_struct_name, *pData, sizeof(uint32));		// May not be word-aligned in memory
+				memcpy(&object_struct_name, *pData, sizeof(uint32)); Endian::Fix( object_struct_name );		// May not be word-aligned in memory
 				*pData += sizeof(uint32);
 				return new CKillObjectFromStructKey( theIntermediateHeader.timeStamp, object_struct_name );
 			}

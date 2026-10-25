@@ -29,7 +29,7 @@ namespace Gfx
 class CAnimQKey
 {
 public:
-#ifdef __PLAT_NGC__
+#if defined(__PLAT_NGC__) || defined(__CPU_BIG_ENDIAN__)	// big-endian bitfield order (PS3: data swapped on load)
 	short			signBit:1;	// 1 = negative
 	short			timestamp:15;
 #else
