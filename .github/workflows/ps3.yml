@@ -92,6 +92,18 @@ jobs:
           path: ${{ runner.temp }}/ps3dev
           key: ${{ env.TOOLCHAIN_CACHE_KEY }}
 
+  shaders:
+    name: RSX shader assembler and generators
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch PSL1GHT (for the reference cgcomp)
+        run: |
+          git clone -q https://github.com/ps3dev/PSL1GHT "$RUNNER_TEMP/psl1ght"
+          git -C "$RUNNER_TEMP/psl1ght" checkout -q "$PSL1GHT_REF"
+      - name: Same bytes as cgcomp -a; every generated program assembles
+        run: tools/rsx-asm-test/run.sh "$RUNNER_TEMP/psl1ght"
+
   game:
     name: THUG PS3 (${{ matrix.variant }})
     needs: toolchain
