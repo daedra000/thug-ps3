@@ -4,6 +4,7 @@
 #ifndef __CORE_DEFINES_H
 #include <core/defines.h>
 #endif
+#include <stdint.h>
 
 #ifndef __SYS_MEM_POOLABLE_H
 #include <sys/mem/poolable.h>
@@ -62,7 +63,7 @@ class CArray : public Mem::CPoolable<CArray>
 		CStruct *mp_structure;
 		CArray *mp_array;
 		// Used to zero the single element.
-		uint32 m_union;
+		uintptr_t m_union;	// pointer-sized: zeroes/tests the whole single element
 	};
 
 	// The type of the things in the array.

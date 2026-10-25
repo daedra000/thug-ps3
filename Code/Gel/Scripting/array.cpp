@@ -7,6 +7,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 #include <gel/scripting/array.h>
+#include <string.h>
 
 DefinePoolableClass(Script::CArray);
 
@@ -42,6 +43,24 @@ bool CArray::operator!=( const CArray& v ) const
 }
 
 // Deletes the array buffer if it exists, asserting if it contains any non-NULL pointers.
+// Bytes per element: pointers for strings, pairs, vectors, structures and arrays (8 on the
+// PS3's LP64), 4 for integers, floats and names. The PC code sized every element as a uint32.
+static size_t ElementSize(ESymbolType type)
+{
+	switch (type)
+	{
+		case ESYMBOLTYPE_STRING:
+		case ESYMBOLTYPE_LOCALSTRING:
+		case ESYMBOLTYPE_PAIR:
+		case ESYMBOLTYPE_VECTOR:
+		case ESYMBOLTYPE_STRUCTURE:
+		case ESYMBOLTYPE_ARRAY:
+			return sizeof(void*);
+		default:
+			return sizeof(uint32);
+	}
+}
+
 // Sets type to NONE and size to 0.
 void CArray::Clear()
 {
@@ -172,14 +191,10 @@ void CArray::SetSizeAndType(int size, ESymbolType type)
 			Dbg_MsgAssert(mp_array_data==NULL,("mp_array_data not NULL ?"));
 			
 			Mem::Manager::sHandle().PushContext(Mem::Manager::sHandle().ScriptHeap());
-			mp_array_data=(uint32*)Mem::Malloc(m_size*sizeof(uint32));
+			mp_array_data=(uint32*)Mem::Malloc(m_size*ElementSize(type));
 			Mem::Manager::sHandle().PopContext();
 			
-			uint32 *p_long_word=mp_array_data;
-			for (uint32 i=0; i<m_size; ++i)
-			{
-				*p_long_word++=0;
-			}	
+			memset(mp_array_data, 0, m_size*ElementSize(type));
 		}	
 	}
 	else
@@ -206,7 +221,8 @@ void CArray::Resize(uint32 newSize)
 	
 	// Allocate the new buffer.
 	Mem::Manager::sHandle().PushContext(Mem::Manager::sHandle().ScriptHeap());
-	uint32 *p_new_buffer=(uint32*)Mem::Malloc(newSize*sizeof(uint32));
+	const size_t element_size=ElementSize(m_type);
+	uint32 *p_new_buffer=(uint32*)Mem::Malloc(newSize*element_size);
 	Mem::Manager::sHandle().PopContext();
 	
 	// Copy the contents of the old buffer into the new.
@@ -214,18 +230,9 @@ void CArray::Resize(uint32 newSize)
 	// Note: Does not support resizing zero size arrays because it does not know what the type of the 
 	// new array should be.
 	Dbg_MsgAssert(p_source,("NULL array pointer ?"));
-	uint32 *p_dest=p_new_buffer;
-	uint32 i;
-	for (i=0; i<m_size; ++i)
-	{
-		*p_dest++=*p_source++;
-	}
+	memcpy(p_new_buffer, p_source, m_size*element_size);
 	// Zero the remainder of the new buffer.
-	uint32 remainder=newSize-m_size;
-	for (i=0; i<remainder; ++i)
-	{
-		*p_dest++=0;
-	}
+	memset((uint8*)p_new_buffer + m_size*element_size, 0, (newSize-m_size)*element_size);
 	
 	// Only free mp_array_data if the old size was bigger than 1. 
 	// mp_array_data is not allocated for sizes of 1 as a memory optimization.

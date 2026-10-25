@@ -4,6 +4,7 @@
 #ifndef __CORE_DEFINES_H
 #include <core/defines.h>
 #endif
+#include <stdint.h>
 
 #ifndef __SYS_MEM_POOLABLE_H
 #include <sys/mem/poolable.h>
@@ -78,7 +79,7 @@ public:
 		CArray *mpArray;
 		uint8 *mpScript;
 		uint32 mChecksum;
-		uint32 mUnion; // For when all the above need to be zeroed 
+		uintptr_t mUnion;	// pointer-sized: copies/zeroes the whole union (a uint32 held only half a pointer on PS3)
 	};
 	
 	CComponent *mpNext;

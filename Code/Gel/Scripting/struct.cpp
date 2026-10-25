@@ -7,6 +7,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 #include <gel/scripting/struct.h>
+#include <stdint.h>
 #include <gel/scripting/checksum.h>
 #include <gel/scripting/component.h>
 #include <gel/scripting/string.h>
@@ -1331,7 +1332,7 @@ struct SWhatever
 		CArray *mpArray;
 		uint8 *mpScript;
 		uint32 mChecksum;
-		uint32 mUnion; 
+		uintptr_t mUnion;	// pointer-sized: copies/zeroes the whole union (a uint32 held only half a pointer on PS3)
 	};
 };
 

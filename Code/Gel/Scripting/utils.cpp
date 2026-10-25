@@ -7,6 +7,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////
 
 #include <gel/scripting/utils.h>
+#include <stdint.h>
 #include <gel/scripting/checksum.h>
 #include <gel/scripting/component.h>
 #include <gel/scripting/struct.h>
@@ -274,7 +275,7 @@ void PrintContents(const CStruct *p_structure, int indent)
 			PrintContents(p_comp->mpArray,indent);
             break;
         default:
-			printf("Component of type '%s', value 0x%08x\n",GetTypeName(p_comp->mType),p_comp->mUnion);
+			printf("Component of type '%s', value 0x%llx\n",GetTypeName(p_comp->mType),(unsigned long long)p_comp->mUnion);
             //Dbg_MsgAssert(0,("Bad p_comp->Type"));
             break;
         }
@@ -1353,7 +1354,7 @@ union UValue
 	CArray *mpArray;
 	uint8 *mpScript;
 	uint32 mChecksum;
-	uint32 mUnion;
+	uintptr_t mUnion;	// pointer-sized: copies/zeroes the whole union (a uint32 held only half a pointer on PS3)
 };
 
 // This will load type and value from the passed component, resolving it if it refers to a global.
