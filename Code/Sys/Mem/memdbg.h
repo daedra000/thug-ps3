@@ -30,7 +30,7 @@ namespace Mem
 **								   Defines									**
 *****************************************************************************/
 
-#if defined( __PLAT_WN32__ ) || defined( __PLAT_XBOX__ )
+#if ( defined( __PLAT_WN32__ ) || defined( __PLAT_XBOX__ ) ) && !defined( __PLAT_PS3__ )
 static const uint64 vALLOCATED_BLOCK = 0x0101010101010101i64;
 static const uint64 vFREE_BLOCK 	 = 0x0303030303030303i64;
 #else

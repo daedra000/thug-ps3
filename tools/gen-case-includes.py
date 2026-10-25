@@ -99,6 +99,13 @@ def main():
                 if hit is None and not spelling.startswith(('sys/', 'rsx/', 'io/', 'audio/')):
                     unresolved.add(spelling)
 
+    # GCC takes '\\' in an #include literally (clang and MSVC treat it as a separator),
+    # so a backslashed spelling gets a link with that exact (flat) name as well.
+    for raw in list(backslashed):
+        target = links.get(raw.replace('\\', '/')) or index.get(norm(raw).lower())
+        if target:
+            links[raw] = target
+
     # A header reached through a link sees its quoted includes relative to the link's
     # directory, so give each linked header's quoted includes links there as well.
     pending = list(links.items())
@@ -119,13 +126,6 @@ def main():
             if new_key and new_key not in links:
                 links[new_key] = target
                 pending.append((new_key, target))
-
-    # GCC takes '\\' in an #include literally (clang and MSVC treat it as a separator),
-    # so a backslashed spelling gets a link with that exact (flat) name as well.
-    for raw in list(backslashed):
-        target = links.get(raw.replace('\\', '/')) or index.get(norm(raw).lower())
-        if target:
-            links[raw] = target
 
     count = 0
     for key, real in links.items():
