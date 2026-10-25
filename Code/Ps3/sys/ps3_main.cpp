@@ -24,26 +24,30 @@
 // Windows' 1 MB). Same as the GridSiege ports.
 SYS_PROCESS_PARAM(1001, 0x100000);
 
-// Boot trail: USRDIR/thug-ps3-boot.txt, written with plain lv2 calls from the first static
-// constructor on, so a crash before the log opens still says how far start-up got.
-static void BootMark(const char* what)
+// Boot trail: thug-ps3-boot.txt in USRDIR and in /dev_hdd0/tmp, written with plain lv2
+// calls from the first line of main() on, so a crash before the log opens still says
+// how far start-up got. (A priority-101 static constructor wrote it from even earlier,
+// but builds with it never reached main() on a console: it ran before the C library
+// was set up.)
+static void BootMarkTo(const char* path, const char* what)
 {
 	s32 fd;
-	if (sysFsOpen(PS3_USRDIR "/thug-ps3-boot.txt", SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, NULL, 0) != 0)
+	if (sysFsOpen(path, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, NULL, 0) != 0)
 		return;
 	u64 put;
 	sysFsWrite(fd, what, strlen(what), &put);
 	sysFsWrite(fd, "\n", 1, &put);
 	sysLv2FsFsync(fd);	// on disc even if the console is switched off next
 	sysFsClose(fd);
-	sysFsChmod(PS3_USRDIR "/thug-ps3-boot.txt", 0100666);	// readable over FTP
+	sysFsChmod(path, 0100666);	// readable over FTP
 }
 
-__attribute__((constructor(101))) static void BootFirstConstructor()
+static void BootMark(const char* what)
 {
-	sysFsUnlink(PS3_USRDIR "/thug-ps3-boot.txt");
-	BootMark("static constructors started");
+	BootMarkTo(PS3_USRDIR "/thug-ps3-boot.txt", what);
+	BootMarkTo("/dev_hdd0/tmp/thug-ps3-boot.txt", what);
 }
+
 
 namespace
 {
@@ -185,8 +189,10 @@ static void OnTerminate()
 
 void Init(int argc, char** argv)
 {
-	std::set_terminate(OnTerminate);
+	sysFsUnlink(PS3_USRDIR "/thug-ps3-boot.txt");
+	sysFsUnlink("/dev_hdd0/tmp/thug-ps3-boot.txt");
 	BootMark("main() reached");
+	std::set_terminate(OnTerminate);
 	if (argc > 0 && argv && argv[0]) BootMark(argv[0]);
 	if (argc > 0)
 		Ps3Fs::SetAppPath(argv[0]);
