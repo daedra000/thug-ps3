@@ -22,10 +22,11 @@ Work in progress. **It does not run on a console yet.**
       Win32 API stand-ins (threads, timers, files, directory search)
 - [x] Input: DualShock 3 (the game's PS2 pad layout maps one to one)
 - [x] Audio output: the game's mixer on an 8-channel libaudio port
-- [x] D3D9 layer with a headless backend; RSX backend stage 1 (video mode, flip, clears)
-- [ ] Builds cleanly with the PPU GCC (in progress)
-- [ ] Little-endian PC data on the big-endian PS3: PRE archives done; scripts, textures,
-      geometry, collision, animations to do
+- [x] D3D9 layer with a headless backend; RSX backend stage 1 (video mode, flip, clears), with
+      the command-buffer fix from GridSiege's RSX renderer (no random RSX lock-ups)
+- [x] Builds and links with the PPU GCC; both PKGs are produced by CI
+- [x] Little-endian PC data on the big-endian PS3: every known loader converts (see
+      [docs/ps3-byte-order.md](docs/ps3-byte-order.md)); untested on a console
 - [ ] RSX rendering: 2D (menus, loading screens), then 3D meshes and shaders
 - [ ] Saves (`USRDIR/Save`), music
 
