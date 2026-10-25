@@ -99,7 +99,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [headless]
+        variant: [headless, release]
     steps:
       - uses: actions/checkout@v5
 

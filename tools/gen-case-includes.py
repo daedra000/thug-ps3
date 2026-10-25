@@ -52,6 +52,7 @@ def main():
     search_roots = ['', 'Sk', 'Ps3/include']  # mirrors the -I order in Makefile.ps3
 
     links = {}       # spelling (relative to out) -> real relative path
+    backslashed = set()
     unresolved = set()
 
     for dirpath, dirnames, filenames in os.walk(code):
@@ -67,6 +68,8 @@ def main():
                 continue
             src_dir = os.path.relpath(dirpath, code)
             for kind, inc in INC_RE.findall(text):
+                if '\\' in inc:
+                    backslashed.add(inc)
                 spelling = inc.replace('\\', '/')
                 candidates = []
                 if kind == '"':
@@ -116,6 +119,13 @@ def main():
             if new_key and new_key not in links:
                 links[new_key] = target
                 pending.append((new_key, target))
+
+    # GCC takes '\\' in an #include literally (clang and MSVC treat it as a separator),
+    # so a backslashed spelling gets a link with that exact (flat) name as well.
+    for raw in list(backslashed):
+        target = links.get(raw.replace('\\', '/')) or index.get(norm(raw).lower())
+        if target:
+            links[raw] = target
 
     count = 0
     for key, real in links.items():
