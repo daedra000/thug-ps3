@@ -27,6 +27,9 @@
 
 #include <sys/profiler.h>			// Including for debugging
 #include <sys/timer.h>				// Including for debugging
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 /*****************************************************************************
 **							  DBG Information								**
@@ -153,7 +156,15 @@ void		List::Process( bool time, uint mask )
 					// only call the task if it is not masked off
 					if (! (task->GetMask() & mask))
 					{
+#ifdef __PLAT_PS3__
+						// Each task's entry (a function descriptor: look it up in thug-ps3.map,
+						// saved with the PKG by CI) during the main loop's first frames.
+						if (g_ps3TraceTasks) Ps3Platform::Trace("[task] %p", task->GetCode());
+#endif
 						task->vCall();
+#ifdef __PLAT_PS3__
+						if (g_ps3TraceTasks) Ps3Platform::Trace("[task] %p done", task->GetCode());
+#endif
 					}
 #ifdef		__USE_PROFILER__			
 #ifdef __PLAT_NGPS__

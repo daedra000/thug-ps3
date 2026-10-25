@@ -6,6 +6,9 @@
 #define PS3_HEADLESS 0
 #endif
 
+// Set by the main loop for its first frames: the task lists log each task they run.
+extern volatile bool g_ps3TraceTasks;
+
 namespace Ps3Platform
 {
 	// Called first thing in main(): app path, log file (USRDIR/thug-ps3.log, also

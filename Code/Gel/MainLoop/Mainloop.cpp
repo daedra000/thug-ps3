@@ -62,6 +62,13 @@ void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
 #endif
+#ifdef __PLAT_PS3__
+// Main loop progress for the log: the frame number, and each phase of the first two frames.
+static unsigned s_ps3Frame = 0;
+#define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
+#else
+#define PS3_PHASE(name) do { } while (0)
+#endif
 void Win32_ProcessMsgPump();
 void Win32_GameNetUpdate();
 
@@ -392,8 +399,8 @@ void		Manager::MainLoop( void )
 #ifdef __PLAT_PS3__
 		{
 			// The first frames, then every 10 s or so (60 Hz), in the log.
-			static unsigned s_ps3Frame = 0;
 			++s_ps3Frame;
+			g_ps3TraceTasks = s_ps3Frame <= 2;
 			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || s_ps3Frame == 60 || s_ps3Frame % 600 == 0)
 			{
 				char text[48];
@@ -453,6 +460,7 @@ void		Manager::MainLoop( void )
 		if (!NxXbox::g_disableRendering)
 #endif
 		{
+			PS3_PHASE("frame: sPreRender");
 			Nx::CEngine::sPreRender();			 			// start rendering previous frame's DMA list
 		}
 
@@ -469,6 +477,7 @@ void		Manager::MainLoop( void )
 #	endif		
 #	endif		
 					 
+		PS3_PHASE("frame: service_system");
 		service_system();
 
 #if	defined(__PLAT_NGPS__) && defined(BATCH_TRI_COLLISION)
@@ -482,6 +491,7 @@ void		Manager::MainLoop( void )
 //		snProfSetFlagValue(0x01);
  #endif
 
+		PS3_PHASE("frame: game_logic");
 		game_logic();		
 
  #ifdef	__PLAT_NGPS__		
@@ -509,6 +519,7 @@ void		Manager::MainLoop( void )
 //		snProfSetFlagValue(0x01);
  #endif
 		
+		PS3_PHASE("frame: sRenderWorld");
 		Nx::CEngine::sRenderWorld();		
 #ifdef	__PLAT_NGC__		
 #ifdef		__USE_PROFILER__
@@ -524,6 +535,7 @@ void		Manager::MainLoop( void )
 		if (!NxXbox::g_disableRendering)
 #endif		
 		{
+			PS3_PHASE("frame: sPostRender");
 			Nx::CEngine::sPostRender();		  // Previous frames profiler is rendered here
 		}
 #	ifdef __USE_PROFILER__
@@ -536,7 +548,9 @@ void		Manager::MainLoop( void )
 #	ifdef __USE_PROFILER__
 		Sys::CPUProfiler->PopContext(  );
 #	endif		
+		PS3_PHASE("frame: OncePerRender");
 		Tmr::OncePerRender();
+		PS3_PHASE("frame: done");
  #ifdef	__PLAT_NGPS__		
 //		snProfSetRange( 4, (void*)NULL, (void*)-1);
  #endif		

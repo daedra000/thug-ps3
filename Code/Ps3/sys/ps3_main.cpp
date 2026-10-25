@@ -178,6 +178,8 @@ namespace
 	}
 }
 
+volatile bool g_ps3TraceTasks = false;
+
 namespace Ps3Platform
 {
 
