@@ -160,9 +160,11 @@ void		List::Process( bool time, uint mask )
 						// Each task's entry (a function descriptor: look it up in thug-ps3.map,
 						// saved with the PKG by CI) during the main loop's first frames.
 						if (g_ps3TraceTasks) Ps3Platform::Trace("[task] %p", task->GetCode());
+						g_ps3CurrentTask = task->GetCode();
 #endif
 						task->vCall();
 #ifdef __PLAT_PS3__
+						g_ps3CurrentTask = 0;
 						if (g_ps3TraceTasks) Ps3Platform::Trace("[task] %p done", task->GetCode());
 #endif
 					}

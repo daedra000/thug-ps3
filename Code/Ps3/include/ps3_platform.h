@@ -8,6 +8,9 @@
 
 // Set by the main loop for its first frames: the task lists log each task they run.
 extern volatile bool g_ps3TraceTasks;
+// Main loop progress, shown on the [alive] lines: the frame number and the task running now.
+extern volatile unsigned g_ps3Frame;
+extern volatile const void* g_ps3CurrentTask;
 
 namespace Ps3Platform
 {

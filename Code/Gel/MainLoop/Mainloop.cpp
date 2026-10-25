@@ -400,8 +400,9 @@ void		Manager::MainLoop( void )
 		{
 			// The first frames, then every 10 s or so (60 Hz), in the log.
 			++s_ps3Frame;
+			g_ps3Frame = s_ps3Frame;
 			g_ps3TraceTasks = s_ps3Frame <= 2;
-			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || s_ps3Frame == 60 || s_ps3Frame % 600 == 0)
+			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || (s_ps3Frame <= 600 ? s_ps3Frame % 60 == 0 : s_ps3Frame % 600 == 0))
 			{
 				char text[48];
 				snprintf(text, sizeof(text), "main loop frame %u", s_ps3Frame);

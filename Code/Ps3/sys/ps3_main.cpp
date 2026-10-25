@@ -162,8 +162,12 @@ namespace
 			{
 				lastBeat = now;
 				char line[256];
-				snprintf(line, sizeof(line), "[alive] %u s, last step: %s%s%s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep,
-					s_traceText[0] ? " | last trace: " : "", s_traceText);
+				if (g_ps3Frame)
+					snprintf(line, sizeof(line), "[alive] %u s, main loop frame %u, task %p, last step: %s\n", (unsigned)((now - start) / 1000000),
+						g_ps3Frame, (const void*)g_ps3CurrentTask, (const char*)s_lastStep);
+				else
+					snprintf(line, sizeof(line), "[alive] %u s, last step: %s%s%s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep,
+						s_traceText[0] ? " | last trace: " : "", s_traceText);
 				RawLog(line);
 			}
 			if (s_quit && s_quitTime && now - s_quitTime > 3000000)
@@ -179,6 +183,8 @@ namespace
 }
 
 volatile bool g_ps3TraceTasks = false;
+volatile unsigned g_ps3Frame = 0;
+volatile const void* g_ps3CurrentTask = 0;
 
 namespace Ps3Platform
 {
