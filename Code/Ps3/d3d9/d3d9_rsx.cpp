@@ -1,9 +1,5 @@
-// THUG PS3: the RSX backend of the D3D9 layer.
-//
-// Stage 1 (this file so far): video set-up at the TV's resolution, double-buffered
-// display flipped on vsync, and the game's clears. Draw calls are counted but not
-// drawn yet; resources stay in main memory. The next stages add textured 2D
-// (menus, loading screens), then the 3D meshes and their shaders.
+// THUG PS3: the RSX backend of the D3D9 layer: video set-up, the command buffer, frames,
+// flips and clears. Resources, programs, render state and draws are in d3d9_rsx_draw.cpp.
 //
 // Video set-up follows the PS3 ports proven on hardware (re3-PS3, Quake2PS3):
 // rsxInit once, 720p when the TV takes it, otherwise the TV's own mode.
@@ -39,6 +35,7 @@
 #include <rsx/rsx.h>
 #include <sysutil/video.h>
 #include <sys/systime.h>
+#include "d3d9_rsx_internal.h"
 
 namespace Ps3Gfx
 {
@@ -47,7 +44,7 @@ enum { kBuffers = 2 };
 static const u32 kCommandBufferSize = 256 * 1024;
 static const u32 kIoSize = 1024 * 1024;	// main memory mapped for the RSX: the command buffer only
 
-static gcmContextData* s_ctx;
+gcmContextData* s_ctx;
 static void* s_ioBuffer;
 static bool s_ready;
 static u32 s_width = 1280, s_height = 720, s_pitch;
@@ -61,11 +58,11 @@ static unsigned s_segmentChanges;
 static u32 s_label = 1;
 static bool s_firstFrame = true;
 static bool s_frameReady;	// this frame has passed the flip gate
-static bool s_skipFrame;	// the system holds the display: this frame is not drawn
+bool s_skipFrame;	// the system holds the display: this frame is not drawn
 static bool s_flipPending;
 static int s_heldFrames, s_forcedRun;
 static unsigned s_skipped, s_forced;
-static u32 s_frameSeq;
+u32 s_frameSeq;
 enum { kLabelIndex = 255, kFrameLabel = 253 };
 
 // A correct call to libgcm's segment callback (see the top of the file).
@@ -91,14 +88,14 @@ static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 c
 }
 
 // Makes room for `words` command words, so PSL1GHT's functions never change segments.
-static void CmdReserve(u32 words)
+void CmdReserve(u32 words)
 {
 	if (!s_ctx || s_ctx->current + words <= s_ctx->end) return;
 	FifoCallback(s_ctx, words);
 	++s_segmentChanges;
 }
 
-static void GpuLog(const char* fmt, ...)
+void GpuLog(const char* fmt, ...)
 {
 	va_list args;
 	va_start(args, fmt);
@@ -110,7 +107,7 @@ static void GpuLog(const char* fmt, ...)
 }
 
 // Waits until the RSX has run everything queued so far (bounded, logged).
-static bool WaitIdle(const char* what)
+bool WaitIdle(const char* what)
 {
 	CmdReserve(16);
 	rsxSetWriteBackendLabel(s_ctx, kLabelIndex, s_label);
@@ -191,6 +188,7 @@ static void FrameBegin()
 	// Change segments here, between frames, if the frame might not fit.
 	CmdReserve(32 * 1024);
 	SetRenderTarget();
+	DrawFrameStart();
 }
 
 bool Init(D3DPRESENT_PARAMETERS* pp)
@@ -274,6 +272,8 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		s_cur = 0;
 		gcmResetFlipStatus();
 		s_ready = true;
+		if (!DrawInit())
+			GpuLog("draw set-up failed: frames will be cleared but not drawn");
 		printf("[gfx] RSX ready: %ux%u (stage 1: clears only, no drawing yet)\n", s_width, s_height);
 	}
 
@@ -311,9 +311,8 @@ void Present(IDirect3DDevice9*)
 		s_cur = (s_cur + 1) % kBuffers;
 	}
 	if (s_frames <= 3 || (s_frames % 600) == 0)
-		GpuLog("frame %u alive (%u draws not drawn yet, %u segment changes, %u frames skipped and %u flips forced while the display was held)",
-			s_frames, s_draws, s_segmentChanges, s_skipped, s_forced);
-	s_draws = 0;
+		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held)",
+			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced);
 }
 
 void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
@@ -326,7 +325,7 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	if (!mask) return;
 
 	FrameBegin();
-	if (s_skipFrame) return;
+	if (s_skipFrame || !TargetIsDisplay(dev)) return;
 	const D3DVIEWPORT9& vp = dev->m_viewport;
 	CmdReserve(64);
 	rsxSetScissor(s_ctx, (u16)vp.X, (u16)vp.Y, (u16)vp.Width, (u16)vp.Height);
@@ -338,27 +337,6 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	rsxClearSurface(s_ctx, mask);
 }
 
-void Draw(IDirect3DDevice9*, const DrawCall&)
-{
-	++s_draws;
-}
-
-void TextureChanged(IDirect3DTexture9*) {}
-void TextureReleased(IDirect3DTexture9*) {}
-void SurfaceReleased(IDirect3DSurface9*) {}
-void VertexBufferChanged(IDirect3DVertexBuffer9*, UINT, UINT) {}
-void VertexBufferReleased(IDirect3DVertexBuffer9*) {}
-void IndexBufferChanged(IDirect3DIndexBuffer9*, UINT, UINT) {}
-void IndexBufferReleased(IDirect3DIndexBuffer9*) {}
-void ShaderCreated(IDirect3DVertexShader9*) {}
-void ShaderCreated(IDirect3DPixelShader9*) {}
-void ShaderReleased(IDirect3DVertexShader9*) {}
-void ShaderReleased(IDirect3DPixelShader9*) {}
-
-UINT VideoMemoryFree()
-{
-	return 200 * 1024 * 1024;
-}
 
 } // namespace Ps3Gfx
 
