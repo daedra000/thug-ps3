@@ -16,6 +16,7 @@
 #include <Sys/File/filesys.h>
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+#include <bink_audio.h>
 #endif
 #include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
@@ -134,10 +135,99 @@ namespace Pcm
 			std::ifstream file;
 
 		public:
+#ifdef __PLAT_PS3__
+			// The PC data's music and streams are audio-only Bink files, which miniaudio
+			// can't decode (Code/Ps3/audio/bink_audio.cpp does).
+			BinkAudio *bink = nullptr;
+			std::vector<float> bink_buffer;
+			double bink_pos = 0.0;		// resampling: position between bink_buffer frames 0 and 1
+			bool bink_end = false;
+
+			bool OpenBink()
+			{
+				char magic[3] = {};
+				file.read(magic, 3);
+				file.clear();
+				file.seekg(0);
+				if (magic[0] != 'B' || magic[1] != 'I' || magic[2] != 'K')
+					return false;
+				bink = new BinkAudio();
+				if (!bink->Open(&file))
+				{
+					printf("[music] unsupported Bink file\n");
+					delete bink;
+					bink = nullptr;
+					file.close();
+					return true;
+				}
+				bink_buffer.clear();
+				bink_pos = 0.0;
+				bink_end = false;
+				return true;
+			}
+
+			// Output: 5 channels (FL FR C BL BR) at 48 kHz, like the miniaudio path. Stereo goes
+			// to the front pair; mono to every channel, as miniaudio does.
+			size_t StreamBink(float *out, size_t frames)
+			{
+				const int ch = bink->Channels();
+				const double step = bink->SampleRate() / 48000.0;
+				size_t done = 0;
+				while (done < frames)
+				{
+					// Need frames floor(pos) and floor(pos)+1 buffered.
+					size_t have = bink_buffer.size() / ch;
+					if ((size_t)bink_pos + 1 >= have)
+					{
+						if (bink_end)
+						{
+							if ((size_t)bink_pos >= have)
+								break;
+						}
+						else
+						{
+							// Keep the frame we're on, decode more after it.
+							size_t keep = (size_t)bink_pos;
+							bink_buffer.erase(bink_buffer.begin(), bink_buffer.begin() + keep * ch);
+							bink_pos -= keep;
+							size_t old = bink_buffer.size();
+							bink_buffer.resize(old + 2048 * ch);
+							size_t got = bink->Read(&bink_buffer[old], 2048);
+							bink_buffer.resize(old + got * ch);
+							if (got < 2048)
+								bink_end = true;
+							continue;
+						}
+					}
+					size_t i0 = (size_t)bink_pos;
+					size_t i1 = i0 + 1 < bink_buffer.size() / ch ? i0 + 1 : i0;
+					float t = (float)(bink_pos - i0);
+					float l = bink_buffer[i0 * ch] * (1.0f - t) + bink_buffer[i1 * ch] * t;
+					float r = ch > 1 ? bink_buffer[i0 * ch + 1] * (1.0f - t) + bink_buffer[i1 * ch + 1] * t : l;
+					if (ch > 1)
+					{
+						out[0] = l; out[1] = r; out[2] = 0.0f; out[3] = 0.0f; out[4] = 0.0f;
+					}
+					else
+					{
+						out[0] = out[1] = out[2] = out[3] = out[4] = l;
+					}
+					out += 5;
+					++done;
+					bink_pos += step;
+				}
+				return done;
+			}
+#endif
+
 			MusicDecoder(stdfs::path path) : file(path, std::ios::binary)
 			{
 				if (!file.is_open())
 					return;
+#ifdef __PLAT_PS3__
+				if (OpenBink())
+					return;
+#endif
 
 				ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 5, 48000);
 				ma_decoder_init(
@@ -174,6 +264,13 @@ namespace Pcm
 
 			~MusicDecoder()
 			{
+#ifdef __PLAT_PS3__
+				if (bink != nullptr)
+				{
+					delete bink;
+					return;
+				}
+#endif
 				if (!file.is_open())
 					return;
 				
@@ -186,6 +283,16 @@ namespace Pcm
 			{
 				if (!file.is_open())
 					return;
+#ifdef __PLAT_PS3__
+				if (bink != nullptr)
+				{
+					bink->Rewind();
+					bink_buffer.clear();
+					bink_pos = 0.0;
+					bink_end = false;
+					return;
+				}
+#endif
 
 				ma_decoder_seek_to_pcm_frame(&decoder, 0);
 			}
@@ -194,6 +301,10 @@ namespace Pcm
 			{
 				if (!file.is_open())
 					return 0;
+#ifdef __PLAT_PS3__
+				if (bink != nullptr)
+					return StreamBink((float *)p, bytes / (sizeof(float) * 5)) * (sizeof(float) * 5);
+#endif
 
 				// Read from decoder
 				ma_uint64 frames_read = 0;
@@ -225,6 +336,19 @@ namespace Pcm
 	/******************************************************************/
 	static std::unordered_map<uint32, stdfs::path> music_paths;
 	static std::unordered_map<uint32, stdfs::path> stream_paths;
+
+	// The PC data has no Data/music: its music is with the other streams, in
+	// Data/streams/music (Bink files named by checksum).
+	static const stdfs::path *FindMusic(uint32 checksum)
+	{
+		auto it = music_paths.find(checksum);
+		if (it != music_paths.end())
+			return &it->second;
+		it = stream_paths.find(checksum);
+		if (it != stream_paths.end())
+			return &it->second;
+		return nullptr;
+	}
 
 	static std::unordered_map<uint32, stdfs::path> Index(stdfs::path path)
 	{
@@ -413,15 +537,15 @@ namespace Pcm
 	/******************************************************************/
 	bool PCMAudio_PreLoadMusicStream( uint32 checksum )
 	{
-		auto it = music_paths.find(checksum);
-		if (it == music_paths.end())
+		auto it = FindMusic(checksum);
+		if (it == nullptr)
 			return false;
 
 		Audio::Lock();
 
 		if (music_stream != nullptr)
 			delete music_stream;
-		music_stream = new MusicDecoder(File::DataPath() / it->second);
+		music_stream = new MusicDecoder(File::DataPath() / *it);
 
 		Audio::Unlock();
 		return true;
@@ -711,8 +835,8 @@ namespace Pcm
 
 		// Find music path from checksum
 		uint32 hash = Crc::GenerateCRCFromString(filename);
-		auto it = music_paths.find(Crc::GenerateCRCFromString(filename));
-		if (it == music_paths.end())
+		auto it = FindMusic(Crc::GenerateCRCFromString(filename));
+		if (it == nullptr)
 
 			return false;
 
@@ -722,7 +846,7 @@ namespace Pcm
 		if (music_stream != nullptr)
 			delete music_stream;
 
-		music_stream = new MusicDecoder(File::DataPath() / it->second);
+		music_stream = new MusicDecoder(File::DataPath() / *it);
 		music_stream->Play();
 
 		Audio::Unlock();

@@ -35,7 +35,10 @@ Work in progress. **It does not run on a console yet.**
       (`tools/rsx-asm-test`, run by CI)
 - [ ] Start-up on a console: the headless build sometimes stops before `main()`, otherwise
       hangs while the core systems are set up (being narrowed down with the log)
-- [ ] Saves (`USRDIR/Save`), music
+- [x] Music and streamed sounds: the PC data's audio-only Bink files (`Data/streams/music`)
+      are decoded by `Code/Ps3/audio/bink_audio.cpp` (checked against ffmpeg on a PC with
+      `tools/bink-audio-test`); untested on a console
+- [ ] Saves (`USRDIR/Save`)
 
 ## Installing (once it runs)
 

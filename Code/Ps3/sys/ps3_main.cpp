@@ -272,7 +272,7 @@ namespace
 	void GameThread(void* p)
 	{
 		GameArgs* a = (GameArgs*)p;
-		s_stackTop = (char*)__builtin_frame_address(0);
+		Ps3Platform::s_stackTop = (char*)__builtin_frame_address(0);
 		Ps3Platform::Step("game thread started");
 		a->result = GameMain(a->argc, a->argv);
 		fflush(stdout);
@@ -287,7 +287,7 @@ int main(int argc, char** argv)
 	args.argc = argc; args.argv = argv; args.result = 0;
 	sys_ppu_thread_t id;
 	char name[] = "thug_game";
-	s32 err = sysThreadCreate(&id, GameThread, &args, 1000, kGameStack, THREAD_JOINABLE, name);
+	s32 err = sysThreadCreate(&id, GameThread, &args, 1000, Ps3Platform::kGameStack, THREAD_JOINABLE, name);
 	if (err != 0)
 	{
 		printf("[sys] couldn't start the game thread (error %d); running on the main thread\n", (int)err);
