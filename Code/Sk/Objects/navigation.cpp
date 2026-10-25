@@ -238,7 +238,7 @@ CNavNode* CalculateNodePath( Mth::Vector pos, Mth::Vector target_pos )
 	CNavNode* p_nearest_visible = get_nearest_visible_node( pos, heading );
 	if( p_nearest_visible == NULL )
 	{
-		return false;
+		return NULL;
 	}
 
 	// Initialise the A* section of the node.

@@ -8,7 +8,7 @@
 
 namespace UserSoundtrack
 {
-	static std::filesystem::path ModulePath()
+	static stdfs::path ModulePath()
 	{
 		char		nameConversionBuffer[256];
 		GetModuleFileNameA(NULL, nameConversionBuffer, 255);
@@ -21,20 +21,20 @@ namespace UserSoundtrack
 	Soundtracks IndexSoundtracks()
 	{
 		// Get user soundtrack path
-		std::filesystem::path usersoundtrack_path = ModulePath() / "Soundtracks";
-		if (!std::filesystem::exists(usersoundtrack_path))
+		stdfs::path usersoundtrack_path = ModulePath() / "Soundtracks";
+		if (!stdfs::exists(usersoundtrack_path))
 			return Soundtracks();
 
 		// Iterate over folders in user soundtrack path
 		Soundtracks soundtracks;
-		for (const auto &soundtrack_entry : std::filesystem::directory_iterator(usersoundtrack_path))
+		for (const auto &soundtrack_entry : stdfs::directory_iterator(usersoundtrack_path))
 		{
 			// Check if entry is a directory
 			if (soundtrack_entry.is_directory())
 			{
 				// Create soundtrack
 				Soundtrack soundtrack;
-				std::filesystem::path::string_type name = soundtrack_entry.path().filename().native();
+				stdfs::path::string_type name = soundtrack_entry.path().filename().native();
 				
 				soundtrack.name.reserve(name.size());
 				for (auto &c : name)
@@ -46,7 +46,7 @@ namespace UserSoundtrack
 				}
 
 				// Iterate over files in soundtrack path
-				for (const auto &song_entry : std::filesystem::recursive_directory_iterator(soundtrack_entry.path()))
+				for (const auto &song_entry : stdfs::recursive_directory_iterator(soundtrack_entry.path()))
 				{
 					// Check if entry is a file
 					if (song_entry.is_regular_file())

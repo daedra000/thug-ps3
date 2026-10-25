@@ -13,6 +13,9 @@
 #pragma clang diagnostic ignored "-Wtautological-constant-out-of-range-compare"
 #endif
 
+#ifdef __PLAT_PS3__
+#include <sys/systime.h>	// sysUsleep, for ma_sleep
+#endif
 #include "miniaudio.h"
 
 #if defined(__clang__)

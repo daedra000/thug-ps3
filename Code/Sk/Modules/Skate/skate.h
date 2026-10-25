@@ -153,6 +153,12 @@ struct SPreCalculatedObjectUpdateInfo
 **							Class Definitions								**
 *****************************************************************************/
 
+// PS3/GCC: the friend declarations in Skate don't make these visible on their own.
+bool ScriptSetGameType(Script::CStruct *pParams, Script::CScript *pScript);
+bool ScriptInTeamGame(Script::CStruct *pParams, Script::CScript *pScript);
+bool ScriptLaunchLevel(Script::CStruct *pParams, Script::CScript *pScript);
+bool ScriptSetTimeLimit(Script::CStruct *pParams, Script::CScript *pScript);
+
 class Skate : public Module 
 {
 

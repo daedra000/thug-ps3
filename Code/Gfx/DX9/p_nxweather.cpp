@@ -927,7 +927,7 @@ void CXboxWeather::plat_render_splashes( float skx, float skz )
 
 	// LWSS changes below for PC
 	//NxXbox::set_pixel_shader( PixelShader4 );
-	NxXbox::set_pixel_shader( (uint32_t)0 );
+	NxXbox::set_pixel_shader( (IDirect3DPixelShader9*)0 );
 	D3DDevice_SetTextureStageState(0, D3DTSS_COLOROP, 5);
 	D3DDevice_SetTextureStageState(0, D3DTSS_ALPHAOP, 5);
 	NxXbox::set_vertex_shader( D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE2( 0 ));

@@ -52,6 +52,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 typedef int SOCKET;
+#define NET_SOCKLEN socklen_t
 #define closesocket(s)	netClose(s)
 #define ioctlsocket(s, cmd, argp) setsockopt((s), SOL_SOCKET, SO_NBIO, (argp), sizeof(int))	// only FIONBIO is used
 #ifndef FIONBIO
@@ -205,6 +206,10 @@ typedef int SOCKET;
 
 #define vSOCKET_THREAD_STACK_SIZE	( 8 * 1024 )
 #define vMODEM_THREAD_STACK_SIZE	( 12 * 1024 )
+#endif
+
+#ifndef NET_SOCKLEN
+#define NET_SOCKLEN int
 #endif
 
 #ifndef SOCKET_ERROR
@@ -554,6 +559,11 @@ public:
 };
 
 typedef int	(MsgHandlerCode)( MsgHandlerContext *context );
+
+// PS3/GCC: friend declarations alone don't make these visible (MSVC finds them anyway).
+MsgHandlerCode	handle_ack;
+MsgHandlerCode	handle_latency_response;
+MsgHandlerCode	handle_latency_test;
 
 class MsgHandler : public Lst::Node< MsgHandler >
 {

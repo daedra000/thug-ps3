@@ -16,6 +16,7 @@
 #include <strings.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
 
 // ---------------------------------------------------------------------------
 // MSVC keywords
@@ -57,6 +58,7 @@ typedef uintptr_t       DWORD_PTR;
 typedef uintptr_t       ULONG_PTR;
 typedef intptr_t        LONG_PTR;
 typedef void            VOID;
+typedef unsigned char   byte;
 typedef void*           PVOID;
 typedef void*           LPVOID;
 typedef const void*     LPCVOID;
@@ -116,6 +118,12 @@ typedef struct _GUID { uint32_t Data1; uint16_t Data2, Data3; uint8_t Data4[8]; 
 #define CopyMemory(d, s, n)     memcpy((d), (s), (n))
 #define FillMemory(d, n, v)     memset((d), (v), (n))
 
+#ifdef __cplusplus
+// windows.h's min/max (as functions rather than macros, so the C++ library still works).
+template<typename T> static inline T max(T a, T b) { return a > b ? a : b; }
+template<typename T> static inline T min(T a, T b) { return a < b ? a : b; }
+#endif
+
 // ---------------------------------------------------------------------------
 // MSVC CRT names
 // ---------------------------------------------------------------------------
@@ -150,5 +158,8 @@ static inline void OutputDebugStringA(const char* s) { fputs(s, stderr); }
 // Byte order. PC game data is little-endian; the PS3 is big-endian.
 // ---------------------------------------------------------------------------
 #include "ps3_endian.h"
+
+// Win32 API stand-ins (threads, timers, files...)
+#include "ps3_win32.h"
 
 #endif // PS3_COMPAT_H

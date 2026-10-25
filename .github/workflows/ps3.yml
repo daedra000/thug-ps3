@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - name: Restore cached toolchain
+      - name: Look for the cached toolchain
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/ps3dev
           key: ${{ env.TOOLCHAIN_CACHE_KEY }}
@@ -87,21 +87,29 @@ jobs:
 
       - name: Save toolchain to cache
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}/ps3dev
           key: ${{ env.TOOLCHAIN_CACHE_KEY }}
 
-  smoke-test:
-    name: Toolchain smoke test (PSL1GHT sample)
+  game:
+    name: THUG PS3 (${{ matrix.variant }})
     needs: toolchain
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [headless]
     steps:
-      - uses: actions/cache/restore@v4
+      - uses: actions/checkout@v5
+
+      - name: Restore toolchain
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/ps3dev
           key: ${{ env.TOOLCHAIN_CACHE_KEY }}
           fail-on-cache-miss: true
+
       - name: Set up environment
         run: |
           sudo apt-get update && sudo apt-get -y install libelf-dev python3
@@ -109,10 +117,24 @@ jobs:
           echo "PSL1GHT=$RUNNER_TEMP/ps3dev" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/ps3dev/bin" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/ps3dev/ppu/bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP/ps3dev/spu/bin" >> "$GITHUB_PATH"
-      - name: Build padtest sample
+
+      - name: Build
         run: |
-          git clone https://github.com/ps3dev/PSL1GHT psl1ght-src
-          git -C psl1ght-src checkout "$PSL1GHT_REF"
-          make -C psl1ght-src/samples/input/padtest
-          ls -l psl1ght-src/samples/input/padtest
+          set -o pipefail
+          ppu-gcc --version | head -1
+          HEADLESS=$([ "${{ matrix.variant }}" = headless ] && echo 1 || echo 0)
+          make -f Makefile.ps3 HEADLESS=$HEADLESS -k -j"$(nproc)" 2>&1 | tee build.log
+
+      - name: Report errors
+        if: always()
+        run: python3 tools/ci-annotate.py build.log "$GITHUB_WORKSPACE"
+
+      - name: Upload PKG and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thug-ps3-${{ matrix.variant }}
+          path: |
+            thug-ps3*.pkg
+            build.log
+          if-no-files-found: warn

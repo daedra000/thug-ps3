@@ -4,14 +4,20 @@
 
 #include <string>
 #include <vector>
+#ifdef __PLAT_PS3__
+#include <ps3_stdfs.h>		// PS3: no std::filesystem in newlib's libstdc++
+namespace stdfs = ps3stdfs;
+#else
 #include <filesystem>
+namespace stdfs = std::filesystem;
+#endif
 
 namespace UserSoundtrack
 {
 	// Track definition
 	struct Track
 	{
-		std::filesystem::path path;
+		stdfs::path path;
 	};
 
 	struct Soundtrack

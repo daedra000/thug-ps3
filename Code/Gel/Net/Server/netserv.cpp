@@ -322,7 +322,7 @@ void	Server::ReceiveData( void )
 #ifdef __PLAT_NGC__
 	from_address.len = sizeof( sockaddr );
 #else
-	int addr_len = sizeof( from_address );
+	NET_SOCKLEN addr_len = sizeof( from_address );	// PS3: socklen_t
 #endif
 
 	// Local servers (i.e. non-network play) never really receive. Their data is automatically 

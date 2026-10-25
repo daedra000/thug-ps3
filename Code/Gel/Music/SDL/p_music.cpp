@@ -14,18 +14,22 @@
 #include <Gel/SoundFX/SDL/Mixer.h>
 
 #include <Sys/File/filesys.h>
-#include <filesystem>
+#include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
+#ifndef __PLAT_PS3__	// unused, and no std::thread on PS3
 #include <mutex>
 #include <thread>
+#endif
 #include <functional>
 #include <fstream>
 
+#ifndef __PLAT_PS3__
 #include <Shlwapi.h>
+#endif
 
 namespace File
 {
-static std::filesystem::path DataPath()
+static stdfs::path DataPath()
 {
 	char		nameConversionBuffer[256];
 	GetModuleFileNameA(NULL, nameConversionBuffer, 255);
@@ -34,7 +38,7 @@ static std::filesystem::path DataPath()
 
 	return nameConversionBuffer;
 }
-static std::filesystem::path ModulePath()
+static stdfs::path ModulePath()
 {
 	char		nameConversionBuffer[256];
 	GetModuleFileNameA(NULL, nameConversionBuffer, 255);
@@ -127,7 +131,7 @@ namespace Pcm
 			std::ifstream file;
 
 		public:
-			MusicDecoder(std::filesystem::path path) : file(path, std::ios::binary)
+			MusicDecoder(stdfs::path path) : file(path, std::ios::binary)
 			{
 				if (!file.is_open())
 					return;
@@ -216,16 +220,16 @@ namespace Pcm
 	/*                                                                */
 	/*                                                                */
 	/******************************************************************/
-	static std::unordered_map<uint32, std::filesystem::path> music_paths;
-	static std::unordered_map<uint32, std::filesystem::path> stream_paths;
+	static std::unordered_map<uint32, stdfs::path> music_paths;
+	static std::unordered_map<uint32, stdfs::path> stream_paths;
 
-	static std::unordered_map<uint32, std::filesystem::path> Index(std::filesystem::path path)
+	static std::unordered_map<uint32, stdfs::path> Index(stdfs::path path)
 	{
-		if (!std::filesystem::exists(path))
+		if (!stdfs::exists(path))
 			return {};
 
-		std::unordered_map<uint32, std::filesystem::path> paths;
-		for (auto &i : std::filesystem::recursive_directory_iterator(path))
+		std::unordered_map<uint32, stdfs::path> paths;
+		for (auto &i : stdfs::recursive_directory_iterator(path))
 		{
 			if (i.is_regular_file())
 			{
@@ -235,7 +239,7 @@ namespace Pcm
 				sscanf(name.c_str(), "%x", &checksum);
 
 				//uint32 checksum = std::stoi(name.c_str(), 0, 16);
-				paths[checksum] = std::filesystem::relative(i.path(), File::DataPath());
+				paths[checksum] = stdfs::relative(i.path(), File::DataPath());
 			}
 		}
 		return paths;

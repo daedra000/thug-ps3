@@ -17,7 +17,7 @@ import re
 import sys
 
 INC_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.M)
-SKIP_DIRS = {'gamespy', 'ngps', 'ngc', 'xbox'}
+SKIP_DIRS = {'gamespy', 'ngps', 'ngc'}
 SRC_EXT = ('.c', '.cpp', '.h', '.hpp', '.inl', '.inc')
 
 

@@ -1,126 +1,171 @@
 #---------------------------------------------------------------------------------
 # THUG PS3 — PSL1GHT build
 #
-#   make -f Makefile.ps3            build thug.elf / thug.self
-#   make -f Makefile.ps3 pkg        build the installable PKG
+#   make -f Makefile.ps3                 the game        -> thug-ps3.pkg
+#   make -f Makefile.ps3 HEADLESS=1      no video/audio/pad: runs the game logic and
+#                                        writes everything to the log -> thug-ps3-headless.pkg
+#   make -f Makefile.ps3 DEBUG=1         -g, asserts
+#   make -f Makefile.ps3 clean
 #
-# The source list is the PC (kisak-thug) list from cmake_files.cmake, minus the
-# Windows/Xbox platform files, plus the PS3 platform layer in Code/Ps3.
+# The source list is kisak-thug's (cmake_files.cmake) minus the Windows/Xbox
+# platform files, plus the PS3 layer in Code/Ps3.
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 
-ROOT      := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-SRC       := $(ROOT)Code
-BUILD     := $(ROOT)build-ps3
-TARGET    := thug
+ROOT      := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+SRC       := $(ROOT)/Code
+HEADLESS  ?= 0
+DEBUG     ?= 0
 
-TITLE     := Tony Hawk's Underground
-APPID     := THUG00001
-CONTENTID := UP0001-$(APPID)_00-0000000000000000
+VARIANT   := release
+ifeq ($(HEADLESS),1)
+  VARIANT := headless
+endif
+ifeq ($(DEBUG),1)
+  VARIANT := $(VARIANT)-debug
+endif
+
+BUILD     := $(ROOT)/build-ps3/$(VARIANT)
+CASE_INC  := $(ROOT)/build-ps3/case-includes
+TARGET    := thug-ps3
+
+export TITLE     := Tony Hawk's Underground
+export APPID     := THUG00001
+export CONTENTID := UP0001-$(APPID)_00-0000000000000000
 
 # PC platform files the PS3 replaces (Code/Ps3 provides the equivalents).
 PC_ONLY := \
-	Core/Debug/Wn32/P_debug.cpp \
-	Core/Thread/wn32/t_thread.cpp \
 	Gel/Music/Win32/p_wmafilestream.cpp \
 	Gel/SoundFX/Win32/win32_sfx.cpp \
-	Gel/Music/SDL/usersoundtrack.cpp \
-	Sk/GameNet/Xbox/p_buddy.cpp \
-	Sys/Config/Win32/p_config.cpp \
-	Sys/File/XBox/p_AsyncFilesys.cpp \
-	Sys/File/XBox/p_filesys.cpp \
-	Sys/MemCard/Win32/p_McMan.cpp \
-	Sys/SIO/Win32/p_keyboard.cpp \
-	Sys/SIO/Win32/p_siodev.cpp \
-	Sys/SIO/Win32/p_sioman.cpp \
-	Sys/Win32/p_timer.cpp \
-	Sys/Win32/WinMain.cpp
+	Gel/SoundFX/SDL/Mixer.cpp \
+	Sk/GameNet/Xbox/p_buddy.cpp
 
-# Online play is out of scope for now (GameSpy servers are long gone).
+# Online play is out of scope for now (GameSpy's servers are long gone); LAN play
+# goes through Gel/Net, which is kept.
 PC_ONLY_DIRS := Sk/GameNet/GameSpy/
+PC_ONLY += Sk/GameNet/Lobby.cpp Sk/GameNet/ServerList.cpp
 
-CMAKE_SOURCES := $(shell sed -n 's/^[[:space:]]*"$${SRC_DIR}\/\([^"]*\.\(cpp\|c\)\)".*/\1/p' $(ROOT)cmake_files.cmake)
+CMAKE_SOURCES := $(shell sed -n 's/^[[:space:]]*"$${SRC_DIR}\/\([^"]*\.\(cpp\|c\)\)".*/\1/p' $(ROOT)/cmake_files.cmake)
+CMAKE_SOURCES := $(patsubst $(SRC)/%,%,$(wildcard $(addprefix $(SRC)/,$(CMAKE_SOURCES))))
 PS3_SOURCES   := $(patsubst $(SRC)/%,%,$(shell find $(SRC)/Ps3 -name '*.cpp' -o -name '*.c' 2>/dev/null))
-SOURCES       := $(sort $(filter $(patsubst $(SRC)/%,%,$(wildcard $(addprefix $(SRC)/,$(CMAKE_SOURCES)))) $(PS3_SOURCES),$(filter-out $(PC_ONLY) $(addsuffix %,$(PC_ONLY_DIRS)),$(CMAKE_SOURCES)) $(PS3_SOURCES)))
+SOURCES       := $(sort $(filter-out $(PC_ONLY) $(addsuffix %,$(PC_ONLY_DIRS)),$(CMAKE_SOURCES)) $(PS3_SOURCES))
 
 DEFINES := \
 	-D__PLAT_WN32__ -D__PLAT_PS3__ -D__CPU_BIG_ENDIAN__=1 \
-	-D_DEBUG -DKISAK_ORIGINAL_ALLOCATOR -DGSI_NO_THREADS
+	-DKISAK_ORIGINAL_ALLOCATOR -DGSI_NO_THREADS -DMA_NO_PTHREAD_IN_HEADER -DPS3_HEADLESS=$(HEADLESS)
+ifeq ($(DEBUG),1)
+  DEFINES += -D_DEBUG
+else
+  DEFINES += -DNDEBUG
+endif
 
-CASE_INC := $(BUILD)/case-includes
 INCLUDES := -I$(SRC)/Ps3/include -I$(SRC) -I$(SRC)/Sk -I$(CASE_INC)
 
-# -fpermissive: the engine casts pointers to 32-bit ints all over; PS3 user memory is
-#               below 4 GB, so that is lossless at runtime (kisak relies on MSVC /permissive too).
-# -fsigned-char: MSVC chars are signed; PPU GCC defaults to unsigned.
-GAME_CXXFLAGS := -std=gnu++17 -fpermissive -fsigned-char -fno-strict-aliasing \
+# -fpermissive:  the engine casts pointers to 32-bit ints all over; PS3 user memory is
+#                below 4 GB so that's lossless at runtime (kisak relies on MSVC /permissive).
+# -fsigned-char: MSVC chars are signed; PPU GCC's are unsigned.
+# The -fno-*/-fwrapv set keeps GCC from exploiting undefined behaviour that MSVC-era
+# code depends on (learned the hard way by re3-PS3/reVC-PS3 on real hardware).
+GAME_FLAGS := -fpermissive -fsigned-char -fno-strict-aliasing -fno-common \
+	-fno-aggressive-loop-optimizations -fno-delete-null-pointer-checks -fwrapv \
+	-fno-math-errno -fno-trapping-math \
 	-Wno-write-strings -Wno-narrowing -Wno-multichar -Wno-unknown-pragmas \
 	$(DEFINES) $(INCLUDES)
 
-.PHONY: all pkg clean print-sources print-cxxflags-check case-includes
-
-# Windows-cased #includes -> symlink tree (see tools/gen-case-includes.py).
-case-includes:
-	@python3 $(ROOT)tools/gen-case-includes.py $(SRC) $(CASE_INC)
+.PHONY: all pkg clean case-includes print-sources print-cxxflags-check check-toc FORCE
+.DEFAULT_GOAL := all
 
 print-sources:
 	@for f in $(SOURCES); do echo $$f; done
 
-# Flags for tools/ps3-check-all.sh (clang can't take -fpermissive, so pointer
-# truncation is reported as a warning there instead).
+# For tools/ps3-check-all.sh (clang can't take -fpermissive; MSVC-style casts are
+# allowed through -fms-extensions there instead).
 print-cxxflags-check:
-	@echo $(filter-out -fpermissive,$(GAME_CXXFLAGS)) -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
-		-Wno-c++11-narrowing -Wno-microsoft-cast -fms-extensions -Wno-everything
+	@echo -std=gnu++17 $(filter-out -fpermissive -fno-aggressive-loop-optimizations -fno-delete-null-pointer-checks,$(GAME_FLAGS)) \
+		-Wno-c++11-narrowing -fms-extensions -Wno-everything
 
-ifneq ($(MAKECMDGOALS),print-sources)
-ifneq ($(MAKECMDGOALS),print-cxxflags-check)
+# Windows-cased #includes -> symlink tree (see tools/gen-case-includes.py).
+case-includes:
+	@python3 $(ROOT)/tools/gen-case-includes.py $(SRC) $(CASE_INC)
+
+ifeq ($(filter print-sources print-cxxflags-check case-includes,$(MAKECMDGOALS)),)
 ifeq ($(strip $(PSL1GHT)),)
 $(error "PSL1GHT must be set in the environment (see README).")
 endif
-include $(PSL1GHT)/host/ppu.mk
+include $(PSL1GHT)/ppu_rules
 
-CXXFLAGS += -O2 $(GAME_CXXFLAGS)
-CFLAGS   += -O2 $(filter-out -std=gnu++17 -fpermissive,$(GAME_CXXFLAGS))
-LIBS     := -lrsx -lgcm_sys -lio -lsysutil -lsysmodule -laudio -lrt -llv2 -lm
-LD       := $(CXX)
+ifneq ($(wildcard $(ROOT)/ps3/ICON0.PNG),)
+  ICON0 := $(ROOT)/ps3/ICON0.PNG
+endif
+BUILDDIR := $(BUILD)/pkgbuild
+PKGFILES := $(BUILD)/pkgfiles
 
-OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES))))
-DEPS   := $(OFILES:.o=.d)
+COMMON_FLAGS := -O2 -mcpu=cell -mtune=cell -mno-altivec $(MACHDEP) -MMD -MP \
+	$(LIBPSL1GHT_INC) -I$(PORTLIBS)/include
+# One 64 KB TOC for the whole EBOOT: give each object its own TOC block.
+COMMON_FLAGS += -mminimal-toc
+ifeq ($(DEBUG),1)
+  COMMON_FLAGS += -g
+endif
+
+CXXFLAGS := $(CXXFLAGS_INIT) -std=gnu++17 $(COMMON_FLAGS) $(GAME_FLAGS)
+CFLAGS   := $(CFLAGS_INIT) $(COMMON_FLAGS) $(filter-out -fpermissive,$(GAME_FLAGS))
+
+# A TOC over 64 KB makes ld split it with r2off stubs, which hang the PS3 at boot:
+# fail the link instead (see check-toc).
+LDFLAGS  := $(MACHDEP) -Wl,--no-multi-toc $(LIBPSL1GHT_LIB) -L$(PORTLIBS)/lib
+LIBS     := -lio -lsysmodule -lsysutil -lnet -lrt -llv2 -lm
+ifneq ($(HEADLESS),1)
+  LIBS   := -lrsx -lgcm_sys -laudio $(LIBS)
+endif
+
+OFILES := $(addprefix $(BUILD)/obj/,$(addsuffix .o,$(basename $(SOURCES))))
+ELF    := $(BUILD)/$(TARGET).elf
 
 all: case-includes
-	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) $(BUILD)/$(TARGET).self
+	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) $(BUILD)/$(TARGET).pkg
+	@cp $(BUILD)/$(TARGET).pkg $(ROOT)/$(TARGET)$(if $(filter release,$(VARIANT)),,-$(VARIANT)).pkg
+	@echo "==> $(TARGET)$(if $(filter release,$(VARIANT)),,-$(VARIANT)).pkg"
 
-$(BUILD)/%.o: $(SRC)/%.cpp
+# Compiler flags are part of every object's dependencies.
+$(BUILD)/flags.txt: FORCE
 	@mkdir -p $(dir $@)
-	@echo $*.cpp
-	@$(CXX) -MMD -MP $(CXXFLAGS) -c $< -o $@
+	@echo '$(subst ','',$(CXXFLAGS))' > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
 
-$(BUILD)/%.o: $(SRC)/%.c
+$(BUILD)/obj/%.o: $(SRC)/%.cpp $(BUILD)/flags.txt
 	@mkdir -p $(dir $@)
-	@echo $*.c
-	@$(CC) -MMD -MP $(CFLAGS) -c $< -o $@
+	@echo "CXX $*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/$(TARGET).elf: $(OFILES)
-	@echo linking $(notdir $@)
-	@$(LD) $(MACHDEP) $(LDFLAGS) $(OFILES) $(LIBPATHS) $(LIBS) -o $@
+$(BUILD)/obj/%.o: $(SRC)/%.c $(BUILD)/flags.txt
+	@mkdir -p $(dir $@)
+	@echo "CC  $*.c"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/$(TARGET).self: $(BUILD)/$(TARGET).elf
-	@cp $< $(BUILD)/$(TARGET).elf.bak
-	@$(STRIP) $<
-	@$(SPRX) $<
-	@$(SELF) $< $@
-	@$(FSELF) $< $(BUILD)/EBOOT.BIN
+$(ELF): $(OFILES)
+	@echo "LD  $(notdir $@)"
+	@$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OFILES) $(LIBS) -o $@
+	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) check-toc
 
-pkg: $(BUILD)/$(TARGET).self
-	@mkdir -p $(BUILD)/pkg/USRDIR
-	@cp $(BUILD)/EBOOT.BIN $(BUILD)/pkg/USRDIR/EBOOT.BIN
-	@cp $(ROOT)ps3/ICON0.PNG $(BUILD)/pkg/ICON0.PNG
-	@$(SFO) --title "$(TITLE)" --appid "$(APPID)" -f $(ROOT)ps3/sfo.xml $(BUILD)/pkg/PARAM.SFO
-	@$(PKG) --contentid $(CONTENTID) $(BUILD)/pkg/ $(BUILD)/$(TARGET).pkg
+check-toc:
+	@got=$$(ppu-readelf -SW $(ELF) | awk '$$2==".got"{print $$6}'); \
+	 stubs=$$(ppu-nm $(ELF) | grep -c r2off || true); \
+	 echo "    .got = 0x$$got (limit 0x10000), r2off stubs = $$stubs"; \
+	 if [ $$((0x$${got:-0})) -ge $$((0x10000)) ] || [ "$$stubs" != "0" ]; then \
+	   echo "ERROR: TOC over 64 KB -- this EBOOT would hang at boot"; exit 1; fi
+
+# The PKG creates USRDIR with an empty Data folder for the user's PC game data.
+$(BUILD)/$(TARGET).pkg: $(BUILD)/$(TARGET).self $(BUILD)/pkgfiles.stamp
+$(BUILD)/pkgfiles.stamp: FORCE
+	@rm -rf $(PKGFILES)
+	@mkdir -p $(PKGFILES)/USRDIR/Data
+	@printf "Copy the Data folder of your PC copy of Tony Hawk's Underground here.\n" > $(PKGFILES)/USRDIR/Data/PUT_PC_DATA_HERE.TXT
+	@touch $@
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(ROOT)/build-ps3
 
--include $(DEPS)
-endif
+-include $(OFILES:.o=.d)
 endif

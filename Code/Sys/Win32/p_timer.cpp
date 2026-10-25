@@ -23,8 +23,12 @@
 **							  	  Includes									**
 *****************************************************************************/
 
+#ifndef __PLAT_PS3__
 #include <windows.h>
 #include <mmsystem.h>
+#else
+#include <core/defines.h>
+#endif
 #include <time.h>
 #include <sys/timer.h>
 #include <Sys/Config/config.h>
@@ -186,6 +190,12 @@ static void InitTimerInfo(void)
 	s_vblank = 0;
 }
 
+#ifdef __PLAT_PS3__
+static __int64 getCycles(void)
+{
+	return (__int64)__builtin_ppc_get_timebase();
+}
+#else
 __int64 __declspec(naked) __stdcall getCycles(void)
 {
 	_asm
@@ -194,6 +204,7 @@ __int64 __declspec(naked) __stdcall getCycles(void)
 		ret
 	}
 }
+#endif
 void Init(void)
 {
 	InitTimerInfo();

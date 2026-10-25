@@ -252,8 +252,15 @@ void mat_test(Mth::Matrix A,Mth::Matrix B,Mth::Matrix C);
 /******************************************************************/
 
 
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
+
 int main ( sint argc, char** argv )
 { 	
+#ifdef __PLAT_PS3__
+	Ps3Platform::Init(argc, argv);
+#endif
 #ifdef __PLAT_NGC__
 #ifdef DVDETH
 	// Defaults

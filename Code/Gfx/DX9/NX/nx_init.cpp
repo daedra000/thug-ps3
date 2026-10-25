@@ -302,6 +302,7 @@ void QueryRegistryAndSetGammaRamp()
 	*(float*)g = 0.13f;
 	*(float*)b = 0.12f;
 
+#ifndef __PLAT_PS3__	// PS3: no registry, the defaults above are used
 	DWORD cbData;
 	HKEY result;
 	if (!RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Activision\\Tony Hawk's Underground\\Settings\\Gamma", 0, 0X20019, &result))
@@ -309,6 +310,7 @@ void QueryRegistryAndSetGammaRamp()
 		cbData = 4;
 		RegQueryValueExA(result, "R", 0, 0, r, &cbData);
 	}
+#endif
 
 	SetGammaNormalized(*(float*)r, *(float*)g, *(float*)b);
 }
@@ -326,10 +328,12 @@ void InitialiseEngine( void )
 	EngineGlobals.screen_conv_y_offset		= 16;	
 	EngineGlobals.letterbox_active = false;
 	
+#ifndef __PLAT_PS3__
 	if (EngineGlobals.g_windowHasBeenDisplayedEver)
 	{
 		ShowWindow(EngineGlobals.hWnd, SW_SHOWMAXIMIZED);
 	}
+#endif
 
 	//EngineGlobals.p_d3d = Direct3DCreate8(220);
 	//EngineGlobals.p_d3d = Direct3DCreate9(D3D_SDK_VERSION);
@@ -363,6 +367,13 @@ void InitialiseEngine( void )
 	s_engineResolutionWidth  = (EngineGlobals.cmdline_width  > 0) ? EngineGlobals.cmdline_width  : 1280;
 	s_engineResolutionHeight = (EngineGlobals.cmdline_height > 0) ? EngineGlobals.cmdline_height : 960;
 
+#ifdef __PLAT_PS3__
+	// PS3: full screen at the TV's resolution (0 = the RSX backend picks it from
+	// the video output settings: 1280x720, or 720x480/576 on SD TVs).
+	params.Windowed = FALSE;
+	s_engineResolutionWidth = 0;
+	s_engineResolutionHeight = 0;
+#else
 	if (params.Windowed)
 	{
 		RECT wr = { 0, 0, s_engineResolutionWidth, s_engineResolutionHeight };
@@ -376,6 +387,7 @@ void InitialiseEngine( void )
 		SetWindowPos(EngineGlobals.hWnd, HWND_TOP, 0, 0,
 			s_engineResolutionWidth, s_engineResolutionHeight, SWP_FRAMECHANGED);
 	}
+#endif
 
 	params.BackBufferWidth = s_engineResolutionWidth;
 	params.BackBufferHeight = s_engineResolutionHeight;

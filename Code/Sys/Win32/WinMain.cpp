@@ -4,23 +4,51 @@
 
 #include <Gfx/nx.h>
 
+#ifndef __PLAT_PS3__
 #include <windows.h>
+#endif
 #include <stdlib.h>		// atoi for the display launch-arg parser
 
 #include <Gfx/DX9/NX/render.h>
 
+#ifndef __PLAT_PS3__
 // Temporarily in here
 #include <dsound.h>
 LPDIRECTSOUND8 ppDS8;
 //LPDIRECTINPUT8 g_directInput8 = nullptr;
 // ^^
+#else
+#include <ps3_platform.h>
+#endif
 
+#ifdef __PLAT_PS3__
+bool g_isWindowInFocus = true;	// PS3: the game always has the screen
+#else
 bool g_isWindowInFocus = false;
+#endif
 bool g_windowJustWentOutOfFocus = false;
 bool g_windowHasBeenDisplayedEver = false;
 bool gbQuit = false;
 bool g_hasJustEnteredNetworkGame = false; // KISAKTODO: add more xrefs for this var
 
+#ifdef __PLAT_PS3__
+// PS3: no window. The main loop's message pump services the PS3 system
+// (XMB, quit requests) instead; the game's main() is the program entry.
+void Win32_ProcessMsgPump()
+{
+    Ps3Platform::Pump();
+    if (Ps3Platform::QuitRequested())
+        gbQuit = true;
+}
+
+void Win32_ApplyInputs()
+{
+}
+
+void Win32_GameNetUpdate()
+{
+}
+#else
 BOOL(__cdecl* g_downloadCompletionFunc)(DWORD) = NULL;
 
 static HANDLE hEvent = 0;
@@ -55,6 +83,7 @@ void Win32_ApplyInputs()
 void Win32_GameNetUpdate()
 {
 }
+#endif // __PLAT_PS3__
 
 
 void D3D_ResetTextures()
@@ -311,6 +340,7 @@ void D3D_RecreateRenderSurfaces()
     NxXbox::InitialiseRenderstates();
 }
 
+#ifndef __PLAT_PS3__
 HWND __cdecl Win32_CreateClassAndWindow(
     LPCSTR lpClassName,
     LPCSTR lpWindowName,
@@ -640,3 +670,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
         //_exit(0);
     }
 }
+#endif // !__PLAT_PS3__

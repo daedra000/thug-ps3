@@ -127,7 +127,7 @@ bool	CFeeler::GetCollision(bool movables, bool bfar)
 	void *callback = 0;					
 	if (mp_callback)
 	{
-	   	callback = s_feeler_collide_callback;
+	   	callback = (void*)s_feeler_collide_callback;
 	}
 
 	Nx::CCollCache *p_cache = (mp_cache) ? mp_cache : sp_default_cache;
@@ -233,7 +233,7 @@ bool CFeeler::GetMovableCollision(bool bfar)
 	void *callback = 0;					
 	if (mp_callback)
 	{
-	   	callback = s_feeler_collide_callback;
+	   	callback = (void*)s_feeler_collide_callback;
 	}
 
 	Nx::CCollCache *p_cache = (mp_cache) ? mp_cache : sp_default_cache;

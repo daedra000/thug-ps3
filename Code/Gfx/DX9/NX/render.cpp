@@ -1,3 +1,8 @@
+#ifdef __PLAT_PS3__
+#define PREFETCH_MESH( p )	__builtin_prefetch( p )
+#else
+#define PREFETCH_MESH( p )	{ __asm mov eax, p __asm prefetcht0 [eax] }
+#endif
 #include <core/defines.h>
 #include <core/debug.h>
 #include <core/HashTable.h>
@@ -426,12 +431,14 @@ static IDirect3DPixelShader9* get_pixel_shader( sMaterial *p_material )
 	{
 		while (true)
 		{
-			int blend_mode_value = blend_modes[curr_blend_mode + 1];
+			int blend_mode_value;	// PS3/GCC: see v33 below
+			blend_mode_value = blend_modes[curr_blend_mode + 1];
 			uses_prev = false;
 			// Previous-mask lerp uses the prior pass's alpha: base (r0.a) for the first detail
 			// pass, else the preceding detail's preserved alpha (r1.a).
-			int v33 = ( curr_blend_mode >= 2 ) ? 4 : 0;
-			int v2 = 4;
+			int v33, v2;	// PS3/GCC: assigned, not initialised, so the gotos below may jump past them
+			v33 = ( curr_blend_mode >= 2 ) ? 4 : 0;
+			v2 = 4;
 
 			if (blend_mode_value == vBLEND_MODE_BLEND_PREVIOUS_MASK || blend_mode_value == vBLEND_MODE_BLEND_INVERSE_PREVIOUS_MASK)
 			{
@@ -1783,7 +1790,7 @@ void set_pixel_shader(IDirect3DPixelShader9* shader_id, uint32 num_passes )
 		}
 			
 		// Upload any pixel shader constants if required.
-		if( EngineGlobals.upload_pixel_shader_constants && ( shader_id > 0 ))
+		if( EngineGlobals.upload_pixel_shader_constants && ( shader_id != NULL ))
 		{
 			D3DDevice_SetPixelShaderConstantF( 0, &EngineGlobals.pixel_shader_constants[0], num_passes );
 			D3DDevice_SetPixelShaderConstantF( 4, &EngineGlobals.pixel_shader_constants[16], 1 );
@@ -3237,8 +3244,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 		{
 			sMesh *p_mesh = p_scene->m_meshes[e];
 
-			__asm mov eax, p_mesh			// Store mesh pointer.
-			__asm prefetcht0 [eax]			// Get first 32 bytes of sMesh structure.
+			PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
 			
 			if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 			{
@@ -3369,8 +3375,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 		{
 			sMesh *p_mesh = p_scene->m_meshes[e];
 
-			__asm mov eax, p_mesh			// Store mesh pointer.
-			__asm prefetcht0 [eax]			// Get first 32 bytes of sMesh structure.
+			PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
 
 			if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 			{
@@ -3428,8 +3433,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 			{
 				sMesh *p_mesh = p_scene->m_meshes[e];
 
-				__asm mov eax, p_mesh			// Store mesh pointer.
-				__asm prefetcht0 [eax]			// Get first 32 bytes of sMesh structure.
+				PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
 
 				if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 				{
@@ -3490,8 +3494,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 			{
 				sMesh *p_mesh = p_scene->m_meshes[e];
 
-				__asm mov eax, p_mesh			// Store mesh pointer.
-				__asm prefetcht0 [eax]			// Get first 32 bytes of sMesh structure.
+				PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
 
 				if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 				{

@@ -7,9 +7,9 @@ namespace Mem
 	int gHeapPools = false;			// set to true to use debug heap instead of pools
 
 
-CCompactPool *CPoolable<PoolTest>::sp_pool[POOL_STACK_SIZE] = {NULL,NULL};									
-bool CPoolable<PoolTest>::s_internallyCreatedPool[POOL_STACK_SIZE] = {false,false};
-int CPoolable<PoolTest>::s_currentPool=0;						
+template<> CCompactPool *CPoolable<PoolTest>::sp_pool[POOL_STACK_SIZE] = {NULL,NULL};									
+template<> bool CPoolable<PoolTest>::s_internallyCreatedPool[POOL_STACK_SIZE] = {false,false};
+template<> int CPoolable<PoolTest>::s_currentPool=0;						
 
 
 PoolTest::PoolTest()
