@@ -46,18 +46,13 @@ with open(log_path, errors='replace') as f:
 files = sorted({e[0] for e in errors})
 print(f'{len(errors)} compile errors in {len(files)} files, {len(undefined)} link problems')
 
-budget = MAX
-for path, line, msg in errors:
-    if budget == 0:
-        break
-    msg = msg.replace('%', '%25').replace('\r', '').replace('\n', ' ')
-    print(f'::error file={path},line={line}::{msg}')
-    budget -= 1
-for (kind, sym), count in sorted(undefined.items(), key=lambda kv: -kv[1]):
-    if budget == 0:
-        break
-    print(f'::error title=link::{kind}: {sym} ({count}x)')
-    budget -= 1
+# GitHub keeps only 10 error annotations per step, so pack several items into each.
+items = [f'{path}:{line}: {msg}' for path, line, msg in errors]
+items += [f'{kind}: {sym} ({count}x)' for (kind, sym), count in sorted(undefined.items(), key=lambda kv: -kv[1])]
+PER = (len(items) + 9) // 10 if items else 1
+for i in range(0, min(len(items), 400), PER):
+    chunk = ' | '.join(items[i:i + PER]).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+    print(f'::error title=build errors {i // PER + 1}::{chunk}')
 
 # Nothing recognisable (e.g. make stopped before compiling): show the end of the log.
 if not errors and not undefined:

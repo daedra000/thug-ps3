@@ -21,6 +21,7 @@
 // Make GetFileSize work if passed the pointer.
 
 // 11Dec02 JCB - Andre wanted me to use tolower() instead of strncmpi()
+#include <core/endian.h>
 #include <ctype.h>
 
 #include <sys/file/pip.h>
@@ -171,6 +172,32 @@ static SPreHeader *sSkipOverPreName(const char *p_pre_name)
 	return (SPreHeader*)(p_pre_name+len);
 }
 
+
+// THUG PS3: the PC pre files are little-endian. Convert a freshly loaded pre's
+// headers to host order in place, so everything below can use them directly.
+// (A no-op on little-endian machines.)
+static void sFixPreByteOrder(SPreHeader *p_pre_header)
+{
+	if (Endian::kHostIsLittle)
+	{
+		return;
+	}
+	Endian::Fix(p_pre_header->mSize);
+	Endian::Fix(p_pre_header->mVersion);
+	Endian::Fix(p_pre_header->mNumFiles);
+	SPreContained *p_contained=(SPreContained*)(p_pre_header+1);
+	for (int f=0; f<p_pre_header->mNumFiles; ++f)
+	{
+		Endian::Fix(p_contained->mDataSize);
+		Endian::Fix(p_contained->mCompressedSize);
+		// mNameSize is 4 bytes on disc; as two LE halves, each swaps on its own.
+		Endian::Fix(p_contained->mNameSize);
+		Endian::Fix(p_contained->mUsage);
+		Endian::Fix(p_contained->mChecksum);
+		p_contained=sSkipToNextPreContained(p_contained,NOT_QUAD_WORD_ALIGNED);
+	}
+}
+
 // Loads a pre file into memory. The name must have no path since the pre is
 // assumed to be in the data\pre directory.
 // Ie, a valid name would be "alc.pre"
@@ -298,6 +325,7 @@ void LoadPre(const char *p_preFileName)
 	new_pre_buffer_size+=sizeof(SPreHeader);
 
 	SPreHeader *p_pre_header=sSkipOverPreName(p_old_file_data);
+	sFixPreByteOrder(p_pre_header);
 	uint32 num_files=p_pre_header->mNumFiles;
 	SPreContained *p_contained=(SPreContained*)(p_pre_header+1);
 	for (uint32 f=0; f<num_files; ++f)

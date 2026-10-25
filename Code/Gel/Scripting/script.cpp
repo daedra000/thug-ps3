@@ -1605,7 +1605,13 @@ bool CScript::execute_command()
 	if (token==ESCRIPTTOKEN_RUNTIME_CFUNCTION)
 	{
 		++mp_pc;
+#ifdef __PLAT_PS3__
+		// PS3 (LP64): the token holds the function pointer in 32 bits (code lives
+		// below 4 GB); widen it rather than reading half of the 8-byte union member.
+        bool (*p_cfunc)(CStruct *pParams, CScript *pCScript)=(bool (*)(CStruct*, CScript*))(uintptr_t)Read4Bytes(mp_pc).mUInt;
+#else
         bool (*p_cfunc)(CStruct *pParams, CScript *pCScript)=Read4Bytes(mp_pc).mpCFunction;
+#endif
 		mp_pc+=4;
 		
 		load_function_params();

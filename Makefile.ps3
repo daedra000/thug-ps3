@@ -46,8 +46,8 @@ PC_ONLY := \
 PC_ONLY_DIRS := Sk/GameNet/GameSpy/
 PC_ONLY += Sk/GameNet/Lobby.cpp Sk/GameNet/ServerList.cpp
 
-CMAKE_SOURCES := $(shell sed -n 's/^[[:space:]]*"$${SRC_DIR}\/\([^"]*\.\(cpp\|c\)\)".*/\1/p' $(ROOT)/cmake_files.cmake)
-CMAKE_SOURCES := $(patsubst $(SRC)/%,%,$(wildcard $(addprefix $(SRC)/,$(CMAKE_SOURCES))))
+# Resolved case-insensitively: the list was written on Windows.
+CMAKE_SOURCES := $(shell python3 $(ROOT)/tools/resolve-sources.py $(ROOT))
 PS3_SOURCES   := $(patsubst $(SRC)/%,%,$(shell find $(SRC)/Ps3 -name '*.cpp' -o -name '*.c' 2>/dev/null))
 SOURCES       := $(sort $(filter-out $(PC_ONLY) $(addsuffix %,$(PC_ONLY_DIRS)),$(CMAKE_SOURCES)) $(PS3_SOURCES))
 
@@ -115,7 +115,7 @@ CFLAGS   := $(CFLAGS_INIT) $(COMMON_FLAGS) $(filter-out -fpermissive,$(GAME_FLAG
 # A TOC over 64 KB makes ld split it with r2off stubs, which hang the PS3 at boot:
 # fail the link instead (see check-toc).
 LDFLAGS  := $(MACHDEP) -Wl,--no-multi-toc $(LIBPSL1GHT_LIB) -L$(PORTLIBS)/lib
-LIBS     := -lio -lsysmodule -lsysutil -lnet -lrt -llv2 -lm
+LIBS     := -lio -lsysmodule -lsysutil -lsysfs -lnet -lrt -llv2 -lm
 ifneq ($(HEADLESS),1)
   LIBS   := -lrsx -lgcm_sys -laudio $(LIBS)
 endif

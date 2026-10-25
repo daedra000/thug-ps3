@@ -1471,7 +1471,12 @@ void PreProcessScript(uint8 *p_token)
 						// function pointer to save having to resolve it later.
 						*(p_token-5)=ESCRIPTTOKEN_RUNTIME_CFUNCTION;
 						Dbg_MsgAssert(p_entry->mpCFunction,("NULL p_entry->mpCFunction"));
+#ifdef __PLAT_PS3__
+						Dbg_MsgAssert(((uintptr_t)p_entry->mpCFunction>>32)==0,("cfunction above 4 GB"));
+						Write4Bytes(p_token-4, (uint32)(uintptr_t)p_entry->mpCFunction);
+#else
 						Write4Bytes(p_token-4, (uint32)p_entry->mpCFunction);
+#endif
 					}
 					else if (p_entry->mType==ESYMBOLTYPE_MEMBERFUNCTION)
 					{
