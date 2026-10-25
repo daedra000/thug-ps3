@@ -188,16 +188,24 @@ bool BinkAudio::Open(std::istream* in)
 {
 	m_in = in;
 	uint8_t h[48];
+	// The real length: header sizes and offsets are checked against it (a corrupt file
+	// mustn't ask for gigabytes).
+	in->clear();
+	in->seekg(0, std::ios::end);
+	const std::streamoff length = in->tellg();
+	if (length < 44) return false;
 	in->seekg(0);
 	if (!in->read((char*)h, 44)) return false;
 	if (h[0] != 'B' || h[1] != 'I' || h[2] != 'K') return false;
 	const uint8_t revision = h[3];
 	m_versionB = revision == 'b';
 
-	const uint32_t fileSize = Le32(h + 4) + 8;
+	uint32_t fileSize = Le32(h + 4) + 8;
+	if (fileSize > (uint64_t)length) fileSize = (uint32_t)length;
 	const uint32_t frames = Le32(h + 8);
 	const uint32_t tracks = Le32(h + 40);
 	if (frames == 0 || frames > 1000000 || tracks == 0 || tracks > 256) return false;
+	if ((uint64_t)frames * 4 + tracks * 12 + 48 > (uint64_t)length) return false;
 	if (revision == 'k') in->seekg(4, std::ios::cur);	// a field added in that revision
 
 	// Per track: max decoded size, then sample rate + flags, then an id. Track 0 is played.
@@ -219,7 +227,9 @@ bool BinkAudio::Open(std::istream* in)
 		m_frameOffsets[i] = Le32(&idx[i * 4]) & ~1u;
 	m_frameOffsets[frames] = fileSize;
 	for (uint32_t i = 0; i < frames; ++i)
+	{
 		if (m_frameOffsets[i + 1] <= m_frameOffsets[i]) return false;
+	}
 
 	// Codec set-up.
 	int frameLenBits = rate < 22050 ? 9 : rate < 44100 ? 10 : 11;

@@ -55,15 +55,23 @@ void Init()
 	printf("[audio] headless build: no audio output\n");
 }
 
+void Shutdown(bool)
+{
+}
+
 #else
 
-enum { kInChannels = 5, kOutChannels = 8, kAhead = 3 };
+// kAhead: blocks (256 samples, 5.3 ms each) kept queued ahead of playback, out of the port's
+// 16; enough to ride over a slow Bink frame read.
+enum { kInChannels = 5, kOutChannels = 8, kAhead = 8 };
 
 static u32 s_port;
 static audioPortConfig s_config;
 static sys_event_queue_t s_queue;
 static u64 s_key;
 static sys_ppu_thread_t s_thread;
+static bool s_threadRunning;
+static bool s_portOpen;
 static volatile bool s_quit;
 static float s_mix[AUDIO_BLOCK_SAMPLES * kInChannels];
 
@@ -152,6 +160,7 @@ void Init()
 	sysEventQueueDrain(s_queue);
 	memset((void*)(u64)s_config.audioDataStart, 0, s_config.portSize);
 	audioPortStart(s_port);
+	s_portOpen = true;
 
 	s_quit = false;
 	if (Ps3Platform::NoThreads())
@@ -160,10 +169,35 @@ void Init()
 		return;
 	}
 	// Above the game thread's priority so audio keeps up while levels load.
-	if (sysThreadCreate(&s_thread, MixThread, NULL, 200, 64 * 1024, THREAD_JOINABLE, (char*)"thugaudio") != 0)
+	// 256 KB: the mixer runs the game's mixing and the Bink decoder.
+	if (sysThreadCreate(&s_thread, MixThread, NULL, 200, 256 * 1024, THREAD_JOINABLE, (char*)"thugaudio") != 0)
 		printf("[audio] mixer thread failed to start\n");
 	else
+	{
+		s_threadRunning = true;
 		printf("[audio] %u-channel port, %u blocks\n", (unsigned)s_config.channelCount, (unsigned)s_config.numBlocks);
+	}
+}
+
+void Shutdown(bool wait)
+{
+	s_quit = true;
+	if (s_threadRunning && wait)
+	{
+		u64 rv;
+		sysThreadJoin(s_thread, &rv);	// it wakes at least every 20 ms
+		s_threadRunning = false;
+	}
+	if (s_portOpen)
+	{
+		s_portOpen = false;
+		audioPortStop(s_port);
+		if (wait)
+		{
+			audioPortClose(s_port);
+			audioQuit();
+		}
+	}
 }
 
 #endif // PS3_HEADLESS

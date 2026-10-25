@@ -194,6 +194,7 @@ void StartupFinished()
 {
 	if (!s_startup) return;
 	s_startup = false;
+	LogStartupFinished();
 	printf("[diag] start-up finished: big-allocation logging%s off\n", s_memCap ? " and the 10 MB cap" : "");
 }
 

@@ -43,6 +43,15 @@ namespace Ps3Platform
 	// so its printf output goes to the log too.
 	void AttachThreadLog();
 
+	// Called when the game's main loop starts: stop fsyncing every log write.
+	void LogStartupFinished();
+
+	// True on the game thread (and on the main thread before the game thread starts).
+	bool OnGameThread();
+
+	// Stop audio, flush the log and leave (the game's own teardown isn't needed on PS3).
+	void ExitGame(int code);
+
 	// A line written straight to the log from any thread (no stdio); the latest one is also
 	// shown on the [alive] heartbeat lines.
 	void Trace(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

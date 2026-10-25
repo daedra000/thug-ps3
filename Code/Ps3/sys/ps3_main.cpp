@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+namespace Audio { void Shutdown(bool wait); }	// Code/Ps3/audio/ps3_audio.cpp
+
 // No SYS_PROCESS_PARAM: builds that set one (priority 1001, 1 MB stack, 1 MB malloc
 // pages, as GridSiege does) went back to the XMB before main() on a console, while
 // builds with the defaults ran into the game's start-up. Bigger stacks go to threads.
@@ -58,18 +60,28 @@ namespace
 	// The log: everything printed to stdout/stderr goes to USRDIR/thug-ps3.log
 	// and to the TTY (visible with a debug console or ps3load).
 	s32 s_logFd = -1;
+	// Every write is fsync'd during start-up (a hung headless build is often switched off);
+	// once the game runs, the system thread syncs about once a second instead.
+	volatile bool s_syncEveryWrite = true;
+	volatile bool s_logDirty = false;
+
+	void WriteLogFile(const char* text, size_t n)
+	{
+		if (s_logFd < 0) return;
+		u64 put;
+		sysFsWrite(s_logFd, text, n, &put);
+		if (s_syncEveryWrite)
+			sysLv2FsFsync(s_logFd);
+		else
+			s_logDirty = true;
+	}
 	FILE* s_logFile = NULL;		// the funopen'd log, for AttachThreadLog
 
 	int LogWrite(void*, const char* buf, int n)
 	{
 		u32 written;
 		sysTtyWrite(0, buf, n, &written);
-		if (s_logFd >= 0)
-		{
-			u64 put;
-			sysFsWrite(s_logFd, buf, n, &put);
-			sysLv2FsFsync(s_logFd);	// survive a power-off (a hung headless build is often switched off)
-		}
+		WriteLogFile(buf, n);
 		return n;
 	}
 
@@ -88,6 +100,7 @@ namespace
 				s_logFd = -1;
 		}
 		if (s_logFd >= 0) sysFsChmod(path, 0100666);
+		if (s_logFd >= 0) sysFsChmod(PS3_USRDIR "/thug-ps3.log", 0100666);	// the fallback, if used
 		BootMark(s_logFd >= 0 ? "log open" : "log could not be opened");
 
 		FILE* f = funopen(NULL, NULL, LogWrite, NULL, NULL);
@@ -111,10 +124,7 @@ namespace
 	{
 		u32 written;
 		sysTtyWrite(0, text, strlen(text), &written);
-		if (s_logFd < 0) return;
-		u64 put;
-		sysFsWrite(s_logFd, text, strlen(text), &put);
-		sysLv2FsFsync(s_logFd);
+		WriteLogFile(text, strlen(text));
 	}
 
 	void SystemCallback(u64 status, u64, void*)
@@ -141,6 +151,11 @@ namespace
 		{
 			sysUtilCheckCallback();
 			u64 now = sysGetSystemTime();
+			if (s_logDirty && s_logFd >= 0)
+			{
+				s_logDirty = false;
+				sysLv2FsFsync(s_logFd);
+			}
 			if (now - lastBeat >= 5000000)
 			{
 				lastBeat = now;
@@ -152,6 +167,8 @@ namespace
 			if (s_quit && s_quitTime && now - s_quitTime > 3000000)
 			{
 				RawLog("[quit] the game did not exit within 3 s of Quit Game: exiting now\n");
+				Audio::Shutdown(false);	// stop the port; don't wait for a mixer the game may be blocking
+				if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
 				sysProcessExit(0);
 			}
 			usleep(50000);
@@ -164,6 +181,7 @@ namespace Ps3Platform
 
 // Top of the game thread's stack, for the stack use shown on each [step] line.
 static char* volatile s_stackTop = NULL;
+static sys_ppu_thread_t s_gameThread;
 static const u64 kGameStack = 1024 * 1024;
 
 void RawWrite(const char* text)
@@ -173,11 +191,14 @@ void RawWrite(const char* text)
 
 void AttachThreadLog()
 {
-	if (s_logFile)
-	{
-		stdout = s_logFile;
-		stderr = s_logFile;
-	}
+	if (!s_logFile) return;
+	// newlib sets up a thread's stdio on its first use (__sinit), re-initialising the FILEs
+	// its stdout/stderr point at. Make that happen to this thread's own FILEs first, or it
+	// would clobber the shared log FILE.
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+	stdout = s_logFile;
+	stderr = s_logFile;
 }
 
 void Trace(const char* fmt, ...)
@@ -187,7 +208,11 @@ void Trace(const char* fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(text, sizeof(text), fmt, ap);
 	va_end(ap);
-	memcpy(s_traceText, text, sizeof(text));
+	// Read by the system thread without a lock: write the text, then its terminator.
+	size_t len = strlen(text);
+	s_traceText[0] = 0;
+	memcpy(s_traceText + 1, text + 1, len);	// includes the NUL; text[0] last
+	s_traceText[0] = text[0];
 	char line[210];
 	snprintf(line, sizeof(line), "%s\n", text);
 	RawLog(line);
@@ -211,7 +236,9 @@ void Step(const char* what)
 		s_lastStep = s_stepText;
 	}
 	unsigned stackKB = 0;
-	if (s_stackTop) stackKB = (unsigned)((s_stackTop - (char*)__builtin_frame_address(0)) / 1024);
+	sys_ppu_thread_t self = 0;
+	sysThreadGetId(&self);
+	if (s_stackTop && self == s_gameThread) stackKB = (unsigned)((s_stackTop - (char*)__builtin_frame_address(0)) / 1024);
 	// Straight to the log, not printf: it works on any thread, whatever stdio is doing.
 	char line[300];
 	snprintf(line, sizeof(line), "[step] %s (system memory free: %u KB, stack used: %u KB of %u KB)\n", what ? what : "?", freeKB, stackKB, (unsigned)(kGameStack / 1024));
@@ -261,7 +288,9 @@ void Init(int argc, char** argv)
 	if (!NoThreads())
 	{
 		sys_ppu_thread_t tid;
-		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 1000, 64 * 1024, 0, (char*)"thug-sysutil") == 0;
+		// Above the game thread (lower number = higher priority), so XMB events and the forced
+		// quit still run while the game busy-waits.
+		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 500, 64 * 1024, 0, (char*)"thug-sysutil") == 0;
 		printf("[sys] system thread %s\n", s_sysThread ? "running" : "could not start");
 	}
 
@@ -297,6 +326,28 @@ void FlushLog()
 	fflush(stdout);
 }
 
+bool OnGameThread()
+{
+	if (!s_gameThread) return true;
+	sys_ppu_thread_t self = 0;
+	sysThreadGetId(&self);
+	return self == s_gameThread;
+}
+
+void LogStartupFinished()
+{
+	s_syncEveryWrite = false;
+}
+
+void ExitGame(int code)
+{
+	printf("[quit] exiting (code %d)\n", code);
+	Audio::Shutdown(true);
+	fflush(stdout);
+	if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	sysProcessExit(code);
+}
+
 } // namespace Ps3Platform
 
 // The default main thread stack is 64 KB, and builds that asked for a bigger one with
@@ -312,10 +363,12 @@ namespace
 	{
 		GameArgs* a = (GameArgs*)p;
 		Ps3Platform::s_stackTop = (char*)__builtin_frame_address(0);
+		sysThreadGetId(&Ps3Platform::s_gameThread);
 		Ps3Platform::AttachThreadLog();
 		Ps3Platform::Step("game thread started");
 		a->result = GameMain(a->argc, a->argv);
-		fflush(stdout);
+		// The game's own shutdown has run; leave with the mixer stopped.
+		Ps3Platform::ExitGame(a->result);
 		sysThreadExit(0);
 	}
 }
@@ -330,9 +383,10 @@ int main(int argc, char** argv)
 	s32 err = sysThreadCreate(&id, GameThread, &args, 1000, Ps3Platform::kGameStack, THREAD_JOINABLE, name);
 	if (err != 0)
 	{
-		printf("[sys] couldn't start the game thread (error %d); running on the main thread\n", (int)err);
+		// Not on the 64 KB main thread stack: it overflows.
+		printf("[sys] couldn't start the game thread (error %d)\n", (int)err);
 		BootMark("game thread failed");
-		return GameMain(argc, argv);
+		Ps3Platform::ExitGame(1);
 	}
 	u64 ret = 0;
 	sysThreadJoin(id, &ret);

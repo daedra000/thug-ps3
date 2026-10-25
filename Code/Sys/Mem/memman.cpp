@@ -53,6 +53,11 @@ extern "C"
 #include <sk/heap_sizes.h>
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+// PS3: one recursive lock (Code/Ps3/sys/ps3_new.cpp) around everything that touches the heaps
+// or the context stack, since the port's threads (audio mixer, loading-screen timer) can
+// free game memory while the game thread allocates.
+namespace Ps3Mem { void Lock(); void Unlock(); }
+struct Ps3MemGuard { Ps3MemGuard() { Ps3Mem::Lock(); } ~Ps3MemGuard() { Ps3Mem::Unlock(); } };
 #endif
 
 
@@ -126,17 +131,17 @@ namespace Mem
 **								 Private Data								**
 *****************************************************************************/
 
-char 			Manager::s_manager_buffer[sizeof(Manager)];
-char 			Manager::s_region_buffer[sizeof(Region)];
-char 			Manager::s_script_region_buffer[sizeof(Region)];
-char 			Manager::s_top_heap_buffer[sizeof(Heap)];
-char 			Manager::s_bot_heap_buffer[sizeof(Heap)];
-char 			Manager::s_debug_heap_buffer[sizeof(Heap)];
+char 			Manager::s_manager_buffer[sizeof(Manager)] __attribute__((aligned(16)));	// placement-new targets
+char 			Manager::s_region_buffer[sizeof(Region)] __attribute__((aligned(16)));	// placement-new targets
+char 			Manager::s_script_region_buffer[sizeof(Region)] __attribute__((aligned(16)));	// placement-new targets
+char 			Manager::s_top_heap_buffer[sizeof(Heap)] __attribute__((aligned(16)));	// placement-new targets
+char 			Manager::s_bot_heap_buffer[sizeof(Heap)] __attribute__((aligned(16)));	// placement-new targets
+char 			Manager::s_debug_heap_buffer[sizeof(Heap)] __attribute__((aligned(16)));	// placement-new targets
 Manager*		Manager::sp_instance = NULL;
 #ifdef __PLAT_NGPS__
 static	int		s_context_semaphore;
 #endif
-char			Manager::s_debug_region_buffer[sizeof(Region)];
+char			Manager::s_debug_region_buffer[sizeof(Region)] __attribute__((aligned(16)));	// placement-new targets
 
 /*****************************************************************************
 **								 Public Data								**
@@ -257,6 +262,17 @@ Manager::~Manager( void )
 
 void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 {   
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
+#ifdef __PLAT_PS3__
+	// The heaps keep 32-bit sizes: a huge request (a corrupt length) would wrap to a tiny block.
+	if ( size > 0x7FFFFFF0u )
+	{
+		printf( "[mem] refused a %llu byte allocation\n", (unsigned long long)size );
+		return NULL;
+	}
+#endif
 #ifdef __PLAT_NGPS__
 	WaitSemaMaybe( s_context_semaphore );
 #endif // __PLAT_NGPS__
@@ -307,6 +323,9 @@ int		Manager::Available()
 // by a pre file that has just been loaded in, so that the pre can be decompressed.
 void*	Manager::ReallocateDown( size_t newSize, void *pOld, Allocator* pAlloc )
 {   
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 #ifdef __PLAT_NGPS__
 	WaitSemaMaybe( s_context_semaphore );
 #endif // __PLAT_NGPS__
@@ -335,6 +354,9 @@ void*	Manager::ReallocateDown( size_t newSize, void *pOld, Allocator* pAlloc )
 // This is for when the bottoms-up heap is being used.
 void *Manager::ReallocateUp( size_t newSize, void *pOld, Allocator* pAlloc )
 {   
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 #ifdef __PLAT_NGPS__
 	WaitSemaMaybe( s_context_semaphore );
 #endif // __PLAT_NGPS__
@@ -408,6 +430,9 @@ void Manager::PopMemoryMarker( uint32 uiID )
 
 void	Manager::Delete( void* pAddr )
 {
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 #ifdef __PLAT_NGPS__
 	WaitSemaMaybe( s_context_semaphore );
 #endif // __PLAT_NGPS__
@@ -477,6 +502,9 @@ size_t	Manager::GetAllocSize( void* pAddr )
 
 void Manager::PushContext( Allocator* alloc )
 {
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 	
 	Dbg_AssertType ( alloc, Allocator );
 
@@ -505,6 +533,9 @@ void Manager::PushContext( Allocator* alloc )
 
 void Manager::PopContext( void )
 {
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 	
 
 #ifdef __PLAT_NGPS__
@@ -734,6 +765,9 @@ Heap* Manager::GetHeap( uint32 whichHeap )
 
 Mem::Heap *Manager::CreateHeap( Region* region, Mem::Allocator::Direction dir, char* p_name)
 {
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 	Mem::Heap * pHeap = new Mem::Heap(region, dir, p_name);
 	// At this point we can maintain the heap list 
 	m_heap_list[m_num_heaps++] = pHeap;
@@ -742,6 +776,9 @@ Mem::Heap *Manager::CreateHeap( Region* region, Mem::Allocator::Direction dir, c
 
 void Manager::RemoveHeap(Mem::Heap *pHeap)
 {
+#ifdef __PLAT_PS3__
+	Ps3MemGuard ps3_mem_guard;	// the manager is shared with the port's threads
+#endif
 
 #ifndef __PLAT_WN32__
 	#ifdef	__NOPT_ASSERT__			 
@@ -1382,7 +1419,13 @@ void*	Realloc( void* mem, size_t newSize )
 	{
 		if ( ptr )
 		{
+#ifdef __PLAT_PS3__
+			// Copy what the old block holds, not newSize bytes past its end.
+			size_t oldSize = Mem::Manager::sHandle().GetAllocSize( mem );
+			memmove ( ptr, mem, oldSize < newSize ? oldSize : newSize );
+#else
 			memmove ( ptr, mem, newSize ); 
+#endif
 		}
 
 		Mem::Manager::sHandle().Delete( mem );
@@ -1400,7 +1443,13 @@ void*	Calloc( size_t numObj, size_t sizeObj )
 {
 	
 	
+#ifdef __PLAT_PS3__
+	void* p = Mem::Manager::sHandle().New(( numObj * sizeObj ), true );
+	if ( p ) memset( p, 0, numObj * sizeObj );	// calloc zeroes
+	return p;
+#else
 	return Mem::Manager::sHandle().New(( numObj * sizeObj ), true );
+#endif
 }
 
 /******************************************************************/

@@ -91,8 +91,15 @@ static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 c
 void CmdReserve(u32 words)
 {
 	if (!s_ctx || s_ctx->current + words <= s_ctx->end) return;
-	FifoCallback(s_ctx, words);
+	s32 r = FifoCallback(s_ctx, words);
 	++s_segmentChanges;
+	if (r != 0 || s_ctx->current + words > s_ctx->end)
+	{
+		static int logged;
+		if (logged++ < 5)
+			printf("[gfx] command buffer: no room for %u words (callback %d, %u free)\n", words, (int)r,
+				(unsigned)(s_ctx->end - s_ctx->current));
+	}
 }
 
 void GpuLog(const char* fmt, ...)
@@ -195,9 +202,18 @@ static void FrameBegin()
 	if (s_skipFrame) { ++s_skipped; return; }
 	// The RSX must have finished the frame before last, which read the buffer we are
 	// about to draw into (the flip status alone can't say so after a forced flip).
-	for (int t = 0; t < 4000 && *(vu32*)gcmGetLabelAddress(kFrameLabel) + 1 < s_frameSeq; ++t) usleep(250);
-	// Change segments here, between frames, if the frame might not fit.
-	CmdReserve(32 * 1024);
+	int t = 0;
+	for (; t < 4000 && *(vu32*)gcmGetLabelAddress(kFrameLabel) + 1 < s_frameSeq; ++t) usleep(250);
+	if (t == 4000)
+	{
+		static int logged;
+		if (logged++ < 5)
+			GpuLog("frame fence: the RSX is over a frame behind after 1 s (label %u, frame %u)",
+				*(vu32*)gcmGetLabelAddress(kFrameLabel), s_frameSeq);
+	}
+	// Change segments here, between frames, if the frame might not fit. libgcm's segments
+	// are 32 KB, so ask for under that (a bigger request can never be met).
+	CmdReserve(7 * 1024);
 	SetRenderTarget();
 	DrawFrameStart();
 }

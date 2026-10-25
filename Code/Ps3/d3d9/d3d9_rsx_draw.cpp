@@ -107,6 +107,38 @@ static void* LocalAlloc(u32 size, u32 align, u32* offset)
 	return p;
 }
 
+// RSX memory the GPU may still read: freed once the frame that last could use it is done.
+// While frame s_frameSeq is being built, frames up to s_frameSeq - 2 have finished
+// (FrameBegin waits on the frame fence); one more frame of margin is kept.
+struct DeferredFree { void* mem; u32 frame; };
+static std::vector<DeferredFree> s_deferredFrees;
+
+static void DeferFree(void* mem)
+{
+	if (!mem) return;
+	DeferredFree d = { mem, s_frameSeq };
+	s_deferredFrees.push_back(d);
+}
+
+static void RunDeferredFrees()
+{
+	size_t keep = 0;
+	for (size_t i = 0; i < s_deferredFrees.size(); ++i)
+	{
+		if (s_deferredFrees[i].frame + 3 <= s_frameSeq)
+			rsxFree(s_deferredFrees[i].mem);
+		else
+			s_deferredFrees[keep++] = s_deferredFrees[i];
+	}
+	s_deferredFrees.resize(keep);
+}
+
+// Frame of last use, stored +1 so 0 means never used.
+static bool GpuMayUse(u32 usedPlusOne)
+{
+	return usedPlusOne != 0 && usedPlusOne - 1 + 3 > s_frameSeq;
+}
+
 // Space in this frame's ring slot, or NULL when it is full.
 static u8* RingAlloc(u32 size, u32 align, u32* offset)
 {
@@ -134,7 +166,11 @@ struct RsxTexture
 	bool renderTarget;	// drawn by the RSX: never uploaded from the main-memory copy
 	bool depth;			// a depth render target
 	u32 pitch;
+	u32 usedPlusOne;	// frame of the last draw that sampled it, +1 (0: never)
 };
+
+static const RsxTexture* s_bound[4];
+static DWORD s_boundSampler[4][4];
 
 static bool IsDepthFormat(D3DFORMAT f)
 {
@@ -246,9 +282,15 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		total += sizes[l];
 	}
 
-	if (!r->mem || r->bytes < total)
+	// Never rewrite memory the RSX may still be sampling: a texture used in the last few
+	// frames gets new memory, and the old is freed once those frames are done.
+	if (r->mem && (r->bytes < total || GpuMayUse(r->usedPlusOne)))
 	{
-		if (r->mem) rsxFree(r->mem);
+		DeferFree(r->mem);
+		r->mem = NULL;
+	}
+	if (!r->mem)
+	{
 		r->mem = (u8*)LocalAlloc(total, 128, &r->offset);
 		r->bytes = r->mem ? total : 0;
 		if (!r->mem)
@@ -291,6 +333,11 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	}
 	memcpy(r->mem, staging, total);
 	free(staging);
+	// The texture cache may hold texels of whatever used this memory before; and any unit
+	// bound to this texture needs its new offset and format.
+	CmdReserve(32);
+	rsxInvalidateTextureCache(s_ctx, GCM_INVALIDATE_TEXTURE);
+	for (int u = 0; u < 4; ++u) if (s_bound[u] == r) s_bound[u] = NULL;
 
 	memset(&r->desc, 0, sizeof(r->desc));
 	r->desc.format = fi.gcm | ((swizzle || (fi.compressed && levels > 1)) ? GCM_TEXTURE_FORMAT_SWZ : GCM_TEXTURE_FORMAT_LIN);
@@ -375,11 +422,9 @@ static u8 Wrap(DWORD a)
 	}
 }
 
-static const RsxTexture* s_bound[4];
-static DWORD s_boundSampler[4][4];
-
 static void BindTexture(IDirect3DDevice9* dev, int unit, const RsxTexture* r)
 {
+	const_cast<RsxTexture*>(r)->usedPlusOne = s_frameSeq + 1;
 	const DWORD* ss = dev->m_ss[unit];
 	DWORD key[4] = { ss[D3DSAMP_MINFILTER] | (ss[D3DSAMP_MAGFILTER] << 8) | (ss[D3DSAMP_MIPFILTER] << 16),
 	                 ss[D3DSAMP_ADDRESSU] | (ss[D3DSAMP_ADDRESSV] << 8), ss[D3DSAMP_BORDERCOLOR], ss[D3DSAMP_MAXANISOTROPY] };
@@ -412,39 +457,55 @@ struct RsxBuffer
 {
 	u8* mem;
 	u32 offset, size;
-	u32 lastUsed;		// frame (s_frameSeq) of the last draw that read it
+	u32 persistentUsed;	// frame of the last draw that read the persistent copy (b->mem), +1 (0: never)
 	u32 ringFrame, ringOffset;
-	bool stale;			// the newest data is only in the ring copy
+	bool stale;			// the newest data is only in this frame's ring copy
 };
 
 // The RSX offset of a buffer's data for a draw in this frame, uploading as needed.
-static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, void*& backend, u32* offset)
+// changes says what the CPU wrote since the last upload (Ps3BufferChanges in d3d9.h).
+static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3BufferChanges& changes, void*& backend, u32* offset)
 {
 	RsxBuffer* b = (RsxBuffer*)backend;
-	if (!b) { b = new RsxBuffer; memset(b, 0, sizeof(*b)); b->lastUsed = 0xFFFFFFF0u; backend = b; }
+	if (!b) { b = new RsxBuffer; memset(b, 0, sizeof(*b)); backend = b; }
 	const u32 now = s_frameSeq;
-	const bool idle = b->lastUsed == 0xFFFFFFF0u || b->lastUsed + 2 < now;	// the RSX is done with the persistent copy
+	const bool idle = !GpuMayUse(b->persistentUsed);	// the RSX is done with the persistent copy
 
-	if (dirty || b->stale)
+	if (b->mem && b->size < size)
 	{
-		if (b->mem && idle && b->size < size)
+		DeferFree(b->mem);	// grown: the old copy goes once the RSX is done with it
+		b->mem = NULL;
+	}
+	if (!b->mem)
+	{
+		b->mem = (u8*)LocalAlloc(size ? size : 16, 128, &b->offset);
+		if (!b->mem) { LogLimited("bufmem", 5, "out of RSX memory for a %u-byte buffer", size); return false; }
+		b->size = size;
+		b->persistentUsed = 0;
+		memcpy(b->mem, data, size);
+		b->stale = false;
+		dirty = false;
+		CmdReserve(32);
+		rsxInvalidateVertexCache(s_ctx);
+	}
+
+	if (dirty)
+	{
+		if (idle || (changes.noOverwrite && !b->stale))
 		{
-			rsxFree(b->mem);	// grown, and the RSX is done with the old copy
-			b->mem = NULL;
-		}
-		if (!b->mem)
-		{
-			b->mem = (u8*)LocalAlloc(size ? size : 16, 128, &b->offset);
-			if (!b->mem) { LogLimited("bufmem", 5, "out of RSX memory for a %u-byte buffer", size); return false; }
-			b->size = size;
-		}
-		if (idle && b->size >= size)
-		{
-			memcpy(b->mem, data, size);
+			// Written in place: either the RSX is done with it, or the game locked with
+			// D3DLOCK_NOOVERWRITE, promising not to touch what pending draws use (dynamic
+			// buffers appended to this way would otherwise go through the ring whole).
+			u32 lo = changes.lo, hi = changes.hi > size ? size : changes.hi;
+			if (b->stale) { lo = 0; hi = size; }	// (idle) the persistent copy is behind: refresh it all
+			if (hi > lo) memcpy(b->mem + lo, data + lo, hi - lo);
 			b->stale = false;
+			CmdReserve(32);
+			rsxInvalidateVertexCache(s_ctx);
 		}
-		else if (dirty || b->ringFrame != now)
+		else
 		{
+			// Rewritten while the RSX may still read the old data: this frame uses a ring copy.
 			u32 off;
 			u8* p = RingAlloc(size, 128, &off);
 			if (!p) return false;
@@ -456,8 +517,34 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, void*& backend
 		}
 		dirty = false;
 	}
-	b->lastUsed = now;
-	*offset = (b->stale && b->ringFrame == now) ? b->ringOffset : b->offset;
+	else if (b->stale && b->ringFrame != now)
+	{
+		if (idle)
+		{
+			memcpy(b->mem, data, size);	// catch the persistent copy up once the RSX is done with it
+			b->stale = false;
+			CmdReserve(32);
+			rsxInvalidateVertexCache(s_ctx);
+		}
+		else
+		{
+			u32 off;
+			u8* p = RingAlloc(size, 128, &off);
+			if (!p) return false;
+			memcpy(p, data, size);
+			b->ringFrame = now;
+			b->ringOffset = off;
+			s_stats.ringKB += size / 1024;
+		}
+	}
+
+	if (b->stale)
+		*offset = b->ringOffset;
+	else
+	{
+		*offset = b->offset;
+		b->persistentUsed = now + 1;	// only uses of the persistent copy keep it busy
+	}
 	return true;
 }
 
@@ -961,14 +1048,14 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 		if (!vb) return Skip("no vertex buffer");
 		stride = dev->m_streamStride[0] ? dev->m_streamStride[0] : l.stride;
 		u32 off;
-		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_backend, &off)) return false;
+		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, &off)) return false;
 		vbase = off + dev->m_streamOffset[0];
 		if (call.indexed)
 		{
 			vbase += call.baseVertex * stride;
 			IDirect3DIndexBuffer9* ib = dev->m_indices;
 			if (!ib) return Skip("no index buffer");
-			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_backend, &ioff)) return false;
+			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_changes, ib->m_backend, &ioff)) return false;
 			ioff += call.startIndex * (ib->m_format == D3DFMT_INDEX32 ? 4 : 2);
 		}
 		else
@@ -1158,6 +1245,7 @@ void DrawFrameStart()
 	if (!s_drawReady) return;
 	s_ringBase = (s_frameSeq % kRingFrames) * kRingSize;
 	s_ringUsed = 0;
+	RunDeferredFrees();
 	// Commands go to a fresh stream position each frame; re-send state on first use.
 	s_stateValid = false;
 	s_viewValid = false;
@@ -1192,8 +1280,7 @@ static void FreeTexture(void* backend)
 	RsxTexture* r = (RsxTexture*)backend;
 	if (!r) return;
 	for (int u = 0; u < 4; ++u) if (s_bound[u] == r) s_bound[u] = NULL;
-	// The RSX may still read it this frame or the last: wait before freeing.
-	if (r->mem) { WaitIdle("free texture"); rsxFree(r->mem); }
+	DeferFree(r->mem);	// the RSX may still read it: freed once those frames are done
 	delete r;
 }
 
@@ -1201,11 +1288,7 @@ static void FreeBuffer(void* backend)
 {
 	RsxBuffer* b = (RsxBuffer*)backend;
 	if (!b) return;
-	if (b->mem)
-	{
-		if (b->lastUsed != 0xFFFFFFF0u && b->lastUsed + 2 >= s_frameSeq) WaitIdle("free buffer");
-		rsxFree(b->mem);
-	}
+	DeferFree(b->mem);
 	delete b;
 }
 
@@ -1216,8 +1299,7 @@ void SurfaceReleased(IDirect3DSurface9* surf)
 	RsxSurface* rs = surf->m_owner ? NULL : (RsxSurface*)surf->m_backend;
 	if (rs)
 	{
-		WaitIdle("free surface");
-		rsxFree(rs->mem);
+		DeferFree(rs->mem);
 		delete rs;
 	}
 	surf->m_backend = NULL;

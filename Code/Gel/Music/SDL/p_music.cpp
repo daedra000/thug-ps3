@@ -132,6 +132,7 @@ namespace Pcm
 	{
 		private:
 			ma_decoder decoder = {};
+			bool decoder_ok = false;	// ma_decoder_init succeeded (only then Stream/Rewind/uninit)
 			std::ifstream file;
 
 		public:
@@ -230,18 +231,20 @@ namespace Pcm
 #endif
 
 				ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 5, 48000);
-				ma_decoder_init(
+				decoder_ok = MA_SUCCESS == ma_decoder_init(
 					[](ma_decoder *pDecoder, void *pBufferOut, size_t bytesToRead, size_t *pBytesRead) -> ma_result
 					{
 						MusicDecoder *self = (MusicDecoder*)pDecoder->pUserData;
 						self->file.read((char *)pBufferOut, bytesToRead);
+						size_t got = (size_t)self->file.gcount();
 						if (pBytesRead != nullptr)
-							*pBytesRead = (size_t)self->file.gcount();
-						return MA_SUCCESS;
+							*pBytesRead = got;
+						return got == 0 && bytesToRead > 0 ? MA_AT_END : MA_SUCCESS;
 					},
 					[](ma_decoder *pDecoder, ma_int64 byteOffset, ma_seek_origin origin) -> ma_result
 					{
 						MusicDecoder *self = (MusicDecoder*)pDecoder->pUserData;
+						self->file.clear();	// a read that hit the end sets failbit, which blocks seekg
 						switch (origin)
 						{
 							case ma_seek_origin_start:
@@ -271,7 +274,7 @@ namespace Pcm
 					return;
 				}
 #endif
-				if (!file.is_open())
+				if (!file.is_open() || !decoder_ok)
 					return;
 				
 				// Close decoder
@@ -293,6 +296,8 @@ namespace Pcm
 					return;
 				}
 #endif
+				if (!decoder_ok)
+					return;
 
 				ma_decoder_seek_to_pcm_frame(&decoder, 0);
 			}
@@ -305,6 +310,8 @@ namespace Pcm
 				if (bink != nullptr)
 					return StreamBink((float *)p, bytes / (sizeof(float) * 5)) * (sizeof(float) * 5);
 #endif
+				if (!decoder_ok)
+					return 0;
 
 				// Read from decoder
 				ma_uint64 frames_read = 0;
@@ -337,6 +344,17 @@ namespace Pcm
 	static std::unordered_map<uint32, stdfs::path> music_paths;
 	static std::unordered_map<uint32, stdfs::path> stream_paths;
 
+	// Opening a decoder reads the file (path lookups, the Bink frame index) and closing one
+	// frees it, so neither happens under the mixer's lock: only the pointer swap does.
+	static void ReplaceStream(Streamer *&slot, Streamer *replacement)
+	{
+		Audio::Lock();
+		Streamer *old = slot;
+		slot = replacement;
+		Audio::Unlock();
+		delete old;
+	}
+
 	// The PC data has no Data/music: its music is with the other streams, in
 	// Data/streams/music (Bink files named by checksum).
 	static const stdfs::path *FindMusic(uint32 checksum)
@@ -365,8 +383,9 @@ namespace Pcm
 			{
 				std::string name = i.path().stem().string();
 				//uint32 checksum = Crc::GenerateCRCFromString(name.c_str());
-				uint32 checksum;
-				sscanf(name.c_str(), "%x", &checksum);
+				uint32 checksum = 0;
+				if (sscanf(name.c_str(), "%x", &checksum) != 1)
+					continue;	// not named by checksum (a readme, desktop.ini...)
 
 				//uint32 checksum = std::stoi(name.c_str(), 0, 16);
 				paths[checksum] = stdfs::relative(i.path(), File::DataPath());
@@ -414,15 +433,7 @@ namespace Pcm
 	{
 		(void)waitPlease;
 
-		Audio::Lock();
-
-		if (music_stream != nullptr)
-		{
-			delete music_stream;
-			music_stream = nullptr;
-		}
-
-		Audio::Unlock();
+		ReplaceStream(music_stream, nullptr);
 	}
 
 
@@ -435,15 +446,7 @@ namespace Pcm
 	{
 		(void)waitPlease;
 
-		Audio::Lock();
-
-		if (stream_stream[whichStream] != nullptr)
-		{
-			delete stream_stream[whichStream];
-			stream_stream[whichStream] = nullptr;
-		}
-
-		Audio::Unlock();
+		ReplaceStream(stream_stream[whichStream], nullptr);
 	}
 
 
@@ -454,18 +457,8 @@ namespace Pcm
 	/******************************************************************/
 	void PCMAudio_StopStreams( void )
 	{
-		Audio::Lock();
-
 		for (auto &i : stream_stream)
-		{
-			if (i != nullptr)
-			{
-				delete i;
-				i = nullptr;
-			}
-		}
-
-		Audio::Unlock();
+			ReplaceStream(i, nullptr);
 	}
 
 
@@ -544,13 +537,7 @@ namespace Pcm
 		if (it == nullptr)
 			return false;
 
-		Audio::Lock();
-
-		if (music_stream != nullptr)
-			delete music_stream;
-		music_stream = new MusicDecoder(File::DataPath() / *it);
-
-		Audio::Unlock();
+		ReplaceStream(music_stream, new MusicDecoder(File::DataPath() / *it));
 		return true;
 	}
 
@@ -833,6 +820,9 @@ namespace Pcm
 	{
 		// Remove path from filename
 		const char *last_slash = strrchr(filename, '\\');
+		const char *last_fwd = strrchr(filename, '/');
+		if (last_fwd != nullptr && (last_slash == nullptr || last_fwd > last_slash))
+			last_slash = last_fwd;
 		if (last_slash != nullptr)
 			filename = last_slash + 1;
 
@@ -843,16 +833,10 @@ namespace Pcm
 
 			return false;
 
-		Audio::Lock();
-		
 		// Play song
-		if (music_stream != nullptr)
-			delete music_stream;
-
-		music_stream = new MusicDecoder(File::DataPath() / *it);
-		music_stream->Play();
-
-		Audio::Unlock();
+		Streamer *song = new MusicDecoder(File::DataPath() / *it);
+		song->Play();
+		ReplaceStream(music_stream, song);
 		return true;
 	}
 
@@ -862,17 +846,11 @@ namespace Pcm
 	/******************************************************************/
 	bool PCMAudio_PlaySoundtrackMusicTrack(size_t soundtrack, size_t track )
 	{
-		Audio::Lock();
-
 		// Play song
-		if (music_stream != nullptr)
-			delete music_stream;
-
 		const UserSoundtrack::Soundtracks &soundtracks = UserSoundtrack::GetSoundtracks();
-		music_stream = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path);
-		music_stream->Play();
-
-		Audio::Unlock();
+		Streamer *song = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path);
+		song->Play();
+		ReplaceStream(music_stream, song);
 		return true;
 	}
 
@@ -909,20 +887,14 @@ namespace Pcm
 		if (it == stream_paths.end())
 			return false;
 
-		Audio::Lock();
-
 		// Play stream
-		if (stream_stream[whichStream] != nullptr)
-			delete stream_stream[whichStream];
-
-		stream_stream[whichStream] = new MusicDecoder(File::DataPath() / it->second);
+		Streamer *stream = new MusicDecoder(File::DataPath() / it->second);
 		if (!preload)
-			stream_stream[whichStream]->Play();
+			stream->Play();
+		ReplaceStream(stream_stream[whichStream], stream);
 
 		if (p_volume != nullptr)
 			PCMAudio_SetStreamVolume(p_volume, whichStream);
-
-		Audio::Unlock();
 
 		return true;
 	}

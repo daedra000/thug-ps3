@@ -5,11 +5,13 @@
 // so on PC they replace the operators everywhere. GCC keeps inline definitions per file
 // instead, and C++14's sized delete (used by std::vector and friends) wasn't defined at all,
 // so a buffer from the game's heaps went to newlib's free() and corrupted its heap (the
-// console hung in malloc while indexing the streams). Here every form is defined once, so
-// the whole program uses one allocator, as on PC.
+// console hung in malloc while indexing the streams). Here every form is defined once, and
+// every delete goes back to the allocator its memory came from.
 //
-// The game's memory manager isn't thread-safe; a lock makes it safe for the port's own
-// threads (the audio mixer decodes music on its thread).
+// Threads: the game's memory manager has one context stack (the heap the game thread has
+// pushed), so only the game thread allocates from it; other threads (audio mixer, timers)
+// get newlib malloc. A delete goes by address: inside the manager's block, the manager
+// (which locks itself, see Ps3Mem::Lock); anywhere else, free().
 
 #include <Core/Defines.h>
 #include <Sys/Mem/memman.h>
@@ -22,44 +24,53 @@
 #include <sys/mutex.h>
 #include <ps3_platform.h>
 
+extern char* _mem_start;	// the manager's block (Sys/Mem/memman.cpp)
+extern char* _mem_end;
+
+namespace Ps3Mem
+{
+	static sys_mutex_t s_lock;
+	static volatile bool s_lockReady;
+
+	void Lock()
+	{
+		if (!s_lockReady)
+		{
+			// The first allocation is made by a static constructor, before any thread.
+			sys_mutex_attr_t attr;
+			memset(&attr, 0, sizeof(attr));
+			attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+			attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
+			attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
+			attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
+			strcpy(attr.name, "thugmem");
+			if (sysMutexCreate(&s_lock, &attr) != 0)
+				Ps3Platform::Trace("[mem] couldn't create the memory manager lock");
+			s_lockReady = true;
+		}
+		sysMutexLock(s_lock, 0);
+	}
+
+	void Unlock()
+	{
+		sysMutexUnlock(s_lock);
+	}
+}
+
 namespace
 {
-	sys_mutex_t s_lock;
-	volatile bool s_lockReady;
-
-	struct Guard
+	bool FromManager(void* p)
 	{
-		Guard()
-		{
-			if (!s_lockReady)
-			{
-				// The first allocation is made by a static constructor, before any thread.
-				sys_mutex_attr_t attr;
-				memset(&attr, 0, sizeof(attr));
-				attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
-				attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
-				attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
-				attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
-				strcpy(attr.name, "thugnew");
-				sysMutexCreate(&s_lock, &attr);
-				s_lockReady = true;
-			}
-			sysMutexLock(s_lock, 0);
-		}
-		~Guard() { sysMutexUnlock(s_lock); }
-	};
+		return _mem_start && (char*)p >= _mem_start && (char*)p < _mem_end;
+	}
 
 	void* Allocate(size_t size, bool nothrow)
 	{
 		if (size == 0) size = 1;
-		void* p;
-		{
-			Guard g;
-			p = Mem::Manager::sHandle().New(size, !nothrow);
-		}
+		void* p = Ps3Platform::OnGameThread() ? Mem::Manager::sHandle().New(size, !nothrow) : malloc(size);
 		if (!p && !nothrow)
 		{
-			Ps3Platform::Trace("[mem] operator new: out of memory (%u bytes)", (unsigned)size);
+			Ps3Platform::Trace("[mem] operator new: out of memory (%llu bytes)", (unsigned long long)size);
 			throw std::bad_alloc();
 		}
 		return p;
@@ -68,8 +79,10 @@ namespace
 	void Release(void* p)
 	{
 		if (!p) return;
-		Guard g;
-		Mem::Manager::sHandle().Delete(p);
+		if (FromManager(p))
+			Mem::Manager::sHandle().Delete(p);
+		else
+			free(p);
 	}
 
 	// Over-aligned types (alignas above the heap's 16 bytes) come from memalign instead;

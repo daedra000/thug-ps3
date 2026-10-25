@@ -499,6 +499,30 @@ public:
 	DWORD GetLevelCount() { return 1; }
 };
 
+// What a buffer's Lock/Unlock calls changed since its last upload to the RSX: the byte range,
+// and whether every lock was D3DLOCK_NOOVERWRITE (the caller promises not to touch data a
+// pending draw uses, so the range can be written straight into the RSX copy).
+struct Ps3BufferChanges
+{
+	UINT lockOffset, lockSize;
+	DWORD lockFlags;
+	UINT lo, hi;
+	bool noOverwrite;
+
+	void Reset(UINT size) { lockOffset = 0; lockSize = 0; lockFlags = 0; lo = 0; hi = size; noOverwrite = false; }
+	void Locked(UINT offset, UINT size, DWORD flags) { lockOffset = offset; lockSize = size; lockFlags = flags; }
+	void Unlocked(UINT total, bool& dirty)
+	{
+		UINT a = lockOffset, b = lockSize ? lockOffset + lockSize : total;
+		if (b > total) b = total;
+		bool nooverwrite = (lockFlags & D3DLOCK_NOOVERWRITE) != 0;
+		if (lockFlags & D3DLOCK_DISCARD) { a = 0; b = total; nooverwrite = false; }
+		if (!dirty) { lo = a; hi = b; noOverwrite = nooverwrite; }
+		else { if (a < lo) lo = a; if (b > hi) hi = b; noOverwrite = noOverwrite && nooverwrite; }
+		dirty = true;
+	}
+};
+
 class IDirect3DVertexBuffer9 : public IDirect3DResource9
 {
 public:
@@ -510,6 +534,7 @@ public:
 	UINT m_size; DWORD m_usage; DWORD m_fvf; D3DPOOL m_pool;
 	BYTE* m_data;
 	bool m_dirty;
+	Ps3BufferChanges m_changes;
 	void* m_backend;
 };
 
@@ -524,6 +549,7 @@ public:
 	UINT m_size; DWORD m_usage; D3DFORMAT m_format; D3DPOOL m_pool;
 	BYTE* m_data;
 	bool m_dirty;
+	Ps3BufferChanges m_changes;
 	void* m_backend;
 };
 

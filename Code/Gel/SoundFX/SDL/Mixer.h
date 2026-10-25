@@ -11,4 +11,7 @@ namespace Audio
 
 	void Lock();
 	void Unlock();
+#ifdef __PLAT_PS3__
+	void Shutdown(bool wait);	// stop the mixer thread and the audio port
+#endif
 }

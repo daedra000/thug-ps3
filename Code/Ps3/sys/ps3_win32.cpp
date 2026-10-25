@@ -88,7 +88,7 @@ void Sleep(DWORD ms)
 	if (ms == 0)
 		sysThreadYield();
 	else
-		sysUsleep(ms * 1000);
+		sysUsleep((u64)ms * 1000);	// 64-bit: Sleep(INFINITE) mustn't wrap
 }
 
 DWORD GetTickCount()
@@ -331,6 +331,30 @@ namespace
 	enum { kMaxTimers = 8 };
 	Timer* s_timers[kMaxTimers];
 	UINT s_nextTimerId = 1;
+	sys_mutex_t s_timerLock;
+	bool s_timerLockReady;
+
+	void TimerLock()
+	{
+		if (!s_timerLockReady)
+		{
+			sys_mutex_attr_t attr;
+			memset(&attr, 0, sizeof(attr));
+			attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+			attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
+			attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
+			attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
+			strcpy(attr.name, "w32timer");
+			sysMutexCreate(&s_timerLock, &attr);
+			s_timerLockReady = true;
+		}
+		sysMutexLock(s_timerLock, 0);
+	}
+
+	void TimerUnlock()
+	{
+		sysMutexUnlock(s_timerLock);
+	}
 
 	void TimerThread(void* arg)
 	{
@@ -351,6 +375,12 @@ namespace
 			next += (u64)t->delayMs * 1000;
 			if (next < sysGetSystemTime()) next = sysGetSystemTime() + (u64)t->delayMs * 1000;
 		}
+		// The thread owns its Timer: take it out of the table (if timeKillEvent hasn't) and free it.
+		TimerLock();
+		for (int i = 0; i < kMaxTimers; ++i)
+			if (s_timers[i] == t) s_timers[i] = NULL;
+		TimerUnlock();
+		delete t;
 		sysThreadExit(0);
 	}
 }
@@ -362,6 +392,7 @@ MMRESULT timeSetEvent(UINT delayMs, UINT, LPTIMECALLBACK cb, DWORD_PTR user, UIN
 		printf("[diag] timeSetEvent refused (nothreads.txt)\n");
 		return 0;
 	}
+	TimerLock();
 	for (int i = 0; i < kMaxTimers; ++i)
 	{
 		if (s_timers[i]) continue;
@@ -372,36 +403,37 @@ MMRESULT timeSetEvent(UINT delayMs, UINT, LPTIMECALLBACK cb, DWORD_PTR user, UIN
 		t->user = user;
 		t->periodic = (flags & TIME_PERIODIC) != 0;
 		t->stop = false;
-		if (sysThreadCreate(&t->thread, TimerThread, t, 1000, 64 * 1024, THREAD_JOINABLE, (char*)"w32timer") != 0)
-		{
-			delete t;
-			return 0;
-		}
+		UINT id = t->id;
 		s_timers[i] = t;
-		return t->id;
+		// Not joinable: timeKillEvent doesn't wait for it (as on Win32), since a running
+		// callback may be blocked on a lock the killer holds (the loading screen does this).
+		// 256 KB: the loading-screen callback draws.
+		if (sysThreadCreate(&t->thread, TimerThread, t, 1000, 256 * 1024, 0, (char*)"w32timer") != 0)
+		{
+			s_timers[i] = NULL;
+			delete t;
+			id = 0;
+		}
+		TimerUnlock();
+		return id;
 	}
+	TimerUnlock();
 	return 0;
 }
 
 MMRESULT timeKillEvent(UINT id)
 {
+	TimerLock();
 	for (int i = 0; i < kMaxTimers; ++i)
 	{
 		Timer* t = s_timers[i];
 		if (!t || t->id != id) continue;
-		t->stop = true;
-		u64 rv;
-		// A callback can kill its own timer; don't join ourselves then.
-		sys_ppu_thread_t self;
-		sysThreadGetId(&self);
-		if (self != t->thread)
-		{
-			sysThreadJoin(t->thread, &rv);
-			delete t;
-		}
+		t->stop = true;		// the thread sees it, finishes any callback, and frees t
 		s_timers[i] = NULL;
+		TimerUnlock();
 		return TIMERR_NOERROR;
 	}
+	TimerUnlock();
 	return 1;
 }
 

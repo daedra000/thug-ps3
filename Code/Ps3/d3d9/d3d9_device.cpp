@@ -223,6 +223,7 @@ IDirect3DVertexBuffer9::IDirect3DVertexBuffer9(UINT size, DWORD usage, DWORD fvf
 {
 	m_data = (BYTE*)memalign(128, size ? size : 128);
 	memset(m_data, 0, size);
+	m_changes.Reset(size);
 }
 
 IDirect3DVertexBuffer9::~IDirect3DVertexBuffer9()
@@ -231,15 +232,16 @@ IDirect3DVertexBuffer9::~IDirect3DVertexBuffer9()
 	free(m_data);
 }
 
-HRESULT IDirect3DVertexBuffer9::Lock(UINT offset, UINT size, void** pp, DWORD)
+HRESULT IDirect3DVertexBuffer9::Lock(UINT offset, UINT size, void** pp, DWORD flags)
 {
+	m_changes.Locked(offset, size, flags);
 	*pp = m_data + offset;
 	return S_OK;
 }
 
 HRESULT IDirect3DVertexBuffer9::Unlock()
 {
-	m_dirty = true;
+	m_changes.Unlocked(m_size, m_dirty);
 	Ps3Gfx::VertexBufferChanged(this, 0, m_size);
 	return S_OK;
 }
@@ -258,6 +260,7 @@ IDirect3DIndexBuffer9::IDirect3DIndexBuffer9(UINT size, DWORD usage, D3DFORMAT f
 {
 	m_data = (BYTE*)memalign(128, size ? size : 128);
 	memset(m_data, 0, size);
+	m_changes.Reset(size);
 }
 
 IDirect3DIndexBuffer9::~IDirect3DIndexBuffer9()
@@ -266,15 +269,16 @@ IDirect3DIndexBuffer9::~IDirect3DIndexBuffer9()
 	free(m_data);
 }
 
-HRESULT IDirect3DIndexBuffer9::Lock(UINT offset, UINT, void** pp, DWORD)
+HRESULT IDirect3DIndexBuffer9::Lock(UINT offset, UINT size, void** pp, DWORD flags)
 {
+	m_changes.Locked(offset, size, flags);
 	*pp = m_data + offset;
 	return S_OK;
 }
 
 HRESULT IDirect3DIndexBuffer9::Unlock()
 {
-	m_dirty = true;
+	m_changes.Unlocked(m_size, m_dirty);
 	Ps3Gfx::IndexBufferChanged(this, 0, m_size);
 	return S_OK;
 }
