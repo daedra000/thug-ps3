@@ -142,6 +142,8 @@ private:
 
 	_T*					data;
 	Priority			pri;
+
+protected:	// PS3/GCC: Head< _T > (a subclass) links nodes directly; MSVC never checked this.
 	Node< _T >*			next; 
 	Node< _T >*			prev;
 };

@@ -39,6 +39,11 @@
 // Lwss: Used to unfk the cursor in early init code debugging.
 //#define KISAK_EARLY_CURSOR_FIX 1
 
+#ifdef __PLAT_PS3__
+// PS3: Windows/MSVC stand-ins, then a D3D9-compatible API backed by RSX.
+#include <ps3_compat.h>
+#endif
+
 // LWSS Add special epic Xbox XDK functions
 #include "Xbox_SSE.h"
 //#include <strstream>
@@ -52,15 +57,22 @@
 #include <stdio.h>
 #include <string.h>
 
-#pragma warning( disable : 4800 ) 
+#ifndef __PLAT_PS3__
+#pragma warning( disable : 4800 )
 #pragma warning( disable : 4355 ) // 'this' : used in base member initializer list
 #pragma warning( disable : 4291 ) // no matching operator delete found
 #pragma warning( disable : 4595) // LWSS add: Switch() with no cases.
+#endif
 
 
 // lwss: added Dx9
+#ifdef __PLAT_PS3__
+#include <d3d9.h>		// Code/Ps3/include/d3d9.h: D3D9 API on RSX
+#include <d3dx9.h>
+#else
 #include <d3d9.h>
 #include <d3dx9shader.h>
+#endif
 //#include <d3dxmath.h>
 //#define DIRECTINPUT_VERSION 0x0800
 //#include <dinput.h>
@@ -72,7 +84,9 @@ extern bool gbQuit;
 extern bool g_hasJustEnteredNetworkGame;
 
 // MSVC Error-fix
+#ifndef __PLAT_PS3__
 #define stricmp _stricmp
+#endif
 
 #define Direct3D_CreateDevice(a,b,c,d,e,f) IDirect3D9_CreateDevice(NxXbox::EngineGlobals.p_d3d, a, b, c, d, e, f)
 
@@ -313,7 +327,15 @@ typedef signed short		sint16;
 #define vINT_MIN			vINT32_MIN
 #define vUINT_MAX			vUINT32_MAX
 
-#ifdef __PLAT_WN32__
+#if defined(__PLAT_WN32__) && defined(__PLAT_PS3__)
+// LP64: long is 64-bit here, so the 32-bit types must be int.
+typedef int					int32;
+typedef unsigned int		uint32;
+typedef signed int			sint32;
+typedef long long			int64;
+typedef unsigned long long	uint64;
+typedef signed long long	sint64;
+#elif defined(__PLAT_WN32__)
 typedef long				int32;
 typedef unsigned long		uint32;
 typedef signed long			sint32;
@@ -465,7 +487,7 @@ typedef	sint64				nID64;
 
 #endif
 
-#if defined(__PLAT_XBOX__) || defined(__PLAT_WN32__) // lwss add win32
+#if (defined(__PLAT_XBOX__) || defined(__PLAT_WN32__)) && !defined(__PLAT_PS3__) // lwss add win32
 #define __PRETTY_FUNCTION__ "?"
 
 #define isnanf	_isnan

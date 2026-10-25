@@ -48,6 +48,7 @@ typedef unsigned char uchar;
 typedef unsigned short ushort;
 typedef unsigned long ulong;
 
+#ifndef __PLAT_PS3__	// PS3: core/defines.h already has these, sized for LP64
 typedef          char   int8;
 typedef   signed char   sint8;
 typedef unsigned char   uint8;
@@ -60,6 +61,7 @@ typedef signed long			sint32;
 typedef ll              int64;
 typedef ll              sint64;
 typedef ull             uint64;
+#endif
 
 // Partially defined types. They are used when the decompiler does not know
 // anything about the type except its size.
@@ -79,7 +81,7 @@ typedef int16 _BOOL2;
 typedef int32 _BOOL4;
 typedef int64 _BOOL8;
 
-#ifndef __PLAT_XBOX
+#if !defined(__PLAT_XBOX) && !defined(__PLAT_PS3__)	// PS3: from ps3_compat.h
 #ifndef _WINDOWS_
 typedef int8 BYTE;
 typedef int16 WORD;
@@ -112,7 +114,7 @@ typedef int bool;       // we want to use bool in our C programs
 
 // Some convenience macros to make partial accesses nicer
 #define LAST_IND(x,part_type)    (sizeof(x)/sizeof(part_type) - 1)
-#if defined(__BYTE_ORDER) && __BYTE_ORDER == __BIG_ENDIAN
+#if (defined(__BYTE_ORDER) && __BYTE_ORDER == __BIG_ENDIAN) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 #  define LOW_IND(x,part_type)   LAST_IND(x,part_type)
 #  define HIGH_IND(x,part_type)  0
 #else

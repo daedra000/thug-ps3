@@ -19,6 +19,8 @@ namespace Script
 
 namespace Ass
 {
+
+class CRefAsset;	// PS3/GCC: the friend declaration below doesn't make the name visible
 class 	CAsset : public Spt::Class
 {
 	friend class CAssMan;

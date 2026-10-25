@@ -50,9 +50,22 @@ namespace Obj
 	
 	struct SRailData;
 
+	// PS3/GCC: friends named without 'class' must already be declared.
+	class CSkater;
+	class CSkaterCam;
+	class CManual;
+	class CSkaterCameraComponent;
+	class CSkaterAdjustPhysicsComponent;
+	class CSkaterFinalizePhysicsComponent;
+	class CSkaterNonLocalNetLogicComponent;
+	class CSkaterPhysicsControlComponent;
+	class CSkaterMatrixQueriesComponent;
+	class CSkaterStateHistoryComponent;
+	class CWalkComponent;
+
 class CSkaterCorePhysicsComponent : public CBaseComponent
 {
-	friend Mdl::Skate;
+	friend class Mdl::Skate;
 	friend CSkater;
 	friend CSkaterCam;
 	friend CManual;

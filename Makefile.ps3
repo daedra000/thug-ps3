@@ -1,0 +1,126 @@
+#---------------------------------------------------------------------------------
+# THUG PS3 — PSL1GHT build
+#
+#   make -f Makefile.ps3            build thug.elf / thug.self
+#   make -f Makefile.ps3 pkg        build the installable PKG
+#
+# The source list is the PC (kisak-thug) list from cmake_files.cmake, minus the
+# Windows/Xbox platform files, plus the PS3 platform layer in Code/Ps3.
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+
+ROOT      := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+SRC       := $(ROOT)Code
+BUILD     := $(ROOT)build-ps3
+TARGET    := thug
+
+TITLE     := Tony Hawk's Underground
+APPID     := THUG00001
+CONTENTID := UP0001-$(APPID)_00-0000000000000000
+
+# PC platform files the PS3 replaces (Code/Ps3 provides the equivalents).
+PC_ONLY := \
+	Core/Debug/Wn32/P_debug.cpp \
+	Core/Thread/wn32/t_thread.cpp \
+	Gel/Music/Win32/p_wmafilestream.cpp \
+	Gel/SoundFX/Win32/win32_sfx.cpp \
+	Gel/Music/SDL/usersoundtrack.cpp \
+	Sk/GameNet/Xbox/p_buddy.cpp \
+	Sys/Config/Win32/p_config.cpp \
+	Sys/File/XBox/p_AsyncFilesys.cpp \
+	Sys/File/XBox/p_filesys.cpp \
+	Sys/MemCard/Win32/p_McMan.cpp \
+	Sys/SIO/Win32/p_keyboard.cpp \
+	Sys/SIO/Win32/p_siodev.cpp \
+	Sys/SIO/Win32/p_sioman.cpp \
+	Sys/Win32/p_timer.cpp \
+	Sys/Win32/WinMain.cpp
+
+# Online play is out of scope for now (GameSpy servers are long gone).
+PC_ONLY_DIRS := Sk/GameNet/GameSpy/
+
+CMAKE_SOURCES := $(shell sed -n 's/^[[:space:]]*"$${SRC_DIR}\/\([^"]*\.\(cpp\|c\)\)".*/\1/p' $(ROOT)cmake_files.cmake)
+PS3_SOURCES   := $(patsubst $(SRC)/%,%,$(shell find $(SRC)/Ps3 -name '*.cpp' -o -name '*.c' 2>/dev/null))
+SOURCES       := $(sort $(filter $(patsubst $(SRC)/%,%,$(wildcard $(addprefix $(SRC)/,$(CMAKE_SOURCES)))) $(PS3_SOURCES),$(filter-out $(PC_ONLY) $(addsuffix %,$(PC_ONLY_DIRS)),$(CMAKE_SOURCES)) $(PS3_SOURCES)))
+
+DEFINES := \
+	-D__PLAT_WN32__ -D__PLAT_PS3__ -D__CPU_BIG_ENDIAN__=1 \
+	-D_DEBUG -DKISAK_ORIGINAL_ALLOCATOR -DGSI_NO_THREADS
+
+CASE_INC := $(BUILD)/case-includes
+INCLUDES := -I$(SRC)/Ps3/include -I$(SRC) -I$(SRC)/Sk -I$(CASE_INC)
+
+# -fpermissive: the engine casts pointers to 32-bit ints all over; PS3 user memory is
+#               below 4 GB, so that is lossless at runtime (kisak relies on MSVC /permissive too).
+# -fsigned-char: MSVC chars are signed; PPU GCC defaults to unsigned.
+GAME_CXXFLAGS := -std=gnu++17 -fpermissive -fsigned-char -fno-strict-aliasing \
+	-Wno-write-strings -Wno-narrowing -Wno-multichar -Wno-unknown-pragmas \
+	$(DEFINES) $(INCLUDES)
+
+.PHONY: all pkg clean print-sources print-cxxflags-check case-includes
+
+# Windows-cased #includes -> symlink tree (see tools/gen-case-includes.py).
+case-includes:
+	@python3 $(ROOT)tools/gen-case-includes.py $(SRC) $(CASE_INC)
+
+print-sources:
+	@for f in $(SOURCES); do echo $$f; done
+
+# Flags for tools/ps3-check-all.sh (clang can't take -fpermissive, so pointer
+# truncation is reported as a warning there instead).
+print-cxxflags-check:
+	@echo $(filter-out -fpermissive,$(GAME_CXXFLAGS)) -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
+		-Wno-c++11-narrowing -Wno-microsoft-cast -fms-extensions -Wno-everything
+
+ifneq ($(MAKECMDGOALS),print-sources)
+ifneq ($(MAKECMDGOALS),print-cxxflags-check)
+ifeq ($(strip $(PSL1GHT)),)
+$(error "PSL1GHT must be set in the environment (see README).")
+endif
+include $(PSL1GHT)/host/ppu.mk
+
+CXXFLAGS += -O2 $(GAME_CXXFLAGS)
+CFLAGS   += -O2 $(filter-out -std=gnu++17 -fpermissive,$(GAME_CXXFLAGS))
+LIBS     := -lrsx -lgcm_sys -lio -lsysutil -lsysmodule -laudio -lrt -llv2 -lm
+LD       := $(CXX)
+
+OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(basename $(SOURCES))))
+DEPS   := $(OFILES:.o=.d)
+
+all: case-includes
+	@$(MAKE) --no-print-directory -f $(lastword $(MAKEFILE_LIST)) $(BUILD)/$(TARGET).self
+
+$(BUILD)/%.o: $(SRC)/%.cpp
+	@mkdir -p $(dir $@)
+	@echo $*.cpp
+	@$(CXX) -MMD -MP $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: $(SRC)/%.c
+	@mkdir -p $(dir $@)
+	@echo $*.c
+	@$(CC) -MMD -MP $(CFLAGS) -c $< -o $@
+
+$(BUILD)/$(TARGET).elf: $(OFILES)
+	@echo linking $(notdir $@)
+	@$(LD) $(MACHDEP) $(LDFLAGS) $(OFILES) $(LIBPATHS) $(LIBS) -o $@
+
+$(BUILD)/$(TARGET).self: $(BUILD)/$(TARGET).elf
+	@cp $< $(BUILD)/$(TARGET).elf.bak
+	@$(STRIP) $<
+	@$(SPRX) $<
+	@$(SELF) $< $@
+	@$(FSELF) $< $(BUILD)/EBOOT.BIN
+
+pkg: $(BUILD)/$(TARGET).self
+	@mkdir -p $(BUILD)/pkg/USRDIR
+	@cp $(BUILD)/EBOOT.BIN $(BUILD)/pkg/USRDIR/EBOOT.BIN
+	@cp $(ROOT)ps3/ICON0.PNG $(BUILD)/pkg/ICON0.PNG
+	@$(SFO) --title "$(TITLE)" --appid "$(APPID)" -f $(ROOT)ps3/sfo.xml $(BUILD)/pkg/PARAM.SFO
+	@$(PKG) --contentid $(CONTENTID) $(BUILD)/pkg/ $(BUILD)/$(TARGET).pkg
+
+clean:
+	rm -rf $(BUILD)
+
+-include $(DEPS)
+endif
+endif

@@ -142,6 +142,9 @@ struct SReturnAddress
 // of CScript's ever gets big enough to be using up a substantial amount of memory.
 // There would be a slight speed hit if pools were used, but probably not much, 
 // allocating/deallocating off a pool is pretty quick.
+class CScript;
+CScript *GetNextScript(CScript *p_script=NULL);	// PS3/GCC: a friend declaration can't carry the default
+
 //#ifdef __PLAT_WN32__
 #if 0 // lwss undo this.
 class CScript
@@ -152,7 +155,7 @@ class CScript : public Mem::CPoolable<CScript>
 	// CScripts are linked into a list.
 	CScript *mp_next;
 	CScript *mp_previous;
-	friend CScript *GetNextScript(CScript *p_script=NULL);
+	friend CScript *GetNextScript(CScript *p_script);	// PS3/GCC: default argument is on the declaration above
 	
 	// If this CScript got setup using a SStructScript (via the SetScript member function below)
 	// then this will be a pointer to a copy of the script, and mp_pc will point somewhere into it.

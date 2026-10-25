@@ -44,7 +44,20 @@
 #include "sntcutil.h"      /* SN Systems PS2 EE Utilites (TCP/IP)    */
 #endif	// __PLAT_NGPS__
 
-#ifdef __PLAT_WN32__
+#ifdef __PLAT_PS3__
+// PS3: BSD sockets from PSL1GHT stand in for Winsock.
+#include <net/net.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+typedef int SOCKET;
+#define closesocket(s)	netClose(s)
+#define ioctlsocket(s, cmd, argp) setsockopt((s), SOL_SOCKET, SO_NBIO, (argp), sizeof(int))	// only FIONBIO is used
+#ifndef FIONBIO
+#define FIONBIO 0
+#endif
+#elif defined(__PLAT_WN32__)
 //#include <winsock2.h>
 #endif // __PLAT_WN32__
 

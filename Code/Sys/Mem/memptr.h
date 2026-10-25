@@ -97,7 +97,11 @@ protected :
 nTemplateSubClass( _T, Ptr, PtrToConst< _T > )
 {
 
-	
+	// PS3/GCC: make the dependent base's members visible (MSVC finds them anyway).
+protected :
+	using PtrToConst< _T >::m_ptr;
+	using PtrToConst< _T >::m_const_ptr;
+
 public :
 								Ptr( const _T* ptr = NULL );
 								~Ptr( void );

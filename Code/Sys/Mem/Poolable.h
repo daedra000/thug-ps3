@@ -14,9 +14,9 @@
 #define DefinePoolableClass(_T)										\
 namespace Mem														\
 {																	\
-	Mem::CCompactPool *Mem::CPoolable< _T >::sp_pool[POOL_STACK_SIZE] = {NULL,NULL};		\
-	bool Mem::CPoolable< _T >::s_internallyCreatedPool[POOL_STACK_SIZE] = {false,false};	\
-	int Mem::CPoolable< _T >::s_currentPool=0;						\
+	template<> Mem::CCompactPool *Mem::CPoolable< _T >::sp_pool[POOL_STACK_SIZE] = {NULL,NULL};		\
+	template<> bool Mem::CPoolable< _T >::s_internallyCreatedPool[POOL_STACK_SIZE] = {false,false};	\
+	template<> int Mem::CPoolable< _T >::s_currentPool=0;						\
 }																	\
 
 #else

@@ -11,6 +11,18 @@
 
 #ifndef P3_SSE
 #define P3_SSE
+#ifdef __PLAT_PS3__
+// PS3: portable versions of the SSE estimate helpers (the PPU has fres/frsqrte,
+// but plain math is accurate and fast enough here).
+#include <math.h>
+static inline int   Ftoi_ASM(const float f)                       { return (int)f; }
+static inline float ReciprocalEstimate_ASM(const float f)         { return 1.0f / f; }
+static inline float ReciprocalSqrtEstimate_ASM(const float f)     { return 1.0f / sqrtf(f); }
+static inline float SqrtEstimate_ASM(const float f)               { return sqrtf(f); }
+static inline float ReciprocalEstimateNR_ASM(const float f)       { return 1.0f / f; }
+static inline float ReciprocalSqrtEstimateNR_ASM(const float f)   { return 1.0f / sqrtf(f); }
+static inline float SqrtEstimateNR_ASM(const float f)             { return sqrtf(f); }
+#else
 
 
 //-----------------------------------------------------------------------------
@@ -156,4 +168,5 @@ __forceinline float SqrtEstimateNR_ASM(const float f)
 }
 
 
+#endif // __PLAT_PS3__
 #endif // P3_SSE

@@ -39,6 +39,8 @@ namespace Mdl
 **							Class Definitions								**
 *****************************************************************************/
 
+class Manager;	// PS3/GCC: needed before the friend declarations below
+
 class  Module  : public Spt::Class
 {
 	

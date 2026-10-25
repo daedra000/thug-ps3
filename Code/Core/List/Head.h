@@ -49,7 +49,20 @@ namespace Lst
 nTemplateSubClass( _T, Head, Node< _T > )
 {
 
+	// PS3/GCC: names from the dependent base aren't visible without these
+	// (MSVC looks them up anyway).
+protected:
+	typedef typename Node< _T >::Priority Priority;
+	using Node< _T >::vHEAD_NODE;
+	using Node< _T >::next;
+	using Node< _T >::prev;
+	using Node< _T >::node_init;
 public:
+	using Node< _T >::GetNext;
+	using Node< _T >::InList;
+	using Node< _T >::Insert;
+	using Node< _T >::Append;
+
 					Head( void );
 	virtual			~Head( void );
 

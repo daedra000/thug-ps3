@@ -22,6 +22,8 @@ namespace Script
 namespace Obj
 {
 
+class CCompositeObject;		// PS3/GCC: a friend declaration alone doesn't make the name visible
+
 // CBaseComponent is a virtual base class for object components
 class CBaseComponent : public Spt::Class
 {
