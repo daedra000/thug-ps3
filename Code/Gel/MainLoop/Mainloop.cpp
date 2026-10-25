@@ -389,6 +389,19 @@ void		Manager::MainLoop( void )
 	
 #endif
 // lwss end
+#ifdef __PLAT_PS3__
+		{
+			// The first frames, then every 10 s or so (60 Hz), in the log.
+			static unsigned s_ps3Frame = 0;
+			++s_ps3Frame;
+			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || s_ps3Frame == 60 || s_ps3Frame % 600 == 0)
+			{
+				char text[48];
+				snprintf(text, sizeof(text), "main loop frame %u", s_ps3Frame);
+				Ps3Platform::Step(text);
+			}
+		}
+#endif
 		if (trigger_profiling)
 		{
 			printf ("\nProfiling.....Start of main loop\n\n");

@@ -64,6 +64,7 @@ namespace
 	// Every write is fsync'd during start-up (a hung headless build is often switched off);
 	// once the game runs, the system thread syncs about once a second instead.
 	volatile bool s_syncEveryWrite = true;
+	volatile u64 s_syncUntil = 0;		// keep syncing every write until then (sysGetSystemTime)
 	volatile bool s_logDirty = false;
 
 	void WriteLogFile(const char* text, size_t n)
@@ -71,7 +72,7 @@ namespace
 		if (s_logFd < 0) return;
 		u64 put;
 		sysFsWrite(s_logFd, text, n, &put);
-		if (s_syncEveryWrite)
+		if (s_syncEveryWrite || sysGetSystemTime() < s_syncUntil)
 			sysLv2FsFsync(s_logFd);
 		else
 			s_logDirty = true;
@@ -335,6 +336,9 @@ bool OnGameThread()
 
 void LogStartupFinished()
 {
+	// Keep every line on disc for the main loop's first 30 s too: a freeze or power-off
+	// early on would otherwise lose the last second of the log.
+	s_syncUntil = sysGetSystemTime() + 30 * 1000000ull;
 	s_syncEveryWrite = false;
 }
 
