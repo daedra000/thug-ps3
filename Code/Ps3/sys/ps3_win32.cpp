@@ -670,19 +670,11 @@ HANDLE FindFirstFileA(LPCSTR pattern, LPWIN32_FIND_DATAA data)
 	f->kind = kFind;
 	f->dir = real;
 	f->next = 0;
-	s32 fd;
-	if (sysFsOpendir(real, &fd) == 0)
-	{
-		sysFSDirent ent;
-		u64 read = 0;
-		while (sysFsReaddir(fd, &ent, &read) == 0 && read != 0)
-		{
-			std::string name(ent.d_name, ent.d_namlen);
-			if (name != "." && name != ".." && WildMatch(mask.c_str(), name.c_str()))
-				f->names.push_back(name);
-		}
-		sysFsClosedir(fd);
-	}
+	std::vector<std::string> all;
+	Ps3Fs::ListDirectory(real, all);	// empty when the folder doesn't exist
+	for (size_t i = 0; i < all.size(); ++i)
+		if (WildMatch(mask.c_str(), all[i].c_str()))
+			f->names.push_back(all[i]);
 	if (!FillFindData(f, data))
 	{
 		delete f;

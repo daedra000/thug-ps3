@@ -156,6 +156,10 @@ namespace
 namespace Ps3Platform
 {
 
+// Top of the game thread's stack, for the stack use shown on each [step] line.
+static char* volatile s_stackTop = NULL;
+static const u64 kGameStack = 1024 * 1024;
+
 void MemoryInfo(unsigned* freeKB, unsigned* totalKB)
 {
 	struct { u32 total, available; } info = { 0, 0 };
@@ -169,7 +173,9 @@ void Step(const char* what)
 	unsigned freeKB = 0;
 	MemoryInfo(&freeKB, NULL);
 	if (what) s_lastStep = what;
-	printf("[step] %s (system memory free: %u KB)\n", what ? what : "?", freeKB);
+	unsigned stackKB = 0;
+	if (s_stackTop) stackKB = (unsigned)((s_stackTop - (char*)__builtin_frame_address(0)) / 1024);
+	printf("[step] %s (system memory free: %u KB, stack used: %u KB of %u KB)\n", what ? what : "?", freeKB, stackKB, (unsigned)(kGameStack / 1024));
 	fflush(stdout);
 }
 
@@ -253,3 +259,43 @@ void FlushLog()
 }
 
 } // namespace Ps3Platform
+
+// The default main thread stack is 64 KB, and builds that asked for a bigger one with
+// SYS_PROCESS_PARAM never reached main(). So main() only opens the log and runs the game
+// (GameMain, in Code/Sk/Main.cpp) on a thread with a 1 MB stack, then waits for it.
+int GameMain(int argc, char** argv);
+
+namespace
+{
+	struct GameArgs { int argc; char** argv; int result; };
+
+	void GameThread(void* p)
+	{
+		GameArgs* a = (GameArgs*)p;
+		s_stackTop = (char*)__builtin_frame_address(0);
+		Ps3Platform::Step("game thread started");
+		a->result = GameMain(a->argc, a->argv);
+		fflush(stdout);
+		sysThreadExit(0);
+	}
+}
+
+int main(int argc, char** argv)
+{
+	Ps3Platform::Init(argc, argv);
+	static GameArgs args;
+	args.argc = argc; args.argv = argv; args.result = 0;
+	sys_ppu_thread_t id;
+	char name[] = "thug_game";
+	s32 err = sysThreadCreate(&id, GameThread, &args, 1000, kGameStack, THREAD_JOINABLE, name);
+	if (err != 0)
+	{
+		printf("[sys] couldn't start the game thread (error %d); running on the main thread\n", (int)err);
+		BootMark("game thread failed");
+		return GameMain(argc, argv);
+	}
+	u64 ret = 0;
+	sysThreadJoin(id, &ret);
+	fflush(stdout);
+	return args.result;
+}

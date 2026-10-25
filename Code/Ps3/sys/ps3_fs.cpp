@@ -88,19 +88,38 @@ static const std::vector<std::string>& Listing(const std::string& dir)
 		return it->second;
 
 	std::vector<std::string>& names = (*s_dirCache)[dir];
-	s32 fd;
-	if (sysFsOpendir(dir.c_str(), &fd) == 0)
-	{
-		sysFSDirent ent;
-		u64 read = 0;
-		while (sysFsReaddir(fd, &ent, &read) == 0 && read != 0)
-		{
-			if (strcmp(ent.d_name, ".") && strcmp(ent.d_name, ".."))
-				names.push_back(std::string(ent.d_name, ent.d_namlen));
-		}
-		sysFsClosedir(fd);
-	}
+	ListDirectory(dir.c_str(), names);
 	return names;
+}
+
+bool ListDirectory(const char* absDir, std::vector<std::string>& names)
+{
+	names.clear();
+	bool isDir = false;
+	if (!Exists(absDir, &isDir) || !isDir)
+		return false;
+	s32 fd;
+	if (sysFsOpendir(absDir, &fd) != 0)
+		return false;
+	sysFSDirent ent;
+	std::string last;
+	int repeats = 0;
+	for (int n = 0; n < 20000; ++n)
+	{
+		u64 read = 0;
+		memset(&ent, 0, sizeof(ent));
+		if (sysFsReaddir(fd, &ent, &read) != 0 || read == 0 || ent.d_namlen == 0 || ent.d_name[0] == 0)
+			break;
+		std::string name(ent.d_name, ent.d_namlen);
+		if (name == last && ++repeats > 2)
+			break;	// the same entry over and over: the end, whatever readdir says
+		if (name != last) repeats = 0;
+		last = name;
+		if (name != "." && name != "..")
+			names.push_back(name);
+	}
+	sysFsClosedir(fd);
+	return true;
 }
 
 bool ResolvePath(const char* path, char* out, size_t outSize)

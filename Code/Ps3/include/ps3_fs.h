@@ -9,6 +9,8 @@
 #define PS3_FS_H
 
 #include <stddef.h>
+#include <string>
+#include <vector>
 
 #define PS3_APP_ID      "THUG00001"
 #define PS3_USRDIR      "/dev_hdd0/game/" PS3_APP_ID "/USRDIR"
@@ -30,6 +32,11 @@ namespace Ps3Fs
 
 	// Forget cached directory listings (after creating or deleting files).
 	void InvalidateCache();
+
+	// The names in a directory (no "." or ".."). False, with nothing listed, when the
+	// directory doesn't exist or can't be opened. Never loops forever: it stops at the
+	// first error, empty entry or repeated name, and after 20000 entries.
+	bool ListDirectory(const char* absDir, std::vector<std::string>& names);
 }
 
 #endif // PS3_FS_H

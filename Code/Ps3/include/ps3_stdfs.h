@@ -107,19 +107,13 @@ namespace ps3stdfs
 
 	namespace detail
 	{
-		static inline void list(const path& dir, bool recursive, std::vector<directory_entry>& out)
+		static inline void list(const path& dir, bool recursive, std::vector<directory_entry>& out, int depth = 0)
 		{
+			if (depth > 8) return;	// no runaway recursion
 			std::string real = dir.resolved();
-			s32 fd;
-			if (sysFsOpendir(real.c_str(), &fd) != 0)
-				return;
 			std::vector<std::string> names;
-			sysFSDirent ent;
-			u64 read = 0;
-			while (sysFsReaddir(fd, &ent, &read) == 0 && read != 0)
-				if (strcmp(ent.d_name, ".") && strcmp(ent.d_name, ".."))
-					names.push_back(std::string(ent.d_name, ent.d_namlen));
-			sysFsClosedir(fd);
+			if (!Ps3Fs::ListDirectory(real.c_str(), names))
+				return;	// missing (e.g. the PC data has no Data/music): nothing listed
 
 			for (size_t i = 0; i < names.size(); ++i)
 			{
@@ -128,7 +122,7 @@ namespace ps3stdfs
 				Ps3Fs::Exists(child.string().c_str(), &isDir);
 				out.push_back(directory_entry(child, isDir));
 				if (recursive && isDir)
-					list(child, true, out);
+					list(child, true, out, depth + 1);
 			}
 		}
 	}

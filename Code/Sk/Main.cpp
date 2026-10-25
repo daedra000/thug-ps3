@@ -256,11 +256,13 @@ void mat_test(Mth::Matrix A,Mth::Matrix B,Mth::Matrix C);
 #include <ps3_platform.h>
 #endif
 
-int main ( sint argc, char** argv )
-{ 	
 #ifdef __PLAT_PS3__
-	Ps3Platform::Init(argc, argv);
+// The PS3 main() (Code/Ps3/sys/ps3_main.cpp) runs this on a thread with a 1 MB stack.
+int GameMain ( sint argc, char** argv )
+#else
+int main ( sint argc, char** argv )
 #endif
+{ 	
 #ifdef __PLAT_NGC__
 #ifdef DVDETH
 	// Defaults
