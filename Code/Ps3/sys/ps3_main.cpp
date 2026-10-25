@@ -13,6 +13,9 @@
 #include <sysmodule/sysmodule.h>
 #include <net/net.h>
 #include <sys/process.h>
+#include <sys/thread.h>
+#include <sys/systime.h>
+#include <unistd.h>
 #include <ppu-lv2.h>
 #include <exception>
 #include <stdlib.h>
@@ -31,6 +34,7 @@ static void BootMark(const char* what)
 	u64 put;
 	sysFsWrite(fd, what, strlen(what), &put);
 	sysFsWrite(fd, "\n", 1, &put);
+	sysLv2FsFsync(fd);	// on disc even if the console is switched off next
 	sysFsClose(fd);
 	sysFsChmod(PS3_USRDIR "/thug-ps3-boot.txt", 0100666);	// readable over FTP
 }
@@ -58,6 +62,7 @@ namespace
 		{
 			u64 put;
 			sysFsWrite(s_logFd, buf, n, &put);
+			sysLv2FsFsync(s_logFd);	// survive a power-off (a hung headless build is often switched off)
 		}
 		return n;
 	}
@@ -88,14 +93,58 @@ namespace
 		}
 	}
 
+	volatile u64 s_quitTime;
+	volatile const char* s_lastStep = "start";
+	volatile bool s_sysThread;
+
+	// Written straight to the log file, bypassing stdio (used from the system thread).
+	void RawLog(const char* text)
+	{
+		u32 written;
+		sysTtyWrite(0, text, strlen(text), &written);
+		if (s_logFd < 0) return;
+		u64 put;
+		sysFsWrite(s_logFd, text, strlen(text), &put);
+		sysLv2FsFsync(s_logFd);
+	}
+
 	void SystemCallback(u64 status, u64, void*)
 	{
 		switch (status)
 		{
-		case SYSUTIL_EXIT_GAME:  s_quit = true; break;
+		case SYSUTIL_EXIT_GAME:  s_quit = true; s_quitTime = sysGetSystemTime(); break;
 		case SYSUTIL_MENU_OPEN:  s_menuOpen = true; break;
 		case SYSUTIL_MENU_CLOSE: s_menuOpen = false; break;
 		default: break;
+		}
+	}
+}
+
+namespace
+{
+	// XMB events serviced all the time (the game's loop doesn't run during loads), a
+	// heartbeat in the log every 5 s, and a forced exit 3 s after "Quit Game" if the game
+	// hasn't gone by then. (Grid Siege runs its system callbacks on a thread too.)
+	void SystemThread(void*)
+	{
+		u64 start = sysGetSystemTime(), lastBeat = start;
+		for (;;)
+		{
+			sysUtilCheckCallback();
+			u64 now = sysGetSystemTime();
+			if (now - lastBeat >= 5000000)
+			{
+				lastBeat = now;
+				char line[256];
+				snprintf(line, sizeof(line), "[alive] %u s, last step: %s\n", (unsigned)((now - start) / 1000000), (const char*)s_lastStep);
+				RawLog(line);
+			}
+			if (s_quit && s_quitTime && now - s_quitTime > 3000000)
+			{
+				RawLog("[quit] the game did not exit within 3 s of Quit Game: exiting now\n");
+				sysProcessExit(0);
+			}
+			usleep(50000);
 		}
 	}
 }
@@ -115,6 +164,7 @@ void Step(const char* what)
 {
 	unsigned freeKB = 0;
 	MemoryInfo(&freeKB, NULL);
+	if (what) s_lastStep = what;
 	printf("[step] %s (system memory free: %u KB)\n", what ? what : "?", freeKB);
 	fflush(stdout);
 }
@@ -149,6 +199,11 @@ void Init(int argc, char** argv)
 	}
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, SystemCallback, NULL);
+	{
+		sys_ppu_thread_t tid;
+		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 1000, 64 * 1024, 0, (char*)"thug-sysutil") == 0;
+		printf("[sys] system thread %s\n", s_sysThread ? "running" : "could not start");
+	}
 
 	if (sysModuleLoad(SYSMODULE_NET) == 0 && netInitialize() == 0)
 		printf("[net] initialised\n");
@@ -164,7 +219,7 @@ void Init(int argc, char** argv)
 
 void Pump()
 {
-	sysUtilCheckCallback();
+	if (!s_sysThread) sysUtilCheckCallback();	// otherwise the system thread does it
 }
 
 bool QuitRequested()
