@@ -1664,6 +1664,20 @@ bool CScript::execute_command()
 		Dbg_MsgAssert(p_substitute_object,("\n%s\nCould not resolve '%s' to a CObject instance",GetScriptInfo(),FindChecksumName(name)));
 		if( p_substitute_object == NULL )
 		{
+#ifdef __PLAT_PS3__
+			// The original returns with mp_pc still on the colon, so the next pass runs this
+			// command again, forever (the main menu hung here when "Skater" didn't exist yet).
+			// Skip the rest of the line instead, and say so.
+			static uint32 s_lastMissing = 0, s_lastScript = 0;
+			if (s_lastMissing != name || s_lastScript != mScriptChecksum)
+			{
+				s_lastMissing = name;
+				s_lastScript = mScriptChecksum;
+				printf("[script] script 0x%08x: no object '%s' (0x%08x) for an object call, skipping the line\n",
+					mScriptChecksum, FindChecksumName(name), name);
+			}
+			mp_pc = SkipToStartOfNextLine(mp_pc);
+#endif
 			return true;
 		}
 

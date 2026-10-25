@@ -1071,8 +1071,20 @@ void	Manager::s_client_add_new_players_code( const Tsk::Task< Manager >& task )
 
 		if( new_player->AllowedJoinFrame > man.m_client[0]->m_FrameCounter )
 		{
+#ifdef __PLAT_PS3__
+			static int s_lastWait = -1;
+			if (s_lastWait != (int)new_player->AllowedJoinFrame)
+			{
+				s_lastWait = (int)new_player->AllowedJoinFrame;
+				printf("[net] client: player %d waits for frame %d (now %d)\n", (int)new_player->ObjID,
+					(int)new_player->AllowedJoinFrame, (int)man.m_client[0]->m_FrameCounter);
+			}
+#endif
 			break;
 		}
+#ifdef __PLAT_PS3__
+		printf("[net] client: adding player %d (flags 0x%x)\n", (int)new_player->ObjID, (unsigned)new_player->Flags);
+#endif
 
 		// GJ:  the "new_player" structure should already
 		// contain the desired appearance
@@ -1146,8 +1158,20 @@ void	Manager::s_server_add_new_players_code( const Tsk::Task< Manager >& task )
 	
 		if( new_info->AllowedJoinFrame > man.m_server->m_FrameCounter )
 		{
+#ifdef __PLAT_PS3__
+			static int s_lastWait = -1;
+			if (s_lastWait != (int)new_info->AllowedJoinFrame)
+			{
+				s_lastWait = (int)new_info->AllowedJoinFrame;
+				printf("[net] server: player %d waits for frame %d (now %d)\n", (int)new_info->ObjID,
+					(int)new_info->AllowedJoinFrame, (int)man.m_server->m_FrameCounter);
+			}
+#endif
 			break;
 		}
+#ifdef __PLAT_PS3__
+		printf("[net] server: adding player %d (flags 0x%x)\n", (int)new_info->ObjID, (unsigned)new_info->Flags);
+#endif
 
 		narrowband = ( new_info->Conn->GetBandwidthType() == Net::Conn::vNARROWBAND ) ||
 						( net_man->GetConnectionType() == Net::vCONN_TYPE_MODEM );
@@ -2363,6 +2387,9 @@ bool	Manager::ShouldDisplayTeamScores( void )
 
 Net::Server*		Manager::SpawnServer( bool local, bool secure )
 {
+#ifdef __PLAT_PS3__
+	printf("[net] SpawnServer (local %d)\n", (int)local);
+#endif
 	
 	int flags;
 
@@ -2460,6 +2487,9 @@ Net::Server*		Manager::SpawnServer( bool local, bool secure )
 
 Net::Client*		Manager::SpawnClient( bool broadcast, bool local, bool secure, int index )
 {
+#ifdef __PLAT_PS3__
+	printf("[net] SpawnClient %d (local %d)\n", index, (int)local);
+#endif
 	
 
 	Net::Manager * net_man = Net::Manager::Instance();
@@ -2554,6 +2584,9 @@ void	Manager::SpawnAutoServer( void )
 
 void	Manager::JoinServer( bool observe_only, unsigned long ip, unsigned short port, int index )
 {
+#ifdef __PLAT_PS3__
+	printf("[net] JoinServer (client %d, local %d)\n", index, m_client[index] ? (int)m_client[index]->IsLocal() : -1);
+#endif
     
 	Net::Conn* conn;
 	MsgConnectInfo msg;
@@ -3344,6 +3377,9 @@ void	Manager::ClientAddNewPlayer( NewPlayerInfo* new_player )
 	Obj::CSkater* skater;
 	PlayerInfo* player_info;
 	Mdl::Skate * skate_mod = Mdl::Skate::Instance();
+#ifdef __PLAT_PS3__
+	printf("[net] ClientAddNewPlayer %d, flags 0x%x, net game %d\n", (int)new_player->ObjID, (unsigned)new_player->Flags, (int)InNetGame());
+#endif
     
 	Dbg_Assert( !OnServer());
 
@@ -3469,6 +3505,9 @@ void			Manager::DeferredNewPlayer( NewPlayerInfo* new_player, int num_frames )
 	Lst::Node< NewPlayerInfo > *player;
 	Lst::Search< NewPlayerInfo > new_sh;
 	NewPlayerInfo* np;
+#ifdef __PLAT_PS3__
+	printf("[net] DeferredNewPlayer %d, flags 0x%x, in %d frames\n", (int)new_player->ObjID, (unsigned)new_player->Flags, num_frames);
+#endif
     
 	// First, make sure we don't already have this new player queued up
 	for( np = new_sh.FirstItem( m_new_players ); np; np = new_sh.NextItem())

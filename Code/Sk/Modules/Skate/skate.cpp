@@ -437,6 +437,9 @@ Obj::CSkater*	Skate::add_skater ( Obj::CSkaterProfile* pSkaterProfile, bool loca
 	GameNet::Manager * gamenet_man =  GameNet::Manager::Instance();
 	int heap_index;
     
+#ifdef __PLAT_PS3__
+	printf("[skate] add_skater called: object %d, player %d, local %d, %u skaters now\n", obj_id, player_num, (int)local_client, (unsigned)GetNumSkaters());
+#endif
 	// GJ:  copy the face texture (if it has one) from the local client's skater profile
 	// we need to do this because the code that sends the face texture data as a separate
 	// network message hasn't been implemented yet.
@@ -576,10 +579,16 @@ Obj::CSkater*	Skate::add_skater ( Obj::CSkaterProfile* pSkaterProfile, bool loca
 	// Garrett: We may need to pause the music here if we get glitches on the network server
 	//Pcm::PauseMusic(1);
 
+#ifdef __PLAT_PS3__
+	printf("[skate] add_skater: player %d, object %d, heap %d, local %d\n", player_num, obj_id, heap_index, (int)local_client);
+#endif
 	skater = new Obj::CSkater ( player_num, GetObjectManager(),
 								local_client, obj_id, heap_index, !GetGameMode()->IsFrontEnd() );
 	//Pcm::PauseMusic(0);
 	skater->Init(pSkaterProfile);
+#ifdef __PLAT_PS3__
+	printf("[skate] add_skater: skater %p ready\n", (void*)skater);
+#endif
 
 	// Initialize the skater's special items
 	if( !skater->IsLocalClient())

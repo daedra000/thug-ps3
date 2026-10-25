@@ -120,6 +120,9 @@ int Manager::s_handle_new_player( Net::MsgHandlerContext* context )
 	
 	msg = (MsgNewPlayer *) context->m_Msg;
 	gamenet_man = (Manager *) context->m_Data;
+#ifdef __PLAT_PS3__
+	printf("[net] client got Player Create: player %d, flags 0x%x\n", (int)msg->m_ObjId, (unsigned)msg->m_Flags);
+#endif
 
 	NewPlayerInfo new_player;
 
@@ -711,6 +714,9 @@ int	Manager::s_handle_join_request( Net::MsgHandlerContext* context )
 	Dbg_Assert( context );
 
 	Dbg_Printf( "Got Join Request from ip %x port %d\n", context->m_Conn->GetIP(), context->m_Conn->GetPort());
+#ifdef __PLAT_PS3__
+	printf("[net] server got Join Request (local %d)\n", (int)context->m_Conn->IsLocal());
+#endif
 
 	gamenet_man = (Manager*) context->m_Data;
 	join_msg = (MsgJoinInfo*) context->m_Msg;
