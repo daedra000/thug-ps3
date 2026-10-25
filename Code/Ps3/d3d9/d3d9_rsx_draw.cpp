@@ -15,6 +15,9 @@
 //   texels are host-order (d3d9 layer, see docs/ps3-byte-order.md); the viewport is
 //   GL-style with D3D9's half-pixel offset; D3D depth 0..w is moved to -w..w in the
 //   vertex program.
+// - Render targets: textures created as render targets (or in a depth format) get a
+//   linear A8R8G8B8 / Z24S8 buffer in RSX memory that draws go to and that is sampled
+//   as a linear texture; standalone surfaces get a buffer of their own.
 //
 // Switches for testing on a console (an empty file in USRDIR turns one on):
 //   rsx_linear_textures.txt  never swizzle textures (and so no mipmaps)
@@ -126,7 +129,20 @@ struct RsxTexture
 	u32 offset, bytes;
 	gcmTexture desc;
 	bool valid;
+	bool renderTarget;	// drawn by the RSX: never uploaded from the main-memory copy
+	bool depth;			// a depth render target
+	u32 pitch;
 };
+
+static bool IsDepthFormat(D3DFORMAT f)
+{
+	return f == D3DFMT_D24S8 || f == D3DFMT_D24X8 || f == D3DFMT_D16 || f == D3DFMT_D32 || f == D3DFMT_D24X4S4 || f == D3DFMT_D24FS8 || f == D3DFMT_D16_LOCKABLE;
+}
+
+static bool IsRenderTarget(const IDirect3DTexture9* t)
+{
+	return (t->m_usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) || IsDepthFormat(t->m_format);
+}
 
 static RsxTexture s_white;	// bound where a program samples a stage with no texture
 
@@ -190,12 +206,15 @@ static FormatInfo MapFormat(D3DFORMAT f)
 	return fi;
 }
 
+static RsxTexture* RenderTargetTexture(IDirect3DTexture9* t, RsxTexture* r);
+
 // Makes the RSX copy of a texture current. Returns NULL if it can't be drawn.
 static RsxTexture* Texture(IDirect3DTexture9* t)
 {
 	RsxTexture* r = (RsxTexture*)t->m_backend;
-	if (r && r->valid && !t->m_dirty) return r;
+	if (r && r->valid && (!t->m_dirty || r->renderTarget)) return r;
 	if (!r) { r = new RsxTexture; memset(r, 0, sizeof(*r)); t->m_backend = r; }
+	if (IsRenderTarget(t)) return RenderTargetTexture(t, r);
 
 	FormatInfo fi = MapFormat(t->m_format);
 	if (!fi.ok)
@@ -284,6 +303,37 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	t->m_dirty = false;
 	++s_stats.uploads;
 	s_stats.uploadKB += total / 1024;
+	return r;
+}
+
+// A texture the game draws into: a linear A8R8G8B8 (or Z24S8) buffer in RSX memory, sampled
+// as a linear texture. Its first level only.
+static RsxTexture* RenderTargetTexture(IDirect3DTexture9* t, RsxTexture* r)
+{
+	const u32 w = t->m_width, h = t->m_height;
+	r->depth = IsDepthFormat(t->m_format);
+	r->pitch = (w * 4 + 63) & ~63u;
+	if (!r->mem)
+	{
+		r->mem = (u8*)LocalAlloc(r->pitch * h, 4096, &r->offset);
+		if (!r->mem) { LogLimited("rtmem", 5, "out of RSX memory for a %ux%u render target", w, h); return NULL; }
+		r->bytes = r->pitch * h;
+		memset(r->mem, 0, r->bytes);
+	}
+	memset(&r->desc, 0, sizeof(r->desc));
+	r->desc.format = (r->depth ? GCM_TEXTURE_FORMAT_DEPTH24_D8 : GCM_TEXTURE_FORMAT_A8R8G8B8) | GCM_TEXTURE_FORMAT_LIN;
+	r->desc.mipmap = 1;
+	r->desc.dimension = GCM_TEXTURE_DIMS_2D;
+	r->desc.remap = IdentityRemap();
+	r->desc.width = w;
+	r->desc.height = h;
+	r->desc.depth = 1;
+	r->desc.location = GCM_LOCATION_RSX;
+	r->desc.pitch = r->pitch;
+	r->desc.offset = r->offset;
+	r->renderTarget = true;
+	r->valid = true;
+	t->m_dirty = false;
 	return r;
 }
 
@@ -858,7 +908,7 @@ static u32 Compare(DWORD f)
 	}
 }
 
-static void ApplyState(IDirect3DDevice9* dev)
+static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 {
 	const DWORD* rs = dev->m_rs;
 	GpuState s;
@@ -871,7 +921,7 @@ static void ApplyState(IDirect3DDevice9* dev)
 	s.alphaTest = rs[D3DRS_ALPHATESTENABLE] != 0;
 	s.alphaFunc = rs[D3DRS_ALPHAFUNC];
 	s.alphaRef = rs[D3DRS_ALPHAREF] & 0xFF;
-	s.depthTest = rs[D3DRS_ZENABLE] != D3DZB_FALSE && dev->m_depthTarget != NULL;
+	s.depthTest = rs[D3DRS_ZENABLE] != D3DZB_FALSE && hasDepth;
 	s.depthWrite = s.depthTest && rs[D3DRS_ZWRITEENABLE];
 	s.depthFunc = rs[D3DRS_ZFUNC];
 	s.cullEnable = rs[D3DRS_CULLMODE] != D3DCULL_NONE;
@@ -1024,7 +1074,8 @@ static bool Skip(const char* why)
 static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 {
 	if (s_noDraw) return false;
-	if (!TargetIsDisplay(dev)) { ++s_stats.offscreen; return false; }
+	bool hasDepth = false;
+	if (!ApplyTarget(dev, &hasDepth)) return false;
 	if (dev->m_vs) return Skip("vertex shaders are not supported (the game uses fixed-function)");
 	if (!dev->m_fvf) return Skip("no FVF (vertex declarations are not supported)");
 	bool typeOk;
@@ -1141,7 +1192,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 
 	// State, programs, textures, then the draw.
 	ApplyView(dev);
-	ApplyState(dev);
+	ApplyState(dev, hasDepth);
 	float vc[kVcCount][4];
 	FillVsConstants(dev, vc);
 	UseVertexProgram(vp, vc);
@@ -1173,11 +1224,121 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 // ---------------------------------------------------------------------------
 // Set-up, frames, resource notifications
 // ---------------------------------------------------------------------------
-bool TargetIsDisplay(IDirect3DDevice9* dev)
+// Surfaces the game creates on their own (CreateRenderTarget, CreateDepthStencilSurface).
+struct RsxSurface { u8* mem; u32 offset, pitch; };
+
+static SurfaceDesc s_target;
+static bool s_targetValid;
+
+// RSX memory behind a D3D surface: a render-target texture's level 0, or a standalone surface.
+static bool SurfaceMemory(IDirect3DSurface9* surf, u32* offset, u32* pitch)
 {
-	if (dev->m_renderTarget == dev->m_backBuffer) return true;
-	LogLimited("rtt", 1, "drawing to textures is not supported yet: those draws are skipped");
-	return false;
+	if (surf->m_owner)
+	{
+		if (surf->m_level != 0) return false;
+		RsxTexture* r = Texture(surf->m_owner);
+		if (!r || !r->renderTarget) return false;
+		*offset = r->offset;
+		*pitch = r->pitch;
+		return true;
+	}
+	RsxSurface* rs = (RsxSurface*)surf->m_backend;
+	if (!rs)
+	{
+		rs = new RsxSurface;
+		rs->pitch = (surf->m_width * 4 + 63) & ~63u;
+		rs->mem = (u8*)LocalAlloc(rs->pitch * surf->m_height, 4096, &rs->offset);
+		if (!rs->mem) { delete rs; LogLimited("surfmem", 5, "out of RSX memory for a %ux%u surface", surf->m_width, surf->m_height); return false; }
+		memset(rs->mem, 0, rs->pitch * surf->m_height);
+		surf->m_backend = rs;
+	}
+	*offset = rs->offset;
+	*pitch = rs->pitch;
+	return true;
+}
+
+static void SetSurface(const SurfaceDesc& d)
+{
+	gcmSurface sf;
+	memset(&sf, 0, sizeof(sf));
+	sf.colorFormat = GCM_SURFACE_A8R8G8B8;
+	sf.colorTarget = GCM_SURFACE_TARGET_0;
+	sf.colorLocation[0] = GCM_LOCATION_RSX;
+	sf.colorOffset[0] = d.colorOffset;
+	sf.colorPitch[0] = d.colorPitch;
+	for (int i = 1; i < GCM_MAX_MRT_COUNT; ++i)
+	{
+		sf.colorLocation[i] = GCM_LOCATION_RSX;
+		sf.colorOffset[i] = d.colorOffset;
+		sf.colorPitch[i] = 64;
+	}
+	sf.depthFormat = GCM_SURFACE_ZETA_Z24S8;
+	sf.depthLocation = GCM_LOCATION_RSX;
+	sf.depthOffset = d.hasDepth ? d.depthOffset : 0;
+	sf.depthPitch = d.hasDepth ? d.depthPitch : 64;
+	sf.type = GCM_SURFACE_TYPE_LINEAR;
+	sf.antiAlias = GCM_SURFACE_CENTER_1;
+	sf.width = d.width;
+	sf.height = d.height;
+	CmdReserve(96);
+	rsxSetSurface(s_ctx, &sf);
+	// What was drawn into a texture before must be read fresh from now on.
+	rsxInvalidateTextureCache(s_ctx, GCM_INVALIDATE_TEXTURE);
+}
+
+bool ApplyTarget(IDirect3DDevice9* dev, bool* hasDepth)
+{
+	SurfaceDesc d;
+	memset(&d, 0, sizeof(d));	// compared with memcmp: no stray padding bytes
+	IDirect3DSurface9* rt = dev->m_renderTarget;
+	if (rt == dev->m_backBuffer || !rt)
+		DisplaySurface(&d);
+	else
+	{
+		memset(&d, 0, sizeof(d));
+		if (!SurfaceMemory(rt, &d.colorOffset, &d.colorPitch))
+		{
+			++s_stats.offscreen;
+			LogLimited("rtfail", 3, "render target %ux%u (format %d, level %u) can't be drawn into", rt->m_width, rt->m_height, (int)rt->m_format, rt->m_level);
+			return false;
+		}
+		d.width = rt->m_width;
+		d.height = rt->m_height;
+		d.hasDepth = false;
+	}
+
+	IDirect3DSurface9* ds = dev->m_depthTarget;
+	if (!ds)
+		d.hasDepth = false;
+	else if (ds == dev->m_depthBuffer)
+	{
+		SurfaceDesc disp;
+		memset(&disp, 0, sizeof(disp));
+		DisplaySurface(&disp);
+		d.hasDepth = d.width <= disp.width && d.height <= disp.height;
+		d.depthOffset = disp.depthOffset;
+		d.depthPitch = disp.depthPitch;
+	}
+	else
+	{
+		d.hasDepth = ds->m_width >= d.width && ds->m_height >= d.height && SurfaceMemory(ds, &d.depthOffset, &d.depthPitch);
+	}
+
+	if (!s_targetValid || memcmp(&d, &s_target, sizeof(d)))
+	{
+		s_target = d;
+		s_targetValid = true;
+		SetSurface(d);
+		s_viewValid = false;
+	}
+	if (hasDepth) *hasDepth = d.hasDepth;
+	return true;
+}
+
+void InvalidateDrawState()
+{
+	s_stateValid = false;
+	s_viewValid = false;
 }
 
 bool DrawInit()
@@ -1214,6 +1375,9 @@ void DrawFrameStart()
 	// Commands go to a fresh stream position each frame; re-send state on first use.
 	s_stateValid = false;
 	s_viewValid = false;
+	memset(&s_target, 0, sizeof(s_target));
+	DisplaySurface(&s_target);	// FrameBegin bound the back buffer
+	s_targetValid = true;
 	s_currentVp = NULL;
 	s_currentFpOffset = 0xFFFFFFFF;
 	memset(s_vcValid, 0, sizeof(s_vcValid));
@@ -1227,7 +1391,7 @@ void DrawFrameStart()
 const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
-		"%u draws, %u drawn, %u skipped, %u to textures; %u texture uploads (%u KB), %u KB through the ring, %u programs (%u failed), ring full %u",
+		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB), %u KB through the ring, %u programs (%u failed), ring full %u",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB,
 		s_stats.ringKB, s_stats.programs, s_stats.programFailures, s_stats.ringFull);
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
@@ -1261,7 +1425,18 @@ static void FreeBuffer(void* backend)
 
 void TextureChanged(IDirect3DTexture9*) {}	// uploaded on the next draw that uses it (m_dirty)
 void TextureReleased(IDirect3DTexture9* tex) { FreeTexture(tex->m_backend); tex->m_backend = NULL; }
-void SurfaceReleased(IDirect3DSurface9*) {}
+void SurfaceReleased(IDirect3DSurface9* surf)
+{
+	RsxSurface* rs = surf->m_owner ? NULL : (RsxSurface*)surf->m_backend;
+	if (rs)
+	{
+		WaitIdle("free surface");
+		rsxFree(rs->mem);
+		delete rs;
+	}
+	surf->m_backend = NULL;
+	s_targetValid = false;
+}
 void VertexBufferChanged(IDirect3DVertexBuffer9*, UINT, UINT) {}
 void VertexBufferReleased(IDirect3DVertexBuffer9* vb) { FreeBuffer(vb->m_backend); vb->m_backend = NULL; }
 void IndexBufferChanged(IDirect3DIndexBuffer9*, UINT, UINT) {}

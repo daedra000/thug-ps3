@@ -20,7 +20,11 @@ namespace Ps3Gfx
 	bool DrawInit();			// after the video set-up
 	void DrawFrameStart();		// after a frame passes the flip gate
 	const char* DrawStats();	// one line for the log, then resets the counters
-	bool TargetIsDisplay(IDirect3DDevice9* dev);	// drawing goes to the back buffer
+	// The surface draws and clears go to.
+	struct SurfaceDesc { u32 colorOffset, colorPitch, depthOffset, depthPitch, width, height; bool hasDepth; };
+	void DisplaySurface(SurfaceDesc* out);			// this frame's back buffer and the depth buffer
+	bool ApplyTarget(IDirect3DDevice9* dev, bool* hasDepth);	// binds the device's render target; false: can't draw there
+	void InvalidateDrawState();						// d3d9_rsx.cpp changed state behind the draw module's back
 }
 
 #endif // PS3_D3D9_RSX_INTERNAL_H

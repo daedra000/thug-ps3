@@ -121,6 +121,17 @@ bool WaitIdle(const char* what)
 	return true;
 }
 
+void DisplaySurface(SurfaceDesc* d)
+{
+	d->colorOffset = s_colorOffset[s_cur];
+	d->colorPitch = s_pitch;
+	d->depthOffset = s_depthOffset;
+	d->depthPitch = s_depthPitch;
+	d->width = s_width;
+	d->height = s_height;
+	d->hasDepth = true;
+}
+
 static void SetRenderTarget()
 {
 	gcmSurface sf;
@@ -325,7 +336,10 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	if (!mask) return;
 
 	FrameBegin();
-	if (s_skipFrame || !TargetIsDisplay(dev)) return;
+	bool hasDepth = false;
+	if (s_skipFrame || !ApplyTarget(dev, &hasDepth)) return;
+	if (!hasDepth) mask &= ~(GCM_CLEAR_Z | GCM_CLEAR_S);
+	if (!mask) return;
 	const D3DVIEWPORT9& vp = dev->m_viewport;
 	CmdReserve(64);
 	rsxSetScissor(s_ctx, (u16)vp.X, (u16)vp.Y, (u16)vp.Width, (u16)vp.Height);
@@ -335,6 +349,7 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	u32 depth = (u32)(z * 16777215.0f);
 	rsxSetClearDepthStencil(s_ctx, (depth << 8) | (stencil & 0xff));
 	rsxClearSurface(s_ctx, mask);
+	InvalidateDrawState();	// scissor, colour mask and depth writes changed
 }
 
 
