@@ -389,11 +389,13 @@ namespace Pcm
 #endif
 #ifdef __PLAT_PS3__
 		Ps3Fs::SetTrace(true);	// the console hung here: log every file system call
+		Ps3Platform::SetAllocTrace(true);
 #endif
 		music_paths = Index(File::DataPath() / "music");
 		stream_paths = Index(File::DataPath() / "streams");
 #ifdef __PLAT_PS3__
 		Ps3Fs::SetTrace(false);
+		Ps3Platform::SetAllocTrace(false);
 		printf("[music] %u music files, %u streams\n", (unsigned)music_paths.size(), (unsigned)stream_paths.size());
 #endif
 	}

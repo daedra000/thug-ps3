@@ -46,6 +46,12 @@ namespace Ps3Platform
 	// A line written straight to the log from any thread (no stdio); the latest one is also
 	// shown on the [alive] heartbeat lines.
 	void Trace(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+	// Text straight to the log; never allocates (usable inside the malloc wrappers).
+	void RawWrite(const char* text);
+
+	// Log every malloc/calloc/realloc/memalign/free while on (ps3_diag.cpp).
+	void SetAllocTrace(bool on);
 }
 
 #endif // PS3_PLATFORM_H

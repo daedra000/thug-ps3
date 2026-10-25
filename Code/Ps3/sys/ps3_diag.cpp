@@ -25,6 +25,7 @@ extern "C"
 	void* __real_calloc(size_t n, size_t size);
 	void* __real_realloc(void* p, size_t size);
 	void* __real_memalign(size_t align, size_t size);
+	void __real_free(void* p);
 }
 
 namespace
@@ -94,6 +95,28 @@ namespace
 		s_inTrail = false;
 	}
 
+	volatile bool s_allocTrace;
+	volatile int s_inAllocTrace;
+
+	// "[alloc] realloc 0x4080 96 -> 0x40a0" straight to the log, while tracing.
+	void TraceAlloc(const char* fn, const void* in, size_t size, const void* out, bool before)
+	{
+		static int lines;
+		if (!s_allocTrace || s_inAllocTrace || lines >= 800) return;
+		++lines;
+		++s_inAllocTrace;
+		char line[160], *p = line;
+		p = AppendStr(p, before ? "[alloc] > " : "[alloc] < ");
+		p = AppendStr(p, fn);
+		if (in) { *p++ = ' '; p = AppendHex(p, (unsigned long long)(size_t)in); }
+		if (size != (size_t)-1) { *p++ = ' '; p = AppendNum(p, size); }
+		if (!before) { p = AppendStr(p, " -> "); p = AppendHex(p, (unsigned long long)(size_t)out); }
+		*p++ = '\n';
+		*p = 0;
+		Ps3Platform::RawWrite(line);
+		--s_inAllocTrace;
+	}
+
 	bool Refuse(size_t size)
 	{
 		return s_memCap && s_startup && size > kCapSize;
@@ -105,7 +128,9 @@ extern "C"
 	void* __wrap_malloc(size_t size)
 	{
 		if (Refuse(size)) { LogAlloc("malloc", size, 0, true); return 0; }
+		TraceAlloc("malloc", 0, size, 0, true);
 		void* p = __real_malloc(size);
+		TraceAlloc("malloc", 0, size, p, false);
 		LogAlloc("malloc", size, p, false);
 		return p;
 	}
@@ -113,7 +138,9 @@ extern "C"
 	void* __wrap_calloc(size_t n, size_t size)
 	{
 		if (Refuse(n * size)) { LogAlloc("calloc", n * size, 0, true); return 0; }
+		TraceAlloc("calloc", 0, n * size, 0, true);
 		void* p = __real_calloc(n, size);
+		TraceAlloc("calloc", 0, n * size, p, false);
 		LogAlloc("calloc", n * size, p, false);
 		return p;
 	}
@@ -121,7 +148,9 @@ extern "C"
 	void* __wrap_realloc(void* old, size_t size)
 	{
 		if (Refuse(size)) { LogAlloc("realloc", size, 0, true); return 0; }
+		TraceAlloc("realloc", old, size, 0, true);
 		void* p = __real_realloc(old, size);
+		TraceAlloc("realloc", old, size, p, false);
 		LogAlloc("realloc", size, p, false);
 		return p;
 	}
@@ -129,9 +158,18 @@ extern "C"
 	void* __wrap_memalign(size_t align, size_t size)
 	{
 		if (Refuse(size)) { LogAlloc("memalign", size, 0, true); return 0; }
+		TraceAlloc("memalign", 0, size, 0, true);
 		void* p = __real_memalign(align, size);
+		TraceAlloc("memalign", 0, size, p, false);
 		LogAlloc("memalign", size, p, false);
 		return p;
+	}
+
+	void __wrap_free(void* p)
+	{
+		TraceAlloc("free", p, (size_t)-1, 0, true);
+		__real_free(p);
+		TraceAlloc("free", p, (size_t)-1, 0, false);
 	}
 }
 
@@ -146,6 +184,8 @@ void ReadDiagnosticSwitches()
 	snprintf(path, sizeof(path), "%s/memcap.txt", Ps3Fs::AppDir());
 	s_memCap = Ps3Fs::Exists(path);
 }
+
+void SetAllocTrace(bool on) { s_allocTrace = on; }
 
 bool NoThreads() { return s_noThreads; }
 bool MemoryCap() { return s_memCap; }

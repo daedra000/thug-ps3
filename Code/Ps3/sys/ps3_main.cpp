@@ -166,6 +166,11 @@ namespace Ps3Platform
 static char* volatile s_stackTop = NULL;
 static const u64 kGameStack = 1024 * 1024;
 
+void RawWrite(const char* text)
+{
+	RawLog(text);
+}
+
 void AttachThreadLog()
 {
 	if (s_logFile)
