@@ -30,7 +30,11 @@ Work in progress. **It does not run on a console yet.**
 - [x] RSX renderer (untested on a console): textures, vertex/index buffers, programs generated
       from the fixed-function state, texture stages and the game's ps_1_1 shaders, assembled
       at run time by an embedded copy of PSL1GHT's cgcomp
-- [ ] Drawing to textures (shadows, screen effects), point sprites
+- [x] Drawing into textures (blur buffers, shadow texture, imposters)
+- [x] Shader maths checked on a PC against D3D9's fixed-function pipeline
+      (`tools/rsx-asm-test`, run by CI)
+- [ ] Start-up on a console: the headless build sometimes stops before `main()`, otherwise
+      hangs while the core systems are set up (being narrowed down with the log)
 - [ ] Saves (`USRDIR/Save`), music
 
 ## Installing (once it runs)
@@ -73,6 +77,12 @@ the PS3 toolchain.
 Empty files in `USRDIR` change how the RSX renderer works, to help narrow down problems:
 `rsx_linear_textures.txt` (no texture swizzling or mipmaps), `rsx_flip_cull.txt` (cull the
 other triangle winding), `rsx_no_draw.txt` (clear and flip only).
+
+For start-up problems: `nothreads.txt` (none of the port's threads; the game's
+`CreateThread` calls are refused) and `memcap.txt` (allocations over 10 MB fail during
+start-up). `thug-ps3-boot.txt` (in `USRDIR` and `/dev_hdd0/tmp`) is written from the first
+line of `main()` and lists every allocation of 1 MB or more during start-up; the log has a
+`[step]` line per start-up phase and an `[alive]` line every 5 seconds.
 
 ## How the port is put together
 
