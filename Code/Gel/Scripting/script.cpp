@@ -1409,7 +1409,13 @@ bool CScript::run_member_function(uint32 functionName, Obj::CObject *p_substitut
 		TimeBefore=Tmr::GetTimeInCPUCycles();
 		#endif
 		
+#ifdef __PLAT_PS3__
+		g_ps3MemberFunction = functionName;
+#endif
 		return_value=p_obj->CallMemberFunction(functionName,mp_function_params,this);
+#ifdef __PLAT_PS3__
+		g_ps3MemberFunction = 0;
+#endif
 		
 		#ifdef STOPWATCH_STUFF
 		TimeAfter=Tmr::GetTimeInCPUCycles();
@@ -1481,7 +1487,13 @@ bool CScript::run_cfunction(bool (*p_cfunc)(CStruct *pParams, CScript *pCScript)
 	TimeBefore=Tmr::GetTimeInCPUCycles();
 	*/
 	
+#ifdef __PLAT_PS3__
+	g_ps3CFunction = (const void*)p_cfunc;
+#endif
 	bool return_value=(*p_cfunc)(mp_function_params,this);
+#ifdef __PLAT_PS3__
+	g_ps3CFunction = 0;
+#endif
 
 	/*
 	TimeAfter=Tmr::GetTimeInCPUCycles();

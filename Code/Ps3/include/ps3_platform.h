@@ -15,6 +15,10 @@ extern volatile const void* g_ps3CurrentTask;
 // being updated, for the [alive] lines.
 extern volatile const char* g_ps3Where;
 extern volatile const char* g_ps3ScriptName;
+// The script C function (its descriptor: name it with thug-ps3.map) or member function
+// (checksum) running now, 0 when none.
+extern volatile const void* g_ps3CFunction;
+extern volatile unsigned g_ps3MemberFunction;
 #define PS3_WHERE(label) (g_ps3Where = (label))
 
 namespace Ps3Platform
