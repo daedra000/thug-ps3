@@ -20,9 +20,9 @@
 #include <exception>
 #include <stdlib.h>
 
-// Main thread: priority 1001, 1 MB stack (lv2's default is 64 KB; the game was built for
-// Windows' 1 MB). Same as the GridSiege ports.
-SYS_PROCESS_PARAM(1001, 0x100000);
+// No SYS_PROCESS_PARAM: builds that set one (priority 1001, 1 MB stack, 1 MB malloc
+// pages, as GridSiege does) went back to the XMB before main() on a console, while
+// builds with the defaults ran into the game's start-up. Bigger stacks go to threads.
 
 // Boot trail: thug-ps3-boot.txt in USRDIR and in /dev_hdd0/tmp, written with plain lv2
 // calls from the first line of main() on, so a crash before the log opens still says
