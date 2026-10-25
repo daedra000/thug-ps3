@@ -13,6 +13,17 @@
 // can leave garbage in the command stream when it changes segments, which locks the RSX
 // up at random-looking frames. Found by rsxkit (https://github.com/ricowp81/rsxkit,
 // src/fifo.c, MIT); the same fix cured the lock-ups of the GridSiege GPU renderer.
+//
+// XMB screenshots (and anything else that holds the display) follow Grid Siege 3D's
+// rules, all found on a console:
+// - 1 MB of RSX-mapped main memory holding a 256 KB command buffer (tiny3d's layout;
+//   larger mappings made the system keep our RSX channel after a screenshot). So GPU
+//   resources go in RSX local memory, never in mapped main memory.
+// - Display buffers on 1 MB boundaries (64-byte alignment froze the screenshot).
+// - The RSX never waits for a flip (no gcmSetWaitFlip). The CPU checks the last flip
+//   before starting a frame: while the system holds it the frame is skipped, and after
+//   about a second a frame is queued anyway (at most 20 in a row).
+// - A frame-fence label is written after each frame's commands.
 
 #include <ps3_platform.h>
 
@@ -33,8 +44,8 @@ namespace Ps3Gfx
 {
 
 enum { kBuffers = 2 };
-static const u32 kCommandBufferSize = 1 * 1024 * 1024;
-static const u32 kIoSize = 16 * 1024 * 1024;	// main memory mapped for the RSX (holds the command buffer)
+static const u32 kCommandBufferSize = 256 * 1024;
+static const u32 kIoSize = 1024 * 1024;	// main memory mapped for the RSX: the command buffer only
 
 static gcmContextData* s_ctx;
 static void* s_ioBuffer;
@@ -49,8 +60,13 @@ static unsigned s_frames, s_draws;
 static unsigned s_segmentChanges;
 static u32 s_label = 1;
 static bool s_firstFrame = true;
-static bool s_frameReady;	// the previous flip has been waited for
-enum { kLabelIndex = 255 };
+static bool s_frameReady;	// this frame has passed the flip gate
+static bool s_skipFrame;	// the system holds the display: this frame is not drawn
+static bool s_flipPending;
+static int s_heldFrames, s_forcedRun;
+static unsigned s_skipped, s_forced;
+static u32 s_frameSeq;
+enum { kLabelIndex = 255, kFrameLabel = 253 };
 
 // A correct call to libgcm's segment callback (see the top of the file).
 static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 count)
@@ -137,33 +153,43 @@ static void SetRenderTarget()
 	rsxSetSurface(s_ctx, &sf);
 }
 
-static void WaitFlip()
+// Before a frame's first command: has the previous flip happened? Its buffer is on
+// screen until then. Gives a normal vsync a few ms; if the system holds the flip
+// (an XMB screenshot, say), the frame is skipped instead of waited for. After about a
+// second a frame is queued anyway: the screenshot only lets go once the game flips
+// again, and waiting for it froze the console for good (Grid Siege v2.6.5, v3.10.3).
+static bool FlipGate()
 {
-	// Bounded: a hung RSX leaves a line in the log instead of a silent freeze.
-	int waited = 0;
-	bool told = false;
-	while (gcmGetFlipStatus() != 0)
+	if (s_firstFrame) { gcmResetFlipStatus(); s_firstFrame = false; return true; }
+	if (!s_flipPending) return true;
+	for (int t = 0; t < 60 && gcmGetFlipStatus() != 0; ++t) usleep(250);	// up to one vsync
+	if (gcmGetFlipStatus() == 0) s_forcedRun = 0;
+	if (gcmGetFlipStatus() != 0 && s_heldFrames < 60)
 	{
-		usleep(200);
-		waited += 200;
-		if (waited > 1000000 && !told) { told = true; GpuLog("frame %u: previous frame still not shown after 1 s", s_frames); }
-		if (waited > 3000000) { GpuLog("frame %u: gave up waiting for the flip", s_frames); break; }
+		if (++s_heldFrames == 30) GpuLog("frame %u: the system is holding the display", s_frames);
+		usleep(4000);	// the system has the display: give it the CPU too
+		return false;
 	}
+	if (gcmGetFlipStatus() != 0 && s_forcedRun >= 20) { usleep(4000); return false; }	// the command buffer must not fill up
+	if (gcmGetFlipStatus() != 0) { ++s_forced; ++s_forcedRun; }
+	s_heldFrames = 0;
+	s_flipPending = false;
 	gcmResetFlipStatus();
+	return true;
 }
 
-// Called before the first command of a frame: the previous flip must be done before
-// its buffer is drawn into again. Waiting here rather than right after queueing the
-// flip lets the CPU build the next frame while the TV waits for vsync.
+// Called before the first command of a frame (clear, draw or present).
 static void FrameBegin()
 {
 	if (s_frameReady) return;
-	if (!s_firstFrame) WaitFlip();
-	else gcmResetFlipStatus();
-	s_firstFrame = false;
 	s_frameReady = true;
+	s_skipFrame = !FlipGate();
+	if (s_skipFrame) { ++s_skipped; return; }
+	// The RSX must have finished the frame before last, which read the buffer we are
+	// about to draw into (the flip status alone can't say so after a forced flip).
+	for (int t = 0; t < 4000 && *(vu32*)gcmGetLabelAddress(kFrameLabel) + 1 < s_frameSeq; ++t) usleep(250);
 	// Change segments here, between frames, if the frame might not fit.
-	CmdReserve(64 * 1024);
+	CmdReserve(32 * 1024);
 	SetRenderTarget();
 }
 
@@ -225,7 +251,7 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 
 		for (int i = 0; i < kBuffers; ++i)
 		{
-			s_color[i] = (u32*)rsxMemalign(64, s_pitch * s_height);
+			s_color[i] = (u32*)rsxMemalign(1024 * 1024, s_pitch * s_height);	// 1 MB: see the top of the file
 			if (!s_color[i])
 			{
 				printf("[gfx] out of video memory for the display\n");
@@ -236,9 +262,15 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 			gcmSetDisplayBuffer(i, s_colorOffset[i], s_pitch, s_width, s_height);
 		}
 		s_depthPitch = s_width * 4;
-		s_depth = (u32*)rsxMemalign(64, s_depthPitch * s_height);
+		s_depth = (u32*)rsxMemalign(1024 * 1024, s_depthPitch * s_height);
+		if (!s_depth)
+		{
+			printf("[gfx] out of video memory for the depth buffer\n");
+			return false;
+		}
 		rsxAddressToOffset(s_depth, &s_depthOffset);
 
+		*(vu32*)gcmGetLabelAddress(kFrameLabel) = 0;	// the frame fence starts clear
 		s_cur = 0;
 		gcmResetFlipStatus();
 		s_ready = true;
@@ -265,18 +297,22 @@ void Present(IDirect3DDevice9*)
 {
 	if (!s_ready) return;
 	FrameBegin();	// a frame with no draws or clears still flips a valid buffer
-	CmdReserve(64);
-	// The RSX waits for the flip before running the next frame's commands; the CPU
-	// waits for it at the start of the next frame (FrameBegin).
-	gcmSetFlip(s_ctx, s_cur);
-	rsxFlushBuffer(s_ctx);
-	gcmSetWaitFlip(s_ctx);
-	s_cur = (s_cur + 1) % kBuffers;
 	s_frameReady = false;
-
 	++s_frames;
+	if (!s_skipFrame)
+	{
+		CmdReserve(64);
+		rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);	// the frame fence
+		// Flip at the next vsync. No gcmSetWaitFlip: the CPU checks the flip before the
+		// next frame (FlipGate), so nothing is queued behind a held flip.
+		gcmSetFlip(s_ctx, s_cur);
+		rsxFlushBuffer(s_ctx);
+		s_flipPending = true;
+		s_cur = (s_cur + 1) % kBuffers;
+	}
 	if (s_frames <= 3 || (s_frames % 600) == 0)
-		GpuLog("frame %u alive (%u draws not drawn yet, %u segment changes)", s_frames, s_draws, s_segmentChanges);
+		GpuLog("frame %u alive (%u draws not drawn yet, %u segment changes, %u frames skipped and %u flips forced while the display was held)",
+			s_frames, s_draws, s_segmentChanges, s_skipped, s_forced);
 	s_draws = 0;
 }
 
@@ -290,6 +326,7 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	if (!mask) return;
 
 	FrameBegin();
+	if (s_skipFrame) return;
 	const D3DVIEWPORT9& vp = dev->m_viewport;
 	CmdReserve(64);
 	rsxSetScissor(s_ctx, (u16)vp.X, (u16)vp.Y, (u16)vp.Width, (u16)vp.Height);
