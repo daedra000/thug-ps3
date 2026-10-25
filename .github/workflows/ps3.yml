@@ -154,6 +154,12 @@ jobs:
           # Function descriptors (.opd, what function pointers hold) and code, sorted by address.
           ppu-nm -C --defined-only "$elf" | sort > thug-ps3.map
 
+      - name: Look up log addresses (tools/lookup-addresses.txt)
+        if: always() && matrix.variant == 'headless'
+        run: |
+          [ -f thug-ps3.map ] && [ -f tools/lookup-addresses.txt ] || exit 0
+          python3 tools/lookup-addresses.py thug-ps3.map tools/lookup-addresses.txt
+
       - name: Report errors
         if: always()
         run: python3 tools/ci-annotate.py build.log "$GITHUB_WORKSPACE"

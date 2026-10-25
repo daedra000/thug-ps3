@@ -1,0 +1,3 @@
+0x567978 task stuck in frame 93 (build edc5963)
+0x543420 task that loads the permanent assets in frame 1 (sanity check)
+0x54bf60 last task of frame 2 (sanity check)
