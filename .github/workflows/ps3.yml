@@ -1,0 +1,118 @@
+name: PS3 build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Pinned so the cached toolchain only rebuilds when we bump these on purpose.
+  PS3TOOLCHAIN_REF: de85d7d5d11dc0a99d823ece3d440eea46c34d0f
+  PSL1GHT_REF: f649a08fd536a9e27c08c7db2d93a2d7ee4c3bbe
+  TOOLCHAIN_CACHE_KEY: ps3dev-v1-de85d7d5-f649a08f
+
+jobs:
+  toolchain:
+    name: PS3 toolchain (cached)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Restore cached toolchain
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ps3dev
+          key: ${{ env.TOOLCHAIN_CACHE_KEY }}
+          lookup-only: true
+
+      - name: Install build requirements
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install \
+            autoconf automake bison flex gcc g++ libelf-dev make texinfo \
+            libncurses-dev patch python3 python-is-python3 python3-dev \
+            wget zlib1g-dev libtool-bin bzip2 libgmp-dev pkg-config libssl-dev
+
+      - name: Fetch ps3toolchain and PSL1GHT
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/ps3dev/ps3toolchain "$RUNNER_TEMP/ps3toolchain"
+          git -C "$RUNNER_TEMP/ps3toolchain" checkout "$PS3TOOLCHAIN_REF"
+          git clone https://github.com/ps3dev/PSL1GHT "$RUNNER_TEMP/psl1ght"
+          git -C "$RUNNER_TEMP/psl1ght" checkout "$PSL1GHT_REF"
+
+      - name: Set up environment
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "PS3DEV=$RUNNER_TEMP/ps3dev" >> "$GITHUB_ENV"
+          echo "PSL1GHT=$RUNNER_TEMP/ps3dev" >> "$GITHUB_ENV"
+          echo "BUILD_PS3TOOLCHAIN_ONLY=1" >> "$GITHUB_ENV"
+          echo "NO_SAVANNAH=1" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/ps3dev/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/ps3dev/ppu/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/ps3dev/spu/bin" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/ps3dev"
+
+      - name: Download toolchain sources
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: mkdir -p build && cd build && ../download.sh
+
+      - name: Binutils (PPU)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: ./toolchain.sh 001
+      - name: GCC + newlib (PPU)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: ./toolchain.sh 002
+      - name: Symlinks (PPU)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: ./toolchain.sh 004
+      - name: Binutils (SPU)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: ./toolchain.sh 005
+      - name: GCC + newlib (SPU)
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/ps3toolchain
+        run: ./toolchain.sh 006
+
+      - name: PSL1GHT
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/psl1ght
+        run: make install-ctrl && make && make install
+
+      - name: Save toolchain to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ps3dev
+          key: ${{ env.TOOLCHAIN_CACHE_KEY }}
+
+  smoke-test:
+    name: Toolchain smoke test (PSL1GHT sample)
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ps3dev
+          key: ${{ env.TOOLCHAIN_CACHE_KEY }}
+          fail-on-cache-miss: true
+      - name: Set up environment
+        run: |
+          sudo apt-get update && sudo apt-get -y install libelf-dev python3
+          echo "PS3DEV=$RUNNER_TEMP/ps3dev" >> "$GITHUB_ENV"
+          echo "PSL1GHT=$RUNNER_TEMP/ps3dev" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/ps3dev/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/ps3dev/ppu/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/ps3dev/spu/bin" >> "$GITHUB_PATH"
+      - name: Build padtest sample
+        run: |
+          git clone https://github.com/ps3dev/PSL1GHT psl1ght-src
+          git -C psl1ght-src checkout "$PSL1GHT_REF"
+          make -C psl1ght-src/samples/input/padtest
+          ls -l psl1ght-src/samples/input/padtest
