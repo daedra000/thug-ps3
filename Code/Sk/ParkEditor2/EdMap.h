@@ -1,6 +1,12 @@
 #ifndef __SK_PARKEDITOR2_EDMAP_H
 #define __SK_PARKEDITOR2_EDMAP_H
 
+
+// Big-endian hosts that load parks made on little-endian machines (the pre-made parks:
+// their map buffers are integer arrays written from little-endian memory).
+#if defined(__PLAT_NGC__) || defined(__PLAT_PS3__)
+#define PARK_LE_DATA_ON_BE_HOST
+#endif
 #include <sk/ParkEditor2/ParkGen.h>
 #include <sk/ParkEditor2/GapManager.h>
 
@@ -332,7 +338,7 @@ public:
 	void						SetCompressedMapBuffer(uint8* src_buffer, bool markNotSaved = false);
 	bool						IsMapSavedLocally();
 	void						WriteIntoStructure(Script::CStruct *p_struct);
-	#ifdef __PLAT_NGC__
+	#ifdef PARK_LE_DATA_ON_BE_HOST
 	void 						ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem_card_load=true, bool preMadePark=false);
 	#else
 	void						ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem_card_load=true);
@@ -468,7 +474,7 @@ public:
 	
 	void						GetSummaryInfoFromBuffer(uint8 *p_buffer, int *p_numGaps, int *p_numMetas, uint16 *p_theme, uint32 *p_todScript, int *p_width, int *p_length);
 	
-	#ifdef __PLAT_NGC__
+	#ifdef PARK_LE_DATA_ON_BE_HOST
 	void						SwapMapBufferEndianness();
 	#endif
 	

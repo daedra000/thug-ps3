@@ -11,6 +11,7 @@
 
 #include <sys/file/filelibrary.h>
 
+#include <core/endian.h>
 #include <sys/file/asyncfilesys.h>
 #include <sys/file/filesys.h>
 #include <gel/scripting/checksum.h>
@@ -178,7 +179,7 @@ bool CFileLibrary::PostLoad( bool assertOnFail, int file_size )
 	}
 #endif		// __PLAT_NGC__
 
-	m_numFiles = pHeader->numFiles;
+	m_numFiles = Endian::Le32( pHeader->numFiles );	// PS3: PC data is little-endian (read, not converted: the buffer may be shared)
 
 //#ifndef __PLAT_NGC__
 	Dbg_MsgAssert( m_numFiles > 0, ( "No files found in lib mp_fileBuffer = %p", mp_fileBuffer ) );
@@ -187,6 +188,7 @@ bool CFileLibrary::PostLoad( bool assertOnFail, int file_size )
 
 	// read in table of contents information
 	memcpy( &m_fileInfo, pFileData, (sizeof(SFileInfo) * m_numFiles) );
+	Endian::Fix32Array( &m_fileInfo, m_numFiles * sizeof(SFileInfo) / 4 );
 	pFileData += (sizeof(SFileInfo) * m_numFiles);
 //#ifndef __PLAT_NGC__
 	if ( pFileData > ( mp_fileBuffer + file_size ) )

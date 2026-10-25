@@ -11,6 +11,7 @@
 
 #include <sk/objects/cutscenedetails.h>
 
+#include <core/endian.h>
 #include <core/allmath.h>
 
 #include <gel/assman/assman.h>
@@ -3257,6 +3258,16 @@ void CCutsceneData::load_models()
 						testBoneScales[4] = get_scale( pCASModelStruct, CRCD(0x1dbcfae8,"nose_bone_group") );
 					}
 
+#ifdef __PLAT_PS3__
+					// PS3: version, vertex count and 3 weights per vertex are little-endian; the
+					// indices after them are bytes. The count is far smaller in the right byte order,
+					// which tells whether the buffer has been converted already.
+					if( Endian::Swap32( *(uint32*)( pWeightMapData + 4 )) < *(uint32*)( pWeightMapData + 4 ))
+					{
+						Endian::Fix32Array( pWeightMapData, 2 );
+						Endian::Fix32Array( pWeightMapData + 8, *(int*)( pWeightMapData + 4 ) * 3 );
+					}
+#endif
 					// skip past version number
 					pWeightMapData += sizeof(int); 
 
@@ -3672,6 +3683,12 @@ void apply_cas_scaling( Obj::CCompositeObject* pObject, Gfx::CSkeleton* pSourceS
 
 bool CCutsceneData::create_objects( uint32* pData )
 {
+#ifdef __PLAT_PS3__
+	// PS3: the CIF is all little-endian words: version, count, then 5 words per object.
+	// It is used once and then cleared, so convert it in place.
+	Endian::Fix32Array( pData, 2 );
+	Endian::Fix32Array( pData + 2, pData[1] * 5 );
+#endif
 	// skip the version number
 	pData++;
 

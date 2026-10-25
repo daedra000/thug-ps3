@@ -23,7 +23,7 @@
 
 DefinePoolableClass(Ed::CMapListNode);
 
-#ifdef __PLAT_NGC__
+#ifdef PARK_LE_DATA_ON_BE_HOST
 #define _16(a) (((a>>8)&0x00ff)|((a<<8)&0xff00))
 #define _32(a) (((a>>24)&0x000000ff)|((a>>8)&0x0000ff00)|((a<<8)&0x00ff0000)|((a<<24)&0xff000000)) 
 #else
@@ -1295,7 +1295,7 @@ void CParkManager::WriteIntoStructure(Script::CStruct *p_struct)
 	p_struct->AddInteger(CRCD(0xb7e39b53,"MaxPlayers"),GetGenerator()->GetMaxPlayers());
 }
 
-#ifdef __PLAT_NGC__
+#ifdef PARK_LE_DATA_ON_BE_HOST
 void CParkManager::ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem_card_load, bool preMadePark)
 #else
 void CParkManager::ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem_card_load)
@@ -1340,7 +1340,7 @@ void CParkManager::ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem
 		// copy the park editor map from structure to buffer
 		for (int i=0;i<size/4;i++)
 		{
-			#ifdef __PLAT_NGC__
+			#ifdef PARK_LE_DATA_ON_BE_HOST
 			if (preMadePark)
 			{
 				uint32 v=p_map->GetInteger(i);
@@ -1355,7 +1355,7 @@ void CParkManager::ReadFromStructure(Script::CStruct *p_struct, bool do_post_mem
 			#endif
 		}
 
-		#ifdef __PLAT_NGC__
+		#ifdef PARK_LE_DATA_ON_BE_HOST
 		if (preMadePark)
 		{
 			// If loading a pre-made park, it will need the map buffer endianness swapped since
@@ -1484,7 +1484,7 @@ void CParkManager::AccessDisk(bool save, int fileSlot)
 		Script::ReadFromBuffer(p_struct,p_buffer);
 		Mem::Free(p_buffer);
 
-		#ifdef __PLAT_NGC__
+		#ifdef PARK_LE_DATA_ON_BE_HOST
 		ReadFromStructure(p_struct,false,true);
 		#else
 		ReadFromStructure(p_struct,false);
@@ -4579,7 +4579,7 @@ void CParkManager::destroy_concrete_metapieces(CParkGenerator::EDestroyType type
 }
 
 
-#ifdef __PLAT_NGC__
+#ifdef PARK_LE_DATA_ON_BE_HOST
 void CParkManager::SwapMapBufferEndianness()
 {
 	CompressedMapHeader *p_header = (CompressedMapHeader *)mp_compressed_map_buffer;

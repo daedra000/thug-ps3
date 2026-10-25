@@ -13,6 +13,9 @@ addresses are below 4 GB) and a plain `T*` on PC.
 
 Status: ✅ done · ⬜ to do · ➖ already safe (reads bytes explicitly)
 
+All loaders known so far are covered; anything else will show up in the log once the game runs on a
+console.
+
 ## Containers
 
 | Data | Code | Status |
@@ -20,7 +23,7 @@ Status: ✅ done · ⬜ to do · ➖ already safe (reads bytes explicitly)
 | `.pre` archives (PreMgr) | `Sys/File/PRE.cpp` | ✅ LE reads |
 | `.pre` archives (Pip: qb.pre, collision, anims…) | `Sys/File/pip.cpp` `LoadPre` | ✅ headers converted on load |
 | LZSS decompression | `Core/compress.cpp` | ➖ |
-| Cutscene libraries `.cut` (`SLibHeader`, `SFileInfo`) | `Sys/File/FileLibrary.cpp` | ⬜ |
+| Cutscene libraries `.cut` (`SLibHeader`, `SFileInfo`) | `Sys/File/FileLibrary.cpp` | ✅ |
 
 ## Scripts
 
@@ -59,7 +62,7 @@ words. DXT blocks and 8-bit indices are copied as they are.
 | Materials (incl. `uint64` reg_alpha, VC-wibble keyframes) | `Gfx/DX9/NX/material.cpp` (both loaders) | ✅ |
 | Sectors: vertex/normal/weight/colour/UV arrays, index arrays | `Gfx/DX9/p_nxsector.cpp` | ✅ (material checksum now read as 4 bytes) |
 | CAS tables `.cas.xbx` | `Gfx/DX9/p_NxMesh.cpp` | ✅ |
-| Cutscene head weights `.wgt` | `Sk/Objects/cutscenedetails.cpp` | ⬜ |
+| Cutscene head weights `.wgt` | `Sk/Objects/cutscenedetails.cpp` | ✅ |
 
 ## Animation
 
@@ -70,13 +73,13 @@ words. DXT blocks and 8-bit indices are copied as they are.
 | Q48/T48 tables | `BonedAnim.cpp` `init_48_table` | ✅ |
 | Custom keys | `Gfx/CustomAnimKey.cpp` `ReadCustomAnimKey` | ✅ |
 | Skeletons `.ske` | `Gfx/Skeleton.cpp` | ✅ |
-| Cutscene CIF | `Sk/Objects/cutscenedetails.cpp` `create_objects` | ⬜ |
+| Cutscene CIF | `Sk/Objects/cutscenedetails.cpp` `create_objects` | ✅ |
 
 ## Sound
 
 | Data | Code | Status |
 |------|------|--------|
-| `.snd` RIFF headers / FourCCs | `Gel/SoundFX/SDL/p_sfx.cpp` `CXBSound` | ⬜ |
+| `.snd` RIFF headers / FourCCs | `Gel/SoundFX/SDL/p_sfx.cpp` `CXBSound` | ✅ |
 | IMA ADPCM samples | `Gel/SoundFX/SDL/ima.cpp` | ➖ |
 | Music | miniaudio (`Gel/Music/SDL/p_music.cpp`) | ➖ |
 
@@ -84,4 +87,4 @@ words. DXT blocks and 8-bit indices are copied as they are.
 
 | Data | Code | Status |
 |------|------|--------|
-| Compressed map buffer (packed fields in `uint32` words) | `Sk/ParkEditor2/EdMap.cpp` (NGC has `SwapMapBufferEndianness`) | ⬜ |
+| Pre-made parks (map buffers written from little-endian memory) | `Sk/ParkEditor2/EdMap.cpp` | ✅ takes the GameCube's path (`PARK_LE_DATA_ON_BE_HOST`); parks saved on the PS3 are native |

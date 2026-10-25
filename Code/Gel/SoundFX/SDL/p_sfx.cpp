@@ -1,4 +1,5 @@
 #include <Core/macros.h>
+#include <core/endian.h>
 #include <Sys/File/filesys.h>
 #include <Gel/SoundFX/soundfx.h>
 #include <Gel/Music/music.h>
@@ -57,6 +58,7 @@ namespace Sfx
 				{
 					Dbg_MsgAssert(0, ("Invalid RIFF header"));
 				}
+				Endian::Fix32Array(&riff_header, 3);	// PS3: RIFF fields are little-endian
 				Dbg_MsgAssert(riff_header.header.id == 0x46464952, ("Invalid RIFF header")); // "RIFF"
 				Dbg_MsgAssert(riff_header.id == 0x45564157, ("Invalid RIFF header")); // "WAVE"
 
@@ -66,6 +68,7 @@ namespace Sfx
 					BlockHeader header;
 					if (File::Read(&header, sizeof(BlockHeader), 1, fp) != sizeof(BlockHeader))
 						break;
+					Endian::Fix(header.id); Endian::Fix(header.size);
 
 					switch (header.id)
 					{
@@ -85,6 +88,8 @@ namespace Sfx
 								{
 									Dbg_MsgAssert(0, ("Failed to read format header"));
 								}
+								Endian::Fix(format.format); Endian::Fix(format.channels); Endian::Fix(format.sample_rate);
+								Endian::Fix(format.bytes_per_second); Endian::Fix(format.block_align); Endian::Fix(format.bits_per_sample);
 								File::Seek(fp, header.size - sizeof(Format), SEEK_CUR);
 							}
 							break;
