@@ -25,6 +25,7 @@
 *****************************************************************************/
 
 #include <core/defines.h>
+#include <stdint.h>	// uintptr_t: pointer arithmetic that is right on 64-bit too
 #include "pile.h"
 #include <sys\mem\region.h>
 
@@ -94,7 +95,7 @@ void*	Pile::allocate( size_t size, bool assert_on_fail )
 
 	MemDbg_AllocateBlock ( p_header );	
 	
-	return (void*)((uint)p_header + BlockHeader::sSize);
+	return (void*)((uintptr_t)p_header + BlockHeader::sSize);
 
 }
 

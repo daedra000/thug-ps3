@@ -26,6 +26,7 @@
 #ifndef __CORE_DEFINES_H
 #include <core/defines.h>
 #endif
+#include <stdint.h>	// uintptr_t: pointer arithmetic that is right on 64-bit too
 #include <core/support.h>
 #include <sys\mem\region.h>
 #include <sys/mem/memdbg.h>
@@ -423,7 +424,7 @@ inline void	Allocator::BlockHeader::DbgAllocateBlock( void )
 {	
 	
 
-	uint64* ptr = (uint64*)((uint)this + sSize );
+	uint64* ptr = (uint64*)((uintptr_t)this + sSize );
 
 	for ( uint i = 0; i < mSize; i += 8 )
 	{
@@ -440,7 +441,7 @@ inline void	Allocator::BlockHeader::DbgFreeBlock( void )
 {
 	
 	
-	uint64* ptr = (uint64*)((uint)this + sSize ); 	
+	uint64* ptr = (uint64*)((uintptr_t)this + sSize ); 	
 
 	for ( uint i = 0; i < mSize; i += 8 )
 	{

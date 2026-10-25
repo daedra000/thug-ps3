@@ -25,6 +25,7 @@
 *****************************************************************************/
 
 #include <core/defines.h>
+#include <stdint.h>	// uintptr_t: pointer arithmetic that is right on 64-bit too
 #include <sys\mem\region.h>
 #include <sys/config/config.h>
 #include "alloc.h"
@@ -86,7 +87,7 @@ void	Region::init( void* pStart, void* pEnd )
 	mp_start	= pStart;
 	mp_end		= pEnd;
 
-	m_min_free  = (int)pEnd - (int)pStart;
+	m_min_free  = (uintptr_t)pEnd - (uintptr_t)pStart;
 
 	m_alloc[vBOTTOM_UP] = 
 	m_alloc[vTOP_DOWN] 	= NULL;
@@ -97,7 +98,7 @@ void	Region::init( void* pStart, void* pEnd )
 	{
 #ifdef __CLEAR_MEMORY__
 		uint64* ptr = (uint64*)mp_start; 
-		uint 	size = (uint)mp_end - (uint)mp_start;
+		uint 	size = (uintptr_t)mp_end - (uintptr_t)mp_start;
 	
 		for ( uint i = 0; i < size; i += 8 )
 		{
@@ -167,7 +168,7 @@ void*		Region::Allocate( Allocator* pAlloc, size_t size, bool assert_on_fail )
 	
 	// here we get a new p_top for the allocator in pAlloc
 	// then we just need to test it
-	void* p_top = (void*) (( (uint)pAlloc->mp_top ) + ( size * pAlloc->m_dir ) );
+	void* p_top = (void*) (( (uintptr_t)pAlloc->mp_top ) + ( (intptr_t)size * (int)pAlloc->m_dir ) );	// (signed: LP64)
 	
 	if( Allocator* p_alloc = m_alloc[index^1] )	  // If other allocator exists
 	{
@@ -272,7 +273,7 @@ AllocRegion::AllocRegion( size_t size )
 	
 	mp_start = new char[size];
 	
-	init( mp_start, (void*)( (uint)mp_start + size ));
+	init( mp_start, (void*)( (uintptr_t)mp_start + size ));
 }
 
 /******************************************************************/
