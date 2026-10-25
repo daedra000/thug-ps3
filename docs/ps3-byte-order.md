@@ -39,18 +39,23 @@ Status: ✅ done · ⬜ to do · ➖ already safe (reads bytes explicitly)
 
 ## Textures and fonts
 
+Texture memory holds texels in **host order**: 32-bit texels and CLUT entries as native `uint32`
+ARGB words, 16-bit texels as native `uint16`. Code that writes `D3DCOLOR` values into a locked
+texture therefore works unchanged, and the RSX backend reads A8R8G8B8 / A1R5G5B5 as big-endian
+words. DXT blocks and 8-bit indices are copied as they are.
+
 | Data | Code | Status |
 |------|------|--------|
-| `.tex.xbx` dictionaries (headers, palettes, DXT blocks, 16/32-bit texels) | `Gfx/DX9/p_nxtexture.cpp` `LoadTextureFile_Internal` | ⬜ |
-| `.img.xbx` (`sIMGHeader`, CLUT, texels) | `Gfx/DX9/NX/texture.cpp` `LoadTexture` | ⬜ |
-| `.fnt.xbx` and the built-in font | `Gfx/DX9/NX/chars.cpp` `LoadFont` | ⬜ |
-| `DwordizeTexelData` callers pass pointers as `int` | chars.cpp, NX/texture.cpp, p_nxtexture.cpp | ⬜ (lossless on PS3, tidy later) |
+| `.tex.xbx` dictionaries (headers, palettes, DXT blocks, 16/32-bit texels) | `Gfx/DX9/p_nxtexture.cpp` `LoadTextureFile_Internal` | ✅ |
+| `.img.xbx` (`sIMGHeader`, CLUT, texels) | `Gfx/DX9/NX/texture.cpp` `LoadTexture` | ✅ |
+| `.fnt.xbx` and the built-in font | `Gfx/DX9/NX/chars.cpp` `LoadFont` | ✅ |
+| `DwordizeTexelData` took pointers as `int` | chars.cpp, NX/texture.cpp, p_nxtexture.cpp | ✅ `intptr_t` |
 
 ## Geometry
 
 | Data | Code | Status |
 |------|------|--------|
-| Scene headers, `CHierarchyObject` array | `Gfx/DX9/p_nx.cpp` `s_plat_load_scene(_from_memory)` | ⬜ |
+| Scene headers, `CHierarchyObject` array | `Gfx/DX9/p_nx.cpp` `s_plat_load_scene(_from_memory)` | ✅ (size assert: 80 bytes) |
 | Materials (incl. `uint64` reg_alpha, VC-wibble keyframes) | `Gfx/DX9/NX/material.cpp` (both loaders) | ✅ |
 | Sectors: vertex/normal/weight/colour/UV arrays, index arrays | `Gfx/DX9/p_nxsector.cpp` | ✅ (material checksum now read as 4 bytes) |
 | CAS tables `.cas.xbx` | `Gfx/DX9/p_NxMesh.cpp` | ⬜ |

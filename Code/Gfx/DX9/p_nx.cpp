@@ -70,6 +70,7 @@
 #include	"gel\music\xbox\p_soundtrack.h"
 
 #include "NX/render.h"
+#include <core/endian.h>
 #include "gfx\DX9/NX\nx_init.h"
 
 /*****************************************************************************
@@ -665,6 +666,20 @@ CScene	*CEngine::s_plat_create_scene( const char *p_name, CTexDict *p_tex_dict, 
 
 
 
+// PS3: the PC scene files are little-endian. A CHierarchyObject on disc is two uint32s,
+// an int16, two bytes, a uint32 pad and a 4x4 float matrix (80 bytes).
+static void s_fix_hierarchy_byte_order( CHierarchyObject *p_objects, int num )
+{
+	if( Endian::kHostIsLittle ) return;
+	for( int i = 0; i < num; ++i )
+	{
+		uint8 *p = (uint8*)&p_objects[i];
+		Endian::Fix32Array( p, 2 );
+		Endian::Fix16Array( p + 8, 1 );
+		Endian::Fix32Array( p + 12, 1 + 16 );
+	}
+}
+
 #define MemoryRead( dst, size, num, src )	CopyMemory(( dst ), ( src ), (( num ) * ( size )));	\
 											( src ) += (( num ) * ( size ))
 
@@ -686,16 +701,16 @@ CScene *CEngine::s_plat_load_scene_from_memory( void *p_mem, CTexDict *p_tex_dic
 
 	// Version numbers.
 	uint32 mat_version, mesh_version, vert_version;
-	MemoryRead( &mat_version, sizeof( uint32 ), 1, p_data );
-	MemoryRead( &mesh_version, sizeof( uint32 ), 1, p_data );
-	MemoryRead( &vert_version, sizeof( uint32 ), 1, p_data );
+	MemoryRead( &mat_version, sizeof( uint32 ), 1, p_data ); Endian::Fix( mat_version );
+	MemoryRead( &mesh_version, sizeof( uint32 ), 1, p_data ); Endian::Fix( mesh_version );
+	MemoryRead( &vert_version, sizeof( uint32 ), 1, p_data ); Endian::Fix( vert_version );
 
 	// Import materials (they will now be associated at the engine-level with this scene).
 	p_engine_scene->pMaterialTable = NxXbox::LoadMaterialsFromMemory( (void**)&p_data, p_tex_dict->GetTexLookup());
 
 	// Read number of sectors.
 	int num_sectors;
-	MemoryRead( &num_sectors, sizeof( int ), 1, p_data );
+	MemoryRead( &num_sectors, sizeof( int ), 1, p_data ); Endian::Fix( num_sectors );
 
 	// Figure optimum hash table lookup size.
 	uint32 optimal_table_size	= num_sectors * 2;
@@ -745,12 +760,12 @@ CScene *CEngine::s_plat_load_scene_from_memory( void *p_mem, CTexDict *p_tex_dic
 	
 	// Read hierarchy information.
 	int num_hierarchy_objects;
-	MemoryRead( &num_hierarchy_objects, sizeof( int ), 1, p_data );
+	MemoryRead( &num_hierarchy_objects, sizeof( int ), 1, p_data ); Endian::Fix( num_hierarchy_objects );
 
 	if( num_hierarchy_objects > 0 )
 	{
 		p_engine_scene->mp_hierarchyObjects = new CHierarchyObject[num_hierarchy_objects];
-		MemoryRead( p_engine_scene->mp_hierarchyObjects, sizeof( CHierarchyObject ), num_hierarchy_objects, p_data );
+		MemoryRead( p_engine_scene->mp_hierarchyObjects, sizeof( CHierarchyObject ), num_hierarchy_objects, p_data ); s_fix_hierarchy_byte_order( p_engine_scene->mp_hierarchyObjects, num_hierarchy_objects );
 		p_engine_scene->m_numHierarchyObjects = num_hierarchy_objects;
 	}
 
@@ -791,16 +806,16 @@ CScene *CEngine::s_plat_load_scene( const char *p_name, CTexDict *p_tex_dict, bo
 	
 	// Version numbers.
 	uint32 mat_version, mesh_version, vert_version;
-	File::Read( &mat_version, sizeof( uint32 ), 1, p_file );
-	File::Read( &mesh_version, sizeof( uint32 ), 1, p_file );
-	File::Read( &vert_version, sizeof( uint32 ), 1, p_file );
+	File::Read( &mat_version, sizeof( uint32 ), 1, p_file ); Endian::Fix( mat_version );
+	File::Read( &mesh_version, sizeof( uint32 ), 1, p_file ); Endian::Fix( mesh_version );
+	File::Read( &vert_version, sizeof( uint32 ), 1, p_file ); Endian::Fix( vert_version );
 
 	// Import materials (they will now be associated at the engine-level with this scene).
 	p_engine_scene->pMaterialTable = NxXbox::LoadMaterials( p_file, p_tex_dict->GetTexLookup());
 
 	// Read number of sectors.
 	int num_sectors;
-	File::Read( &num_sectors, sizeof( int ), 1, p_file );
+	File::Read( &num_sectors, sizeof( int ), 1, p_file ); Endian::Fix( num_sectors );
 
 	// Figure optimum hash table lookup size.
 	uint32 optimal_table_size	= num_sectors * 2;
@@ -852,12 +867,12 @@ CScene *CEngine::s_plat_load_scene( const char *p_name, CTexDict *p_tex_dict, bo
 	
 	// Read hierarchy information.
 	int num_hierarchy_objects;
-	File::Read( &num_hierarchy_objects, sizeof( int ), 1, p_file );
+	File::Read( &num_hierarchy_objects, sizeof( int ), 1, p_file ); Endian::Fix( num_hierarchy_objects );
 
 	if( num_hierarchy_objects > 0 )
 	{
 		p_engine_scene->mp_hierarchyObjects = new CHierarchyObject[num_hierarchy_objects];
-		File::Read( p_engine_scene->mp_hierarchyObjects, sizeof( CHierarchyObject ), num_hierarchy_objects, p_file );
+		File::Read( p_engine_scene->mp_hierarchyObjects, sizeof( CHierarchyObject ), num_hierarchy_objects, p_file ); s_fix_hierarchy_byte_order( p_engine_scene->mp_hierarchyObjects, num_hierarchy_objects );
 		p_engine_scene->m_numHierarchyObjects = num_hierarchy_objects;
 	}
 	

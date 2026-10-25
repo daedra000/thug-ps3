@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <core/endian.h>
 #include <string.h>
 
 #include <core/defines.h>
@@ -284,7 +285,7 @@ SFont* InitialiseMemoryResidentFont( void )
 
 
 // LWSS Add
-int DwordizeTexelData(int texel_data_dword_array, int texel_data_char_array, int numBytesChar, int data)
+int DwordizeTexelData(intptr_t texel_data_dword_array, intptr_t texel_data_char_array, int numBytesChar, intptr_t data)
 {
 	int result; // eax
 
@@ -341,9 +342,9 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 		Filename += 16;
 	}
 
-	NumChars			 = ((uint32 *)FontBuf)[1];
-	pFont->DefaultHeight = ((uint32 *)FontBuf)[2];
-	pFont->DefaultBase	 = ((uint32 *)FontBuf)[3];
+	NumChars			 = Endian::ReadLe32( FontBuf + 4 );
+	pFont->DefaultHeight = Endian::ReadLe32( FontBuf + 8 );
+	pFont->DefaultBase	 = Endian::ReadLe32( FontBuf + 12 );
 
 	// Clear character map to zero.
 	memset( pFont->Map, 0, 256 );
@@ -366,8 +367,8 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 
 	for( i = 0, pChar = pFont->pChars, pData = FontBuf; i < NumChars; i++,pChar++,pData += 4 )
 	{
-		pChar->Baseline							= ((uint16 *)pData)[0];
-		sint16 ascii_val = ((sint16 *)pData)[1];
+		pChar->Baseline							= Endian::ReadLe16( pData );
+		sint16 ascii_val = Endian::ReadLeS16( pData + 2 );
 		if (ascii_val >= 0)
 			pFont->Map[(uint8) ascii_val] = i;
 		else
@@ -403,9 +404,9 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 		Filename += 16;
 	}
 
-	Width	= ((uint16 *)FontBuf)[2];
-	Height	= ((uint16 *)FontBuf)[3];
-	Depth	= ((uint16 *)FontBuf)[4];
+	Width	= Endian::ReadLe16( FontBuf + 4 );
+	Height	= Endian::ReadLe16( FontBuf + 6 );
+	Depth	= Endian::ReadLe16( FontBuf + 8 );
 
 	// Create texture.
 	Dbg_Assert( Depth == 8 );
@@ -437,6 +438,7 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 		Filename += NumBytes + 1024; // skip past texel data + palette to the subtexture table
 	}
 
+	Endian::Fix32Array( v55, 256 );	// PS3: CLUT to host order (the loop below works on dword values)
 	// lwss add
 	char* v28 = v55;
 	int i_ = 256;
@@ -454,7 +456,7 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 	} while (i_);
 
 	uint8* p_dword_texel_data = new uint8[4 * NumBytes];
-	DwordizeTexelData((int)p_dword_texel_data, (int)p_temp_texel_data, NumBytes, (int)v55);
+	DwordizeTexelData((intptr_t)p_dword_texel_data, (intptr_t)p_temp_texel_data, NumBytes, (intptr_t)v55);
 	// lwss end
 
 	// Lock the texture so we can swizzle into it directly.
@@ -528,10 +530,10 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 
 	for( i = 0, pChar = pFont->pChars, pData = FontBuf + 4; i < NumChars; i++, pChar++, pData += 8 )
 	{
-		uint16 x	= ((uint16 *)pData )[0];
-		uint16 y	= ((uint16 *)pData )[1];
-		uint16 w	= ((uint16 *)pData )[2];
-		uint16 h	= ((uint16 *)pData )[3];
+		uint16 x	= Endian::ReadLe16( pData );
+		uint16 y	= Endian::ReadLe16( pData + 2 );
+		uint16 w	= Endian::ReadLe16( pData + 4 );
+		uint16 h	= Endian::ReadLe16( pData + 6 );
 		
 		pChar->w	= w;
 		pChar->h	= h;

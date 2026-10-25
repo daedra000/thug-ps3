@@ -6,11 +6,12 @@
 #include	"sys/file/filesys.h"
 
 #include "NX/nx_init.h"
+#include <core/endian.h>
 
 namespace NxXbox
 {
 	void Unswizzle(char* outData, char* inData, int width, int height, size_t byteDepth);
-	int DwordizeTexelData(int texel_data_dword_array, int texel_data_char_array, int numBytesChar, int data);
+	int DwordizeTexelData(intptr_t texel_data_dword_array, intptr_t texel_data_char_array, int numBytesChar, intptr_t data);
 }
 
 namespace Nx
@@ -471,8 +472,8 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 
 	// Read the texture file version and number of textures.
 	int version, num_textures;
-	Read(&version, sizeof(int), 1, p_FH, is_file);
-	Read(&num_textures, sizeof(int), 1, p_FH, is_file);
+	Read(&version, sizeof(int), 1, p_FH, is_file); Endian::Fix(version);
+	Read(&num_textures, sizeof(int), 1, p_FH, is_file); Endian::Fix(num_textures);
 
 	// If allowed, rebuild the texture table to the optimum size, using the same heap as the original table.
 	if (okay_to_rebuild_texture_table)
@@ -504,14 +505,14 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		NxXbox::sTexture* p_texture = new NxXbox::sTexture;
 
 		uint32 base_width, base_height, levels, texel_depth, palette_depth, dxt, palette_size;
-		Read(&p_texture->Checksum, sizeof(uint32), 1, p_FH, is_file);
-		Read(&base_width, sizeof(uint32), 1, p_FH, is_file);
-		Read(&base_height, sizeof(uint32), 1, p_FH, is_file);
-		Read(&levels, sizeof(uint32), 1, p_FH, is_file);
-		Read(&texel_depth, sizeof(uint32), 1, p_FH, is_file);
-		Read(&palette_depth, sizeof(uint32), 1, p_FH, is_file);
-		Read(&dxt, sizeof(uint32), 1, p_FH, is_file);
-		Read(&palette_size, sizeof(uint32), 1, p_FH, is_file);
+		Read(&p_texture->Checksum, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(p_texture->Checksum);
+		Read(&base_width, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(base_width);
+		Read(&base_height, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(base_height);
+		Read(&levels, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(levels);
+		Read(&texel_depth, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(texel_depth);
+		Read(&palette_depth, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(palette_depth);
+		Read(&dxt, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(dxt);
+		Read(&palette_size, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(palette_size);
 
 		p_texture->BaseWidth = (uint16)base_width;
 		p_texture->BaseHeight = (uint16)base_height;
@@ -560,16 +561,18 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 
 		p_texture->texrawdata = NULL;
 
-		static char palette_data[1024];
+		static uint32 palette_data[256];
 		bool read_palette_data = false;
-		memset(palette_data, 0x00, 1024);
+		memset(palette_data, 0x00, sizeof(palette_data));
 		// LWSS: DX9 does not have palettes
 		// LWSS2: We need to Read the palette data anyway to advance the File Read Pointer. (Multiple textures are read from 1 File in a loop)
 		// KISAKTODO: This needs more logic I think, but might work (with fked up textures)
 		if (palette_size)
 		{
 			read_palette_data = true;
+			Dbg_MsgAssert(palette_size <= sizeof(palette_data), ("palette too big: %u", palette_size));
 			Read(palette_data, palette_size, 1, p_FH, is_file);
+			Endian::Fix32Array(palette_data, palette_size / 4);	// PS3: CLUT entries in host order, as written by DwordizeTexelData
 			Dbg_Assert(palette_size < 2048);
 		}
 		else
@@ -580,7 +583,7 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		//for (uint32 mip_level = 0; mip_level < p_texture->Levels; ++mip_level)
 		//{
 		//	uint32 texture_level_data_size;
-		//	Read(&texture_level_data_size, sizeof(uint32), 1, p_FH, is_file);
+		//	Read(&texture_level_data_size, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(texture_level_data_size);
 		//
 		//	D3DLOCKED_RECT locked_rect;
 		//	if (D3D_OK != p_texture->pD3DTexture->LockRect(mip_level, &locked_rect, NULL, 0))
@@ -600,7 +603,7 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		//		{
 		//			void* workspace = malloc(texture_level_data_size);
 		//			NxXbox::sub_5C56F0((int)workspace, p_tex_level_data, base_width, base_height, 1);
-		//			NxXbox::DwordizeTexelData((int)locked_rect.pBits, (int)workspace, base_width * base_height, (int)palette_data);
+		//			NxXbox::DwordizeTexelData((intptr_t)locked_rect.pBits, (intptr_t)workspace, base_width * base_height, (intptr_t)palette_data);
 		//			free(workspace);
 		//		}
 		//		else
@@ -627,7 +630,7 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		for (uint32 mip_level = 0; mip_level < p_texture->Levels; ++mip_level)
 		{
 			uint32 texture_level_data_size;
-			Read(&texture_level_data_size, sizeof(uint32), 1, p_FH, is_file);
+			Read(&texture_level_data_size, sizeof(uint32), 1, p_FH, is_file); Endian::Fix(texture_level_data_size);
 
 			D3DLOCKED_RECT locked_rect;
 			if (D3D_OK != p_texture->pD3DTexture->LockRect(mip_level, &locked_rect, NULL, 0))
@@ -667,12 +670,15 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 						// 8-bit palettized: deswizzle the indices, then expand through the CLUT.
 						char* workspace = (char*)malloc(mip_width * mip_height);
 						NxXbox::Unswizzle(workspace, p_src, mip_width, mip_height, 1);
-						NxXbox::DwordizeTexelData((int)p_linear, (int)workspace, mip_width * mip_height, (int)palette_data);
+						NxXbox::DwordizeTexelData((intptr_t)p_linear, (intptr_t)workspace, mip_width * mip_height, (intptr_t)palette_data);
 						free(workspace);
 					}
 					else
 					{
 						// Direct color texels (16- or 32-bit): deswizzle in place.
+						// PS3: texels are kept in host order (RSX A8R8G8B8 / A1R5G5B5 on big-endian words).
+						if (dst_bpp == 4) Endian::Fix32Array(p_src, mip_width * mip_height);
+						else Endian::Fix16Array(p_src, mip_width * mip_height);
 						NxXbox::Unswizzle(p_linear, p_src, mip_width, mip_height, dst_bpp);
 					}
 
@@ -983,9 +989,9 @@ Lst::HashTable<Nx::CTexture>* LoadTextureFile( const char *Filename, Lst::HashTa
 
 		p_texture->texrawdata = NULL;
 
-		static char palette_data[1024];
+		static uint32 palette_data[256];
 		bool read_palette_data = false;
-		memset(palette_data, 0x00, 1024);
+		memset(palette_data, 0x00, sizeof(palette_data));
 		// LWSS: DX9 does not have palettes
 		// LWSS2: We need to Read the palette data anyway to advance the File Read Pointer. (Multiple textures are read from 1 File in a loop)
 		// KISAKTODO: This needs more logic I think, but might work (with fked up textures)
@@ -1050,7 +1056,7 @@ Lst::HashTable<Nx::CTexture>* LoadTextureFile( const char *Filename, Lst::HashTa
 				{
 					void* workspace = malloc(texture_level_data_size);
 					NxXbox::sub_5C56F0((int)workspace, p_tex_level_data, base_width, base_height, 1);
-					NxXbox::DwordizeTexelData((int)locked_rect.pBits, (int)workspace, base_width* base_height, (int)palette_data);
+					NxXbox::DwordizeTexelData((intptr_t)locked_rect.pBits, (intptr_t)workspace, base_width* base_height, (intptr_t)palette_data);
 					free(workspace);
 				}
 				else

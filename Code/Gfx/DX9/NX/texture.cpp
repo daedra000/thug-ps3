@@ -1,4 +1,5 @@
 #include <string.h>
+#include <core/endian.h>
 #include <core/defines.h>
 #include <core/debug.h>
 #include <stdio.h>
@@ -269,7 +270,7 @@ static char* strrstr(char* _Str, char* _SubStr) {
 /*                                                                */
 /******************************************************************/
 // LWSS: should be done.
-int DwordizeTexelData(int texel_data_dword_array, int texel_data_char_array, int numBytesChar, int data);
+int DwordizeTexelData(intptr_t texel_data_dword_array, intptr_t texel_data_char_array, int numBytesChar, intptr_t data);
 sTexture *LoadTexture( const char *p_filename )
 {
 	struct sIMGHeader
@@ -295,6 +296,9 @@ sTexture *LoadTexture( const char *p_filename )
 	// Read header.
 	sIMGHeader header;
 	File::Read( &header, sizeof( sIMGHeader ), 1, p_FH );
+	Endian::Fix( header.version ); Endian::Fix( header.checksum ); Endian::Fix( header.width ); Endian::Fix( header.height );
+	Endian::Fix( header.bit_depth ); Endian::Fix( header.clut_bit_depth ); Endian::Fix( header.original_width );
+	Endian::Fix( header.original_height ); Endian::Fix( header.palette_data_size );	// PS3: PC data is little-endian
 		
 	// Bits per texel and palette size.
 	switch( header.bit_depth )
@@ -355,6 +359,7 @@ sTexture *LoadTexture( const char *p_filename )
 		p_clut = (D3DCOLOR *)malloc(header.palette_data_size);
 		int len	= File::Read( p_clut, header.palette_data_size, 1, p_FH );
 		Dbg_MsgAssert( len == header.palette_data_size, ( "Couldn't read clut from texture file %s", p_filename ));
+		Endian::Fix32Array( p_clut, header.palette_data_size / 4 );	// PS3: host-order CLUT
 	}
 
 	// Textures of width 512 and above will not have been resized. This means they cannot be in a swizzled format.
@@ -437,6 +442,9 @@ sTexture *LoadTexture( const char *p_filename )
 
 		char* p_src = (char*)malloc( num_bytes );
 		File::Read( p_src, num_bytes, 1, p_FH );
+		// PS3: 16/32-bit texels to host order (P8 indices are bytes).
+		if( src_bpp == 4 ) Endian::Fix32Array( p_src, num_bytes / 4 );
+		else if( src_bpp == 2 ) Endian::Fix16Array( p_src, num_bytes / 2 );
 
 		char* p_packed;
 		bool  free_packed = false;
@@ -454,7 +462,7 @@ sTexture *LoadTexture( const char *p_filename )
 		char* p_linear = (char*)malloc( base_width * base_height * 4 );
 		if( had_clut_depth )
 		{
-			DwordizeTexelData( (int)p_linear, (int)p_packed, base_width * base_height, (int)p_clut );
+			DwordizeTexelData((intptr_t)p_linear, (intptr_t)p_packed, base_width * base_height, (intptr_t)p_clut );
 		}
 		else if( header.bit_depth == 16 )
 		{

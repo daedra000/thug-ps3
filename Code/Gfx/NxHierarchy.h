@@ -50,6 +50,10 @@ protected:
 	Mth::Matrix			m_setup_matrix;		// Initial local to parent matrix
 };
 
+#ifdef __PLAT_PS3__
+static_assert( sizeof( CHierarchyObject ) == 80, "CHierarchyObject is read straight from PC scene files" );
+#endif
+
 /*****************************************************************************
 **								Inline Functions							**
 *****************************************************************************/
