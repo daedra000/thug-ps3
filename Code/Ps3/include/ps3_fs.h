@@ -30,8 +30,10 @@ namespace Ps3Fs
 
 	bool Exists(const char* absPath, bool* isDir = 0, unsigned long long* size = 0);
 
-	// Forget cached directory listings (after creating or deleting files).
+	// Forget cached directory listings: all of them, or the one holding absPath (after
+	// creating or deleting it). A name missing from a listing over 2 s old re-reads it anyway.
 	void InvalidateCache();
+	void InvalidateParent(const char* absPath);
 
 	// The names in a directory (no "." or ".."). False, with nothing listed, when the
 	// directory doesn't exist or can't be opened. Never loops forever: it stops at the

@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <string.h>
-#include <sys/mutex.h>
+#include <lv2/mutex.h>
 #include <ps3_platform.h>
 
 extern char* _mem_start;	// the manager's block (Sys/Mem/memman.cpp)
@@ -29,7 +29,9 @@ extern char* _mem_end;
 
 namespace Ps3Mem
 {
-	static sys_mutex_t s_lock;
+	// A lightweight mutex: no system call unless another thread holds it (every new/delete
+	// on the game thread takes it).
+	static sys_lwmutex_t s_lock;
 	static volatile bool s_lockReady;
 
 	void Lock()
@@ -37,23 +39,21 @@ namespace Ps3Mem
 		if (!s_lockReady)
 		{
 			// The first allocation is made by a static constructor, before any thread.
-			sys_mutex_attr_t attr;
+			sys_lwmutex_attr_t attr;
 			memset(&attr, 0, sizeof(attr));
-			attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
-			attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
-			attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
-			attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
+			attr.attr_protocol = SYS_LWMUTEX_PROTOCOL_PRIO;
+			attr.attr_recursive = SYS_LWMUTEX_ATTR_RECURSIVE;
 			strcpy(attr.name, "thugmem");
-			if (sysMutexCreate(&s_lock, &attr) != 0)
+			if (sysLwMutexCreate(&s_lock, &attr) != 0)
 				Ps3Platform::Trace("[mem] couldn't create the memory manager lock");
 			s_lockReady = true;
 		}
-		sysMutexLock(s_lock, 0);
+		sysLwMutexLock(&s_lock, 0);
 	}
 
 	void Unlock()
 	{
-		sysMutexUnlock(s_lock);
+		sysLwMutexUnlock(&s_lock);
 	}
 }
 
@@ -67,13 +67,17 @@ namespace
 	void* Allocate(size_t size, bool nothrow)
 	{
 		if (size == 0) size = 1;
-		void* p = Ps3Platform::OnGameThread() ? Mem::Manager::sHandle().New(size, !nothrow) : malloc(size);
-		if (!p && !nothrow)
+		for (;;)
 		{
+			void* p = Ps3Platform::OnGameThread() ? Mem::Manager::sHandle().New(size, !nothrow) : malloc(size);
+			if (p) return p;
+			// As the standard asks: give an installed new_handler the chance to free memory.
+			std::new_handler handler = std::get_new_handler();
+			if (handler) { handler(); continue; }
+			if (nothrow) return NULL;
 			Ps3Platform::Trace("[mem] operator new: out of memory (%llu bytes)", (unsigned long long)size);
 			throw std::bad_alloc();
 		}
-		return p;
 	}
 
 	void Release(void* p)

@@ -28,6 +28,23 @@ extern "C"
 	void __real_free(void* p);
 }
 
+// The boot trail files: the first write of a run truncates each (the game's memory manager
+// may write before main(), so main() can't simply delete last run's).
+extern "C" s32 Ps3TrailOpen(int which, s32* fd)
+{
+	static const char* paths[2] = { PS3_USRDIR "/thug-ps3-boot.txt", "/dev_hdd0/tmp/thug-ps3-boot.txt" };
+	static volatile bool started[2];
+	if (which < 0 || which > 1) return -1;
+	s32 flags = SYS_O_WRONLY | SYS_O_CREAT | (started[which] ? SYS_O_APPEND : SYS_O_TRUNC);
+	s32 r = sysFsOpen(paths[which], flags, fd, NULL, 0);
+	if (r == 0 && !started[which])
+	{
+		started[which] = true;
+		sysFsChmod(paths[which], 0100666);	// readable over FTP
+	}
+	return r;
+}
+
 namespace
 {
 	volatile bool s_noThreads;
@@ -66,11 +83,10 @@ namespace
 
 	void Trail(const char* text, size_t len)
 	{
-		static const char* paths[2] = { PS3_USRDIR "/thug-ps3-boot.txt", "/dev_hdd0/tmp/thug-ps3-boot.txt" };
 		for (int i = 0; i < 2; ++i)
 		{
 			s32 fd;
-			if (sysFsOpen(paths[i], SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, NULL, 0) != 0) continue;
+			if (Ps3TrailOpen(i, &fd) != 0) continue;
 			u64 put;
 			sysFsWrite(fd, text, len, &put);
 			sysLv2FsFsync(fd);
@@ -96,7 +112,7 @@ namespace
 	}
 
 	volatile bool s_allocTrace;
-	volatile int s_inAllocTrace;
+	volatile int s_inAllocTrace;	// (process-wide: another thread's line may be skipped; diagnostics only)
 
 	// "[alloc] realloc 0x4080 96 -> 0x40a0" straight to the log, while tracing.
 	void TraceAlloc(const char* fn, const void* in, size_t size, const void* out, bool before)

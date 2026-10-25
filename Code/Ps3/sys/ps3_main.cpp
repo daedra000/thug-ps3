@@ -32,23 +32,24 @@ namespace Audio { void Shutdown(bool wait); }	// Code/Ps3/audio/ps3_audio.cpp
 // how far start-up got. (A priority-101 static constructor wrote it from even earlier,
 // but builds with it never reached main() on a console: it ran before the C library
 // was set up.)
-static void BootMarkTo(const char* path, const char* what)
+extern "C" s32 Ps3TrailOpen(int which, s32* fd);	// ps3_diag.cpp: truncates on a run's first write
+
+static void BootMarkTo(int which, const char* what)
 {
 	s32 fd;
-	if (sysFsOpen(path, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, NULL, 0) != 0)
+	if (Ps3TrailOpen(which, &fd) != 0)
 		return;
 	u64 put;
 	sysFsWrite(fd, what, strlen(what), &put);
 	sysFsWrite(fd, "\n", 1, &put);
 	sysLv2FsFsync(fd);	// on disc even if the console is switched off next
 	sysFsClose(fd);
-	sysFsChmod(path, 0100666);	// readable over FTP
 }
 
 static void BootMark(const char* what)
 {
-	BootMarkTo(PS3_USRDIR "/thug-ps3-boot.txt", what);
-	BootMarkTo("/dev_hdd0/tmp/thug-ps3-boot.txt", what);
+	BootMarkTo(0, what);	// USRDIR
+	BootMarkTo(1, what);	// /dev_hdd0/tmp
 }
 
 
@@ -264,8 +265,6 @@ void Init(int argc, char** argv)
 	// Unbuffered from the first line: nothing is lost if the next instruction crashes.
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
-	sysFsUnlink(PS3_USRDIR "/thug-ps3-boot.txt");
-	sysFsUnlink("/dev_hdd0/tmp/thug-ps3-boot.txt");
 	BootMark("MAIN STARTED");
 	fprintf(stderr, "MAIN STARTED\n");
 	std::set_terminate(OnTerminate);

@@ -250,6 +250,13 @@ static RsxTexture* RenderTargetTexture(IDirect3DTexture9* t, RsxTexture* r);
 static RsxTexture* Texture(IDirect3DTexture9* t)
 {
 	RsxTexture* r = (RsxTexture*)t->m_backend;
+	if (r && r->valid && r->renderTarget && t->m_dirty)
+	{
+		// Its pixels live in RSX memory, drawn by the GPU; the CPU-side copy a LockRect
+		// changed isn't uploaded over them (no read-back either). Say so once.
+		LogLimited("rtlock", 1, "a render-target texture was locked and written by the CPU: not shown");
+		t->m_dirty = false;
+	}
 	if (r && r->valid && (!t->m_dirty || r->renderTarget)) return r;
 	if (!r) { r = new RsxTexture; memset(r, 0, sizeof(*r)); t->m_backend = r; }
 	if (IsRenderTarget(t)) return RenderTargetTexture(t, r);
@@ -1147,8 +1154,22 @@ static void SetSurface(const SurfaceDesc& d)
 	}
 	sf.depthFormat = GCM_SURFACE_ZETA_Z24S8;
 	sf.depthLocation = GCM_LOCATION_RSX;
-	sf.depthOffset = d.hasDepth ? d.depthOffset : 0;
-	sf.depthPitch = d.hasDepth ? d.depthPitch : 64;
+	if (d.hasDepth)
+	{
+		sf.depthOffset = d.depthOffset;
+		sf.depthPitch = d.depthPitch;
+	}
+	else
+	{
+		// No depth target: depth testing and writes are off (ApplyState), but the surface
+		// still names one, so point it at real memory (the display's depth buffer) rather
+		// than offset 0, which is a colour buffer.
+		SurfaceDesc disp;
+		memset(&disp, 0, sizeof(disp));
+		DisplaySurface(&disp);
+		sf.depthOffset = disp.depthOffset;
+		sf.depthPitch = disp.depthPitch;
+	}
 	sf.type = GCM_SURFACE_TYPE_LINEAR;
 	sf.antiAlias = GCM_SURFACE_CENTER_1;
 	sf.width = d.width;
@@ -1320,7 +1341,14 @@ void ShaderReleased(IDirect3DPixelShader9* ps)
 		char key[48];
 		snprintf(key, sizeof(key), "ps:%p:%d", (void*)ps, fog);
 		std::map<std::string, FpEntry*>::iterator it = s_fps.find(key);
-		if (it != s_fps.end()) s_fps.erase(it);	// (the entry's RSX copy is kept: it may still be in use)
+		if (it == s_fps.end()) continue;
+		FpEntry* e = it->second;
+		s_fps.erase(it);
+		if (e)
+		{
+			DeferFree(e->local);	// the RSX may still run it: freed once those frames are done
+			delete e;
+		}
 	}
 }
 

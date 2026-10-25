@@ -342,7 +342,7 @@ void Present(IDirect3DDevice9*)
 			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced);
 }
 
-void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
+void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
 {
 	if (!s_ready) return;
 	u32 mask = 0;
@@ -358,13 +358,31 @@ void Clear(IDirect3DDevice9* dev, DWORD, const D3DRECT*, DWORD flags, D3DCOLOR c
 	if (!mask) return;
 	const D3DVIEWPORT9& vp = dev->m_viewport;
 	CmdReserve(64);
-	rsxSetScissor(s_ctx, (u16)vp.X, (u16)vp.Y, (u16)vp.Width, (u16)vp.Height);
 	rsxSetColorMask(s_ctx, GCM_COLOR_MASK_R | GCM_COLOR_MASK_G | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A);
 	rsxSetDepthWriteEnable(s_ctx, GCM_TRUE);
 	rsxSetClearColor(s_ctx, color);	// D3DCOLOR is ARGB, as the RSX wants
+	if (z < 0.0f) z = 0.0f;
+	if (z > 1.0f) z = 1.0f;
 	u32 depth = (u32)(z * 16777215.0f);
 	rsxSetClearDepthStencil(s_ctx, (depth << 8) | (stencil & 0xff));
-	rsxClearSurface(s_ctx, mask);
+	// D3D clears the viewport, or each of the given rectangles within it.
+	const s32 vx0 = (s32)vp.X, vy0 = (s32)vp.Y, vx1 = vx0 + (s32)vp.Width, vy1 = vy0 + (s32)vp.Height;
+	const DWORD n = (count && rects) ? count : 1;
+	for (DWORD i = 0; i < n; ++i)
+	{
+		s32 x0 = vx0, y0 = vy0, x1 = vx1, y1 = vy1;
+		if (count && rects)
+		{
+			if (rects[i].x1 > x0) x0 = rects[i].x1;
+			if (rects[i].y1 > y0) y0 = rects[i].y1;
+			if (rects[i].x2 < x1) x1 = rects[i].x2;
+			if (rects[i].y2 < y1) y1 = rects[i].y2;
+		}
+		if (x1 <= x0 || y1 <= y0) continue;
+		CmdReserve(32);
+		rsxSetScissor(s_ctx, (u16)x0, (u16)y0, (u16)(x1 - x0), (u16)(y1 - y0));
+		rsxClearSurface(s_ctx, mask);
+	}
 	InvalidateDrawState();	// scissor, colour mask and depth writes changed
 }
 

@@ -12,21 +12,30 @@
 
 #include <lv2/sysfs.h>
 #include <sys/mutex.h>
+#include <sys/systime.h>
 
 namespace Ps3Fs
 {
 
 static char s_appDir[512] = PS3_USRDIR;
 
-// Directory listings, keyed by absolute directory path. Game data never changes
-// while the game runs, so a listing is read once.
-static std::map<std::string, std::vector<std::string> >* s_dirCache;
+// Directory listings, keyed by absolute directory path, read once. A name that isn't in a
+// listing more than 2 s old re-reads it (the game, or newlib's fopen, may have created it).
+struct CachedListing
+{
+	std::vector<std::string> names;
+	u64 time;
+};
+static std::map<std::string, CachedListing>* s_dirCache;
+// Directories already resolved: lower-case path (real parent + name as asked) -> real path.
+// Saves a stat per path component on every open.
+static std::map<std::string, std::string>* s_resolvedDirs;
 static sys_mutex_t s_mutex;
-static bool s_mutexReady;
+static volatile bool s_mutexReady;
 
 static void Lock()
 {
-	if (!s_mutexReady)
+	if (!s_mutexReady)	// normally created by SetAppPath, before any thread
 	{
 		sys_mutex_attr_t attr;
 		memset(&attr, 0, sizeof(attr));
@@ -48,6 +57,8 @@ static void Unlock()
 
 void SetAppPath(const char* argv0)
 {
+	Lock();		// creates the lock here, on the main thread, before any other thread
+	Unlock();
 	if (!argv0 || argv0[0] != '/')
 		return;
 	snprintf(s_appDir, sizeof(s_appDir), "%s", argv0);
@@ -86,21 +97,62 @@ void InvalidateCache()
 	Lock();
 	if (s_dirCache)
 		s_dirCache->clear();
+	if (s_resolvedDirs)
+		s_resolvedDirs->clear();
 	Unlock();
 }
 
-static const std::vector<std::string>& Listing(const std::string& dir)
+void InvalidateParent(const char* absPath)
+{
+	if (!absPath) { InvalidateCache(); return; }
+	std::string dir(absPath);
+	size_t slash = dir.rfind('/');
+	if (slash == std::string::npos) return;
+	dir.erase(slash ? slash : 1);
+	Lock();
+	if (s_dirCache)
+		s_dirCache->erase(dir);
+	Unlock();
+}
+
+static std::string Lower(const std::string& s)
+{
+	std::string r(s);
+	for (size_t i = 0; i < r.size(); ++i)
+		if (r[i] >= 'A' && r[i] <= 'Z') r[i] = (char)(r[i] - 'A' + 'a');
+	return r;
+}
+
+static const std::vector<std::string>& Listing(const std::string& dir, bool refreshIfOld)
 {
 	if (!s_dirCache)
-		s_dirCache = new std::map<std::string, std::vector<std::string> >();
+		s_dirCache = new std::map<std::string, CachedListing>();
 
-	std::map<std::string, std::vector<std::string> >::iterator it = s_dirCache->find(dir);
+	const u64 now = sysGetSystemTime();
+	std::map<std::string, CachedListing>::iterator it = s_dirCache->find(dir);
 	if (it != s_dirCache->end())
-		return it->second;
+	{
+		if (!refreshIfOld || now - it->second.time < 2000000)
+			return it->second.names;
+	}
+	CachedListing& l = (*s_dirCache)[dir];
+	ListDirectory(dir.c_str(), l.names);
+	l.time = now;
+	return l.names;
+}
 
-	std::vector<std::string>& names = (*s_dirCache)[dir];
-	ListDirectory(dir.c_str(), names);
-	return names;
+static bool FindInListing(const std::string& dir, const std::string& name, std::string& real, bool refreshIfOld)
+{
+	const std::vector<std::string>& names = Listing(dir, refreshIfOld);
+	for (size_t k = 0; k < names.size(); ++k)
+	{
+		if (!strcasecmp(names[k].c_str(), name.c_str()))
+		{
+			real = dir + "/" + names[k];
+			return true;
+		}
+	}
+	return false;
 }
 
 bool ListDirectory(const char* absDir, std::vector<std::string>& names)
@@ -190,21 +242,33 @@ bool ResolvePath(const char* path, char* out, size_t outSize)
 		std::string next = cur + "/" + parts[n];
 		// Mount points (/dev_hdd0, /dev_usb000...) are exact; so is anything once
 		// a component is missing.
-		if (!missing && n > 0 && !Exists(next.c_str()))
+		if (!missing && n > 0)
 		{
-			const std::vector<std::string>& names = Listing(cur);
-			bool found = false;
-			for (size_t k = 0; k < names.size(); ++k)
+			const bool last = n + 1 == parts.size();
+			std::string key;
+			if (!last)
 			{
-				if (!strcasecmp(names[k].c_str(), parts[n].c_str()))
+				if (!s_resolvedDirs) s_resolvedDirs = new std::map<std::string, std::string>();
+				key = Lower(next);
+				std::map<std::string, std::string>::iterator hit = s_resolvedDirs->find(key);
+				if (hit != s_resolvedDirs->end())
 				{
-					next = cur + "/" + names[k];
-					found = true;
-					break;
+					cur = hit->second;
+					continue;
 				}
+			}
+			bool found = Exists(next.c_str());
+			if (!found)
+			{
+				std::string real;
+				// Cached listing first; if it's old and lacks the name, read it again.
+				found = FindInListing(cur, parts[n], real, false) || FindInListing(cur, parts[n], real, true);
+				if (found) next = real;
 			}
 			if (!found)
 				missing = true;
+			else if (!last)
+				(*s_resolvedDirs)[key] = next;
 		}
 		cur = next;
 	}

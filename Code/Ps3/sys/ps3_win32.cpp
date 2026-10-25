@@ -50,7 +50,12 @@ namespace
 		volatile bool done;
 		DWORD exitCode;
 		bool joined;
+		bool closed;		// CloseHandle ran while the thread was still running: it frees itself
 	};
+
+	// Guards ThreadHandle::done/closed between a finishing thread and CloseHandle.
+	sys_mutex_t s_threadLock;
+	bool s_threadLockReady;
 
 	struct FileHandle : Handle
 	{
@@ -58,7 +63,7 @@ namespace
 		bool writable;
 	};
 
-	DWORD s_lastError = 0;
+	__thread DWORD s_lastError = 0;	// per thread, as on Win32
 
 	void MakeMutex(sys_mutex_t* m, bool recursive, const char* name)
 	{
@@ -69,7 +74,8 @@ namespace
 		attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
 		attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
 		strncpy(attr.name, name, sizeof(attr.name) - 1);
-		sysMutexCreate(m, &attr);
+		if (sysMutexCreate(m, &attr) != 0)
+			printf("[win32] couldn't create mutex '%s'\n", name);
 	}
 
 	// Win32 milliseconds -> lv2 microseconds (0 = wait forever on lv2).
@@ -144,7 +150,8 @@ HANDLE CreateEventA(LPSECURITY_ATTRIBUTES, BOOL manualReset, BOOL initialState, 
 	memset(&attr, 0, sizeof(attr));
 	attr.attr_pshared = SYS_COND_ATTR_PSHARED;
 	strcpy(attr.name, "w32evt");
-	sysCondCreate(&h->cond, h->mutex, &attr);
+	if (sysCondCreate(&h->cond, h->mutex, &attr) != 0)
+		printf("[win32] couldn't create an event\n");
 	return h;
 }
 
@@ -173,8 +180,13 @@ static void ThreadTrampoline(void* arg)
 {
 	ThreadHandle* h = (ThreadHandle*)arg;
 	Ps3Platform::AttachThreadLog();
-	h->exitCode = h->start(h->param);
+	DWORD code = h->start(h->param);
+	sysMutexLock(s_threadLock, 0);
+	h->exitCode = code;
 	h->done = true;
+	const bool closed = h->closed;
+	sysMutexUnlock(s_threadLock);
+	if (closed) delete h;	// nobody holds the handle any more (and the thread was detached)
 	sysThreadExit(0);
 }
 
@@ -185,8 +197,14 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES, size_t stackSize, LPTHREAD_START_ROUT
 		printf("[diag] CreateThread refused (nothreads.txt), entry %p\n", (void*)start);
 		return NULL;
 	}
+	if (!s_threadLockReady)
+	{
+		MakeMutex(&s_threadLock, false, "w32thr");
+		s_threadLockReady = true;
+	}
 	ThreadHandle* h = new ThreadHandle;
 	h->kind = kThread;
+	h->closed = false;
 	h->start = start;
 	h->param = param;
 	h->done = false;
@@ -282,8 +300,22 @@ BOOL CloseHandle(HANDLE hh)
 	case kThread:
 	{
 		ThreadHandle* h = (ThreadHandle*)base;
-		if (!h->joined) { u64 rv; sysThreadJoin(h->id, &rv); }	// lv2 needs joinable threads joined
-		delete h;
+		// Win32 just drops the handle; the thread runs on. A finished thread is joined (lv2
+		// needs joinable threads joined); a running one is detached and frees its handle.
+		sysMutexLock(s_threadLock, 0);
+		if (h->done)
+		{
+			sysMutexUnlock(s_threadLock);
+			if (!h->joined) { u64 rv; sysThreadJoin(h->id, &rv); }
+			delete h;
+		}
+		else
+		{
+			const sys_ppu_thread_t id = h->id;
+			h->closed = true;
+			sysMutexUnlock(s_threadLock);
+			sysThreadDetach(id);
+		}
 		return TRUE;
 	}
 	case kFile:
@@ -471,7 +503,7 @@ HANDLE CreateFileA(LPCSTR name, DWORD access, DWORD, LPSECURITY_ATTRIBUTES, DWOR
 		return INVALID_HANDLE_VALUE;
 	}
 	if (flags & SYS_O_CREAT)
-		Ps3Fs::InvalidateCache();
+		Ps3Fs::InvalidateParent(path);
 
 	FileHandle* h = new FileHandle;
 	h->kind = kFile;
@@ -700,6 +732,8 @@ HANDLE FindFirstFileA(LPCSTR pattern, LPWIN32_FIND_DATAA data)
 	if (!Ps3Fs::ResolvePath(dir.c_str(), real, sizeof(real)))
 		return INVALID_HANDLE_VALUE;
 
+	// Unlike Win32, "." and ".." aren't returned: the game's only caller (the save list,
+	// Sys/MemCard/Win32/p_McMan.cpp) would show them as saves.
 	FindHandle* f = new FindHandle;
 	f->kind = kFind;
 	f->dir = real;
@@ -739,7 +773,7 @@ BOOL CreateDirectoryA(LPCSTR name, LPSECURITY_ATTRIBUTES)
 	char path[1024];
 	if (!Ps3Fs::ResolvePath(name, path, sizeof(path))) return FALSE;
 	BOOL ok = sysFsMkdir(path, 0755) == 0;
-	Ps3Fs::InvalidateCache();
+	Ps3Fs::InvalidateParent(path);
 	return ok;
 }
 
@@ -748,7 +782,7 @@ BOOL DeleteFileA(LPCSTR name)
 	char path[1024];
 	if (!Ps3Fs::ResolvePath(name, path, sizeof(path))) return FALSE;
 	BOOL ok = sysFsUnlink(path) == 0;
-	Ps3Fs::InvalidateCache();
+	Ps3Fs::InvalidateParent(path);
 	return ok;
 }
 
