@@ -44,6 +44,7 @@
 #include <gel/music/music.h>
 
 // script stuff
+#include <core/endian.h>
 #include <gel/scripting/struct.h> 
 #include <gel/scripting/symboltable.h>
 
@@ -303,14 +304,14 @@ PreFile::PreFile(uint8 *p_file_buffer, bool useBottomUpHeap)
 	uint version;
 	NsDMA::toMRAM( &version, (uint32)mp_buffer + 4, 4 );
 #else
-	uint version = 	*((int *) (mp_buffer + 4));
+	uint version = 	Endian::ReadLe32(mp_buffer + 4);	// PC data is little-endian
 #endif		// __PRE_ARAM__
 	Dbg_MsgAssert(version == CURRENT_PRE_VERSION,( "PRE file version (%x) not current (%x)",version,CURRENT_PRE_VERSION));
 	#endif
 #ifdef __PRE_ARAM__
 	NsDMA::toMRAM( &m_numEntries, (uint32)mp_buffer + 8, 4 );
 #else
-	m_numEntries = *((int *)(mp_buffer + 8));
+	m_numEntries = Endian::ReadLeS32(mp_buffer + 8);
 #endif		// __PRE_ARAM__
 
 	uint8 *pEntry = mp_buffer + 12;
@@ -324,9 +325,9 @@ PreFile::PreFile(uint8 *p_file_buffer, bool useBottomUpHeap)
 		NsDMA::toMRAM( &compressed_data_size, (uint32)pEntry + 4, 4 );
 		NsDMA::toMRAM( &text_size, (uint32)pEntry + 8, 2 );
 #else
-		int data_size 				= *((int *) pEntry);
-		int compressed_data_size 	= *((int *) (pEntry + 4));
-		int text_size	 			= *((short *) (pEntry + 8));
+		int data_size 				= Endian::ReadLeS32(pEntry);
+		int compressed_data_size 	= Endian::ReadLeS32(pEntry + 4);
+		int text_size	 			= Endian::ReadLeS16(pEntry + 8);
 #endif		// __PRE_ARAM__
 		int actual_data_size = (compressed_data_size != 0) ? compressed_data_size : data_size;
 			
@@ -355,7 +356,7 @@ PreFile::PreFile(uint8 *p_file_buffer, bool useBottomUpHeap)
 
 			// lwss add - this is just to ensure that the files in the pakfile aren't OOB'ing. Have some issues in this area....
 			uint8* compressEnd = (pCompressedData + actual_data_size);
-			uint8* fileEnd = (p_file_buffer + *((int*)(mp_buffer)));
+			uint8* fileEnd = (p_file_buffer + Endian::ReadLeS32(mp_buffer));
 			Dbg_Assert((int)compressEnd <= (int)fileEnd);
 			// lwss end
 			
@@ -993,7 +994,7 @@ void PreMgr::loadPre(const char *pFilename, bool async, bool dont_assert, bool u
 		//uint8 *pFile = new uint8[file_size];
 			File::Read(pFile, 1, file_size, fp);
 
-			int read_file_size = *((int *) pFile);
+			int read_file_size = Endian::ReadLeS32(pFile);
 			Dbg_MsgAssert(file_size == read_file_size,( "%s has incorrect file size: %d vs. expected %d\n", fullname, file_size, read_file_size));
 			if (Config::CD())
 			{

@@ -59,6 +59,14 @@ for (kind, sym), count in sorted(undefined.items(), key=lambda kv: -kv[1]):
     print(f'::error title=link::{kind}: {sym} ({count}x)')
     budget -= 1
 
+# Nothing recognisable (e.g. make stopped before compiling): show the end of the log.
+if not errors and not undefined:
+    with open(log_path, errors='replace') as f:
+        tail = [l.rstrip('\n') for l in f.readlines()[-40:]]
+    for i, l in enumerate(tail):
+        l = l.replace('%', '%25').replace('\r', '')
+        print(f'::error title=log tail {i:02d}::{l if l.strip() else "(blank)"}')
+
 if errors or undefined:
     with open(os.environ.get('GITHUB_STEP_SUMMARY', os.devnull), 'a') as s:
         s.write(f'### PS3 build: {len(errors)} compile errors, {len(undefined)} link problems\n\n')
