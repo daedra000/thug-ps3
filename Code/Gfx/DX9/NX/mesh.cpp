@@ -2036,7 +2036,8 @@ void sMesh::Initialize(int				num_vertices,
 
 	if (wibble_ptr_thing)
 	{
-		wibble_ptr_thing[2] += (vertex_size * vertices_for_this_mesh + 31) & 0xFFFFFFE0;
+		// ((int*)p_meat)[2] on 32-bit Windows is ->length; with LP64 pointers [2] is streamOffset.
+		((VertexMysteryMeat*)wibble_ptr_thing)->length += (vertex_size * vertices_for_this_mesh + 31) & 0xFFFFFFE0;
 	}
 
 	BYTE* p_byte = NULL;

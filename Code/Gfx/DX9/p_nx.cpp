@@ -33,6 +33,10 @@
 #endif
 
 #include	<sys/file/filesys.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+extern int g_ps3SceneTrace;	// p_nxsector.cpp
+#endif
 
 #include	"gfx\camera.h"
 #include	"gfx\gfxman.h"
@@ -810,12 +814,18 @@ CScene *CEngine::s_plat_load_scene( const char *p_name, CTexDict *p_tex_dict, bo
 	File::Read( &mesh_version, sizeof( uint32 ), 1, p_file ); Endian::Fix( mesh_version );
 	File::Read( &vert_version, sizeof( uint32 ), 1, p_file ); Endian::Fix( vert_version );
 
+#ifdef __PLAT_PS3__
+	if (g_ps3SceneTrace > 0) Ps3Platform::Trace("[scene] %s: versions %u/%u/%u, loading materials", p_name, mat_version, mesh_version, vert_version);
+#endif
 	// Import materials (they will now be associated at the engine-level with this scene).
 	p_engine_scene->pMaterialTable = NxXbox::LoadMaterials( p_file, p_tex_dict->GetTexLookup());
 
 	// Read number of sectors.
 	int num_sectors;
 	File::Read( &num_sectors, sizeof( int ), 1, p_file ); Endian::Fix( num_sectors );
+#ifdef __PLAT_PS3__
+	if (g_ps3SceneTrace > 0) Ps3Platform::Trace("[scene] %s: materials loaded, %d sectors", p_name, num_sectors);
+#endif
 
 	// Figure optimum hash table lookup size.
 	uint32 optimal_table_size	= num_sectors * 2;
@@ -877,6 +887,10 @@ CScene *CEngine::s_plat_load_scene( const char *p_name, CTexDict *p_tex_dict, bo
 	}
 	
 	File::Close( p_file );
+#ifdef __PLAT_PS3__
+	if (g_ps3SceneTrace > 0) Ps3Platform::Trace("[scene] %s: done, %d hierarchy objects", p_name, num_hierarchy_objects);
+	if (g_ps3SceneTrace > 0) --g_ps3SceneTrace;
+#endif
 
 	return new_scene;
 }

@@ -2,6 +2,13 @@
 // p_NxSector.cpp
 
 #include <core/endian.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+int g_ps3SceneTrace = 4;	// scene/sector loads to trace in the log (p_nx.cpp counts them down)
+#define PS3_SCENE_TRACE(...) do { if (g_ps3SceneTrace > 0) Ps3Platform::Trace(__VA_ARGS__); } while (0)
+#else
+#define PS3_SCENE_TRACE(...) do { } while (0)
+#endif
 #include	<sys/file/filesys.h>
 
 #include 	"gfx/DX9/p_NxSector.h"
@@ -80,6 +87,8 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 	// Read number of meshes.
 	Read(&p_geom->m_num_mesh, sizeof(uint), 1, p_file, is_file);
 
+	PS3_SCENE_TRACE("[scene] %s: sector 0x%08x, bone %d, flags 0x%x, %u meshes", debug_name ? debug_name : "?", sector_checksum, bone_idx, (unsigned)m_flags, (unsigned)p_geom->m_num_mesh);
+
 	// Read bounding box.
 	float bbox[6];
 	Read(&bbox[0], sizeof(float), 6, p_file, is_file);
@@ -118,6 +127,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 	// Read num vertices.
 	int num_vertices;
 	Read(&num_vertices, sizeof(int), 1, p_file, is_file);
+	PS3_SCENE_TRACE("[scene]   %d vertices", num_vertices);
 
 	// Read vertex data stride.
 	int vertex_data_stride;
@@ -213,6 +223,14 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 
 		// How many levels of LOD indices? Should be at least 1!
 		Read(&num_lod_index_levels, sizeof(unsigned int), 1, p_file, is_file);
+		PS3_SCENE_TRACE("[scene]   mesh %u: material 0x%08x, flags 0x%x, %u LOD levels", m, material_checksum, flags, num_lod_index_levels);
+#ifdef __PLAT_PS3__
+		if (num_lod_index_levels > 8)
+		{
+			Ps3Platform::Trace("[scene] %s mesh %u: %u LOD levels (max 8): bad data, sector skipped", debug_name ? debug_name : "?", m, num_lod_index_levels);
+			return false;
+		}
+#endif
 
 		// Can have up to 8 levels of LOD indices.
 		uint16* p_indices[8] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
@@ -232,6 +250,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 
 		// Set the load order of this mesh.
 		p_mesh->m_load_order = m;
+		PS3_SCENE_TRACE("[scene]   mesh %u: %d indices, initialising", m, num_indices[0]);
 
 		// Set up the mesh.
 		p_mesh->Initialize(num_vertices,
@@ -254,6 +273,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 			debug_name
 		);
 
+		PS3_SCENE_TRACE("[scene]   mesh %u done", m);
 		// Set the bounding data (sphere and box) for the mesh.
 		p_mesh->SetBoundingData(cen, rad, inf, sup);
 
