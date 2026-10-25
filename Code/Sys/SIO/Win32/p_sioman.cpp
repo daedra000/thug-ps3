@@ -23,7 +23,10 @@
 **							  	  Includes									**
 *****************************************************************************/
 
-//#include <xtl.h>
+//#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
+#include <xtl.h>
 
 #include <core/defines.h>
 
@@ -149,6 +152,9 @@ Manager::Manager ( void )
     
 	// Pause briefly here to give the system time to enumerate the attached devices.
 	Sleep( 1000 );
+#ifdef __PLAT_PS3__
+	Ps3Platform::Step("SIO: creating pad devices");
+#endif
 
     index = 0;
     for( i = 0; i < SIO::vMAX_PORT; i++ )
@@ -165,7 +171,13 @@ Manager::Manager ( void )
     
 	if( !Pcm::NoMusicPlease())
 	{
+#ifdef __PLAT_PS3__
+		Ps3Platform::Step("SIO: Pcm::Init");
+#endif
 		Pcm::Init();
+#ifdef __PLAT_PS3__
+		Ps3Platform::Step("SIO: Pcm::Init done");
+#endif
 	}
 
 	Dbg_Message( "Initialized Controller lib\n" );

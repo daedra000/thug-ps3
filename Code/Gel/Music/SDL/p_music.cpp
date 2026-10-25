@@ -14,6 +14,9 @@
 #include <Gel/SoundFX/SDL/Mixer.h>
 
 #include <Sys/File/filesys.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 #include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
 #ifndef __PLAT_PS3__	// unused, and no std::thread on PS3
@@ -251,8 +254,14 @@ namespace Pcm
 		Audio::Init();
 
 		// Index music and streams
+#ifdef __PLAT_PS3__
+		Ps3Platform::Step("indexing music and streams");
+#endif
 		music_paths = Index(File::DataPath() / "music");
 		stream_paths = Index(File::DataPath() / "streams");
+#ifdef __PLAT_PS3__
+		printf("[music] %u music files, %u streams\n", (unsigned)music_paths.size(), (unsigned)stream_paths.size());
+#endif
 	}
 
 

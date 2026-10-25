@@ -624,13 +624,37 @@ int main ( sint argc, char** argv )
 								
 			Mem::PushMemProfile("System Singletons");
 			Spt::SingletonPtr< Obj::CTracker >	obj_tracker( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Obj::CTracker");
+#endif
 			Spt::SingletonPtr< Mlp::Manager >	mlp_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Mlp::Manager");
+#endif
 			Spt::SingletonPtr< Mdl::Manager >	mdl_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Mdl::Manager");
+#endif
 			Spt::SingletonPtr< SIO::Manager >	sio_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created SIO::Manager");
+#endif
 			Spt::SingletonPtr< Mc::Manager > 	mc_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Mc::Manager");
+#endif
 			Spt::SingletonPtr< Inp::Manager >	inp_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Inp::Manager");
+#endif
 			Spt::SingletonPtr< Gfx::Manager >	gfx_manager( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created Gfx::Manager");
+#endif
 			Spt::SingletonPtr< File::CAsyncFilePoll>	async_poll( true );
+#ifdef __PLAT_PS3__
+			Ps3Platform::Step("created File::CAsyncFilePoll");
+#endif
 			Mem::PopMemProfile(/*"System Singletons"*/);
 
 			DEBUG_FLASH(0x00007f7f);		// yellow
