@@ -8,7 +8,6 @@
 #include <string.h>
 #include <lv2/sysfs.h>
 #include "ps3_fs.h"
-#include "ps3_platform.h"
 
 namespace ps3stdfs
 {
@@ -118,14 +117,10 @@ namespace ps3stdfs
 
 			for (size_t i = 0; i < names.size(); ++i)
 			{
-				const bool tr = i < 12;	// the first few entries of each directory
-				if (tr) Ps3Platform::Trace("[stdfs] %u/%u: building path", (unsigned)i, (unsigned)names.size());
 				path child = path(real) / path(names[i]);
 				bool isDir = false;
 				Ps3Fs::Exists(child.string().c_str(), &isDir);
-				if (tr) Ps3Platform::Trace("[stdfs] push_back (size %u, capacity %u)", (unsigned)out.size(), (unsigned)out.capacity());
 				out.push_back(directory_entry(child, isDir));
-				if (tr) Ps3Platform::Trace("[stdfs] pushed");
 				if (recursive && isDir)
 					list(child, true, out, depth + 1);
 			}

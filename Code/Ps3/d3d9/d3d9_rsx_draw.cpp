@@ -260,14 +260,16 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	}
 
 	// Build the RSX layout in main memory, then one copy (scattered writes to RSX memory are slow).
-	std::vector<u8> staging(total);
+	// malloc, not new: a big temporary stays out of the game's heaps (ps3_new.cpp).
+	u8* staging = (u8*)malloc(total ? total : 1);
+	if (!staging) return NULL;
 	u32 at = 0;
 	for (u32 l = 0; l < levels; ++l)
 	{
 		u32 lw = w >> l ? w >> l : 1, lh = h >> l ? h >> l : 1;
 		const u8* src = t->LevelBits(l);
 		const u32 srcPitch = t->LevelPitch(l);
-		u8* dst = &staging[at];
+		u8* dst = staging + at;
 		if (fi.compressed)
 		{
 			u32 rowBytes = ((lw + 3) / 4) * fi.bpp, rows = (lh + 3) / 4;
@@ -287,7 +289,8 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		}
 		at += sizes[l];
 	}
-	memcpy(r->mem, &staging[0], total);
+	memcpy(r->mem, staging, total);
+	free(staging);
 
 	memset(&r->desc, 0, sizeof(r->desc));
 	r->desc.format = fi.gcm | ((swizzle || (fi.compressed && levels > 1)) ? GCM_TEXTURE_FORMAT_SWZ : GCM_TEXTURE_FORMAT_LIN);

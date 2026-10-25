@@ -604,7 +604,11 @@ static inline void operator delete[]   ( void* block ) ;
 //
 //
 //#else
-#ifndef __PLAT_NGC__
+// PS3: the replaceable forms are defined once for the whole program in
+// Code/Ps3/sys/ps3_new.cpp. MSVC ignores 'inline' on them (C4595) and replaces them
+// program-wide; GCC would keep them per file, and the sized deletes C++14 adds would
+// still go to free(), mixing two allocators.
+#if !defined(__PLAT_NGC__) && !defined(__PLAT_PS3__)
 /******************************************************************/
 /* Global new/delete operators                                    */
 /*                                                                */
@@ -738,7 +742,7 @@ inline void* 	operator new[]( size_t size, void* pLocation )
 #endif
 #endif
 
-#ifndef __PLAT_NGC__
+#if !defined(__PLAT_NGC__) && !defined(__PLAT_PS3__)
 /******************************************************************/
 /*                                                                */
 /*                                                                */
