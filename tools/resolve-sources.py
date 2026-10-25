@@ -24,6 +24,8 @@ pattern = re.compile(r'"\$\{SRC_DIR\}/([^"]+\.(?:cpp|c))"')
 seen = set()
 with open(os.path.join(root, 'cmake_files.cmake'), encoding='latin-1') as f:
     for line in f:
+        if line.lstrip().startswith('#'):
+            continue    # commented out in kisak's list
         for m in pattern.finditer(line):
             real = index.get(m.group(1).replace('\\', '/').lower())
             if real and real not in seen:

@@ -1,6 +1,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 // p_NxSector.cpp
 
+#include <core/endian.h>
 #include	<sys/file/filesys.h>
 
 #include 	"gfx/DX9/p_NxSector.h"
@@ -34,7 +35,10 @@ CXboxSector::CXboxSector()
 /*                                                                */
 /******************************************************************/
 // LWSS Add
-static void Read(void* outAddr, size_t size, size_t count, uint8_t*& pFP, bool is_file)
+// THUG PS3: `word` is the size of the elements being read (4 for floats, ints and
+// colours, 2 for uint16 arrays, 1 for bytes); the PC data is little-endian, so each
+// element is converted to host order (a no-op on PC).
+static void Read(void* outAddr, size_t size, size_t count, uint8_t*& pFP, bool is_file, int word = 4)
 {
 	if (is_file)
 	{
@@ -43,6 +47,14 @@ static void Read(void* outAddr, size_t size, size_t count, uint8_t*& pFP, bool i
 	else
 	{
 		MemoryRead(outAddr, size, count, pFP);
+	}
+	if (word == 4)
+	{
+		Endian::Fix32Array(outAddr, (size * count) / 4);
+	}
+	else if (word == 2)
+	{
+		Endian::Fix16Array(outAddr, (size * count) / 2);
 	}
 }
 
@@ -136,7 +148,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 	uint16* p_vertex_bone_indices = (m_flags & 0x10) ? new uint16[num_vertices * 4] : NULL;
 	if (p_vertex_bone_indices)
 	{
-		Read(p_vertex_bone_indices, sizeof(uint16) * 4, num_vertices, p_file, is_file);
+		Read(p_vertex_bone_indices, sizeof(uint16) * 4, num_vertices, p_file, is_file, 2);
 	}
 
 	// Grab a buffer for the raw vertex texture coordinate stream (if present), and read it.
@@ -164,7 +176,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 	char* p_vc_wibble_indices = (m_flags & 0x800) ? new char[num_vertices] : NULL;
 	if (p_vc_wibble_indices)
 	{
-		Read(p_vc_wibble_indices, sizeof(char), num_vertices, p_file, is_file);
+		Read(p_vc_wibble_indices, sizeof(char), num_vertices, p_file, is_file, 1);
 	}
 
 	// Remove TopDownHeap context.
@@ -172,7 +184,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 
 	for (uint m = 0; m < p_geom->m_num_mesh; ++m)
 	{
-		unsigned long	material_checksum;
+		uint32			material_checksum;	// was unsigned long: 8 bytes on LP64, but 4 in the file
 		unsigned int	flags, num_lod_index_levels;
 
 		NxXbox::sMesh* p_mesh = new NxXbox::sMesh;
@@ -197,7 +209,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 		}
 
 		// The material checksum for this mesh.
-		Read(&material_checksum, sizeof(unsigned long), 1, p_file, is_file);
+		Read(&material_checksum, sizeof(uint32), 1, p_file, is_file);
 
 		// How many levels of LOD indices? Should be at least 1!
 		Read(&num_lod_index_levels, sizeof(unsigned int), 1, p_file, is_file);
@@ -215,7 +227,7 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 			p_indices[lod_level] = new uint16[num_indices[lod_level]];
 			Mem::Manager::sHandle().PopContext();
 
-			Read(p_indices[lod_level], sizeof(uint16), num_indices[lod_level], p_file, is_file);
+			Read(p_indices[lod_level], sizeof(uint16), num_indices[lod_level], p_file, is_file, 2);
 		}
 
 		// Set the load order of this mesh.

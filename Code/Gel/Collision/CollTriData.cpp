@@ -22,6 +22,7 @@
 **							  	  Includes									**
 *****************************************************************************/
 
+#include <core/endian.h>
 #include <core/defines.h>
 
 #include <gel/collision/collision.h>
@@ -139,6 +140,104 @@ CCollObjTriData::~CCollObjTriData()
 /*                                                                */
 /******************************************************************/
 
+
+/******************************************************************/
+/* THUG PS3: collision files are little-endian (PC data) and are  */
+/* used in place, so convert one to host order right after it is  */
+/* loaded. The layout walk mirrors CScene::read_collision.        */
+/******************************************************************/
+
+void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
+{
+#ifndef __PLAT_NGC__
+	if (Endian::kHostIsLittle || !p_file)
+	{
+		return;
+	}
+
+	SReadHeader *p_header = (SReadHeader *) p_file;
+	// The version is a small number; still little-endian it reads as a huge one.
+	// Converted data is left alone, so loading the same file twice is fine.
+	if ((uint32) p_header->m_version < 0x10000)
+	{
+		return;
+	}
+	Endian::Fix32Array(p_header, sizeof(SReadHeader) / 4);
+
+	CCollObjTriData *p_objects = (CCollObjTriData *) (p_file + sizeof(SReadHeader));
+	int num_objects = p_header->m_num_objects;
+	for (int i = 0; i < num_objects; ++i)
+	{
+		CCollObjTriData &o = p_objects[i];
+		Endian::Fix(o.m_checksum);
+		Endian::Fix(o.m_Flags);
+		Endian::Fix(o.m_num_verts);
+		Endian::Fix(o.m_num_faces);
+		Endian::Fix(o.mp_faces.m_bits);
+		Endian::Fix32Array(&o.m_bbox, sizeof(Mth::CBBox) / 4);
+		Endian::Fix(o.mp_float_vert.m_bits);
+		Endian::Fix(o.mp_bsp_tree.m_bits);
+		Endian::Fix(o.mp_intensity.m_bits);
+		Endian::Fix(o.m_pad1);
+	}
+
+	uint8 *p_end = p_file + file_size;
+	uint8 *p_base_vert_addr = (uint8 *) (p_objects + num_objects);
+	p_base_vert_addr = (uint8 *) (((uintptr_t) (p_base_vert_addr + 15)) & ~(uintptr_t) 15);
+	uint8 *p_base_intensity_addr = p_base_vert_addr + (p_header->m_total_num_verts_large * GetVertElemSize() +
+													   p_header->m_total_num_verts_small * GetVertSmallElemSize());
+	uint8 *p_base_face_addr = p_base_intensity_addr + p_header->m_total_num_verts;
+	p_base_face_addr = (uint8 *) (((uintptr_t) (p_base_face_addr + 3)) & ~(uintptr_t) 3);
+
+	// Vertices and faces, per object (each uses either the large or the small kind).
+	for (int i = 0; i < num_objects; ++i)
+	{
+		CCollObjTriData &o = p_objects[i];
+		uint8 *p_verts = p_base_vert_addr + PtrBits(o.mp_float_vert);
+		if (o.m_use_fixed_verts)
+		{
+			Endian::Fix16Array(p_verts, o.m_num_verts * 3);		// SFixedVert: 3 x uint16
+		}
+		else
+		{
+			Endian::Fix32Array(p_verts, o.m_num_verts * 3);		// SFloatVert: 3 x float
+		}
+
+		uint8 *p_faces = p_base_face_addr + PtrBits(o.mp_faces);
+		if (o.m_use_face_small)
+		{
+			for (int f = 0; f < o.m_num_faces; ++f)
+			{
+				SFaceSmall *p_face = ((SFaceSmall *) p_faces) + f;
+				Endian::Fix(p_face->m_info.m_flags);
+				Endian::Fix(p_face->m_info.m_terrain_type);		// vertex indices are bytes
+			}
+		}
+		else
+		{
+			Endian::Fix16Array(p_faces, o.m_num_faces * (sizeof(SFace) / 2));	// SFace: 5 x uint16
+		}
+	}
+
+	// BSP nodes: two 32-bit words each. As little-endian words, a leaf's
+	// axis/pad/face-count bytes come out in the big-endian SLeaf order.
+	uint8 *p_node_array_size = p_base_face_addr + (p_header->m_total_num_faces_large * GetFaceElemSize() +
+												   p_header->m_total_num_faces_small * GetFaceSmallElemSize());
+	p_node_array_size += (p_header->m_total_num_faces_large & 1) ? 2 : 0;
+	Endian::Fix(*(uint32 *) p_node_array_size);
+	uint32 node_array_size = *(uint32 *) p_node_array_size;
+	uint8 *p_base_node_addr = p_node_array_size + 4;
+	Endian::Fix32Array(p_base_node_addr, node_array_size / 4);
+
+	// Face index arrays (uint16) run to the end of the file.
+	uint8 *p_base_face_idx_addr = p_base_node_addr + node_array_size;
+	if (p_end > p_base_face_idx_addr)
+	{
+		Endian::Fix16Array(p_base_face_idx_addr, (p_end - p_base_face_idx_addr) / 2);
+	}
+#endif	// !__PLAT_NGC__
+}
+
 bool	CCollObjTriData::InitCollObjTriData(CScene * p_scene, void *p_base_vert_addr, void *p_base_intensity_addr,
 											void *p_base_face_addr, void *p_base_node_addr, void *p_base_face_idx_addr)
 {
@@ -151,11 +250,11 @@ bool	CCollObjTriData::InitCollObjTriData(CScene * p_scene, void *p_base_vert_add
 #else
 #ifdef FIXED_POINT_VERTICES
 	// Get indexes
-	int start_vert_pos_offset = (int) mp_float_vert;
-	int start_intensity_index = (int) mp_intensity;
+	int start_vert_pos_offset = (int) PtrBits(mp_float_vert);
+	int start_intensity_index = (int) PtrBits(mp_intensity);
 
 	// Find first element
-	mp_float_vert = (SFloatVert *) ((int) p_base_vert_addr + start_vert_pos_offset);
+	mp_float_vert = (SFloatVert *) ((uint8 *) p_base_vert_addr + start_vert_pos_offset);
 	mp_intensity = (uint8 *) p_base_intensity_addr;
 	mp_intensity += start_intensity_index;
 #else
@@ -169,7 +268,7 @@ bool	CCollObjTriData::InitCollObjTriData(CScene * p_scene, void *p_base_vert_add
 #endif // FIXED_POINT_VERTICES
 #endif		// __PLAT_NGC__
 
-	mp_faces = (SFace *)((int) mp_faces + (int) p_base_face_addr);
+	mp_faces = (SFace *)((uint8 *) p_base_face_addr + PtrBits(mp_faces));
 
 	//Dbg_Message ( "Object has %d verts sizeof %d", m_num_verts, sizeof(SReadVertex));
 	//Dbg_Message ( "Object has %d faces sizeof %d", m_num_faces, sizeof(SReadFace) );
@@ -178,7 +277,7 @@ bool	CCollObjTriData::InitCollObjTriData(CScene * p_scene, void *p_base_vert_add
 #endif
 
 	// Init BSP tree
-	mp_bsp_tree = (CCollBSPNode *)((int) mp_bsp_tree + (int) p_base_node_addr);
+	mp_bsp_tree = (CCollBSPNode *)((uint8 *) p_base_node_addr + PtrBits(mp_bsp_tree));
 	s_init_tree(mp_bsp_tree, p_base_node_addr, p_base_face_idx_addr);
 
 	return true;
@@ -291,7 +390,7 @@ CCollBSPNode * CCollBSPNode::clone(bool instance)
 			else
 			{
 				// Adjust face index pointer
-				p_new_bsp_array[i].m_leaf.mp_face_idx_array = (FaceIndex *) ((int) p_new_bsp_array[i].m_leaf.mp_face_idx_array + face_address_diff);
+				p_new_bsp_array[i].m_leaf.mp_face_idx_array = (FaceIndex *) ((uint8 *) (FaceIndex *) p_new_bsp_array[i].m_leaf.mp_face_idx_array + face_address_diff);
 			}
 		}
 
@@ -511,7 +610,7 @@ bool	CCollObjTriData::s_init_tree(CCollBSPNode *p_tree, void *p_base_node_addr, 
 	if (p_tree->IsLeaf())
 	{
 		// Set face index array pointer
-		int face_idx = (int) p_tree->m_leaf.mp_face_idx_array;
+		int face_idx = (int) PtrBits(p_tree->m_leaf.mp_face_idx_array);
 		p_tree->m_leaf.mp_face_idx_array = (FaceIndex *) p_base_face_idx_addr;
 		p_tree->m_leaf.mp_face_idx_array += face_idx;
 
@@ -523,7 +622,7 @@ bool	CCollObjTriData::s_init_tree(CCollBSPNode *p_tree, void *p_base_node_addr, 
 	} else {
 		Dbg_MsgAssert(p_tree->GetSplitAxis() < 3, ("BSP split axis is %d", p_tree->GetSplitAxis()));
 		// Set branch pointers
-		p_tree->m_node.m_children.SetBasePointer((CCollBSPNode *)((int) p_tree->m_node.m_children.GetBasePointer() + (int) p_base_node_addr));
+		p_tree->m_node.m_children.SetBasePointer((CCollBSPNode *)((uint8 *) p_base_node_addr + PtrBits(p_tree->m_node.m_children.GetBasePointer())));
 
 		// And init branches
 		s_init_tree(p_tree->GetLessBranch(), p_base_node_addr, p_base_face_idx_addr);

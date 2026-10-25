@@ -93,6 +93,7 @@ bool			CMesh::LoadCollision(const char *p_name)
 	uint8 *p_base_addr = (uint8 *) Pip::Load(m_coll_filename);
 	if (p_base_addr)
 	{
+		Nx::CCollObjTriData::sFixFileByteOrder(p_base_addr, Pip::GetFileSize(m_coll_filename));	// PS3: PC data is little-endian
 		Nx::CCollObjTriData::SReadHeader *p_header = (Nx::CCollObjTriData::SReadHeader *) p_base_addr;
 		p_base_addr += sizeof(Nx::CCollObjTriData::SReadHeader);
 

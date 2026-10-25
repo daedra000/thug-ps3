@@ -26,6 +26,7 @@
 #ifndef __CORE_DEFINES_H
 #include <core/defines.h>
 #endif
+#include <core/ptr32.h>
 #include <core/allmath.h>
 #include <core/math/geometry.h>
 
@@ -146,7 +147,7 @@ protected:
 
 	struct SLeaf
 	{
-#ifdef __PLAT_NGC__		// Big endian on NGC
+#if defined(__PLAT_NGC__) || defined(__PLAT_PS3__)		// Big endian on NGC and PS3
 		uint16				m_num_faces;		// number in faces in face array
 		uint8				m_pad1;
 		uint8				m_split_axis;		// the axis it is split on (0 = X, 1 = Y, 2 = Z, 3 = Leaf)
@@ -155,7 +156,7 @@ protected:
 		uint8				m_pad1;
 		uint16				m_num_faces;		// number in faces in face array
 #endif __PLAT_NGC__
-		FaceIndex *			mp_face_idx_array;	// leaf
+		DATA_PTR(FaceIndex)	mp_face_idx_array;	// leaf (32 bits wide, as in the file)
 	};
 
 	// Clone functions
@@ -218,6 +219,11 @@ public:
 	bool				InitCollObjTriData(CScene * p_scene, void *p_base_vert_addr, void *p_base_intensity_addr, // Init collision sector after read from file
 										   void *p_base_face_addr, void *p_base_node_addr, void *p_base_face_idx_addr);
 	bool				InitBSPTree();					// Generate the BSP Tree
+
+	// THUG PS3: the collision files are little-endian; convert one (as returned by
+	// Pip::Load, header included) to host order in place. Safe to call again on
+	// data that's already converted.
+	static void			sFixFileByteOrder(uint8 *p_file, uint32 file_size);
 	bool				DeleteBSPTree();				// Delete the BSP Tree
 
 	uint32				GetChecksum() const;
@@ -344,9 +350,11 @@ protected:
 	uint8				m_use_face_small;	// Set to 1 if using SFaceSmall below
 	uint8				m_use_fixed_verts;
 
+	// PS3: the pointer members stay 32 bits wide (DATA_PTR) so this struct still
+	// matches the file it is read from in place.
 	union {
-		SFace *			mp_faces;			// array of faces
-		SFaceSmall *	mp_face_small;		// array of small faces
+		DATA_PTR(SFace)			mp_faces;			// array of faces
+		DATA_PTR(SFaceSmall)	mp_face_small;		// array of small faces
 	};
 
 	Mth::CBBox			m_bbox;				// bounding box of sector
@@ -359,13 +367,13 @@ protected:
 		Mth::Vector *	mp_vert_pos;			// array of 32-bit vertices
 		SOverlay *		mp_vert_rgba_overlay;	// overlay array of vertex colors for 32-bit vertices
 #endif
-		SFloatVert *	mp_float_vert;			// array of 32-bit vertices
-		SFixedVert *	mp_fixed_vert;			// array of 16-bit vertices
+		DATA_PTR(SFloatVert)	mp_float_vert;			// array of 32-bit vertices
+		DATA_PTR(SFixedVert)	mp_fixed_vert;			// array of 16-bit vertices
 	};
 #endif
 
-	CCollBSPNode *		mp_bsp_tree;		// head of BSP tree
-	uint8 *				mp_intensity;		// Intensity list
+	DATA_PTR(CCollBSPNode)	mp_bsp_tree;		// head of BSP tree
+	DATA_PTR(uint8)			mp_intensity;		// Intensity list
 #ifdef __PLAT_NGC__
 	NsVector *			mp_cloned_vert_pos;
 #else
@@ -715,6 +723,12 @@ inline CCollObjTriData::SFaceInfo *	CCollObjTriData::get_face_info(int face_idx)
 {
 	return (m_use_face_small) ? &(mp_face_small[face_idx].m_info) : &(mp_faces[face_idx].m_info);
 }
+
+#if defined(__PLAT_PS3__)
+// These are read straight from the PC collision files: their layout must match.
+static_assert(sizeof(CCollBSPNode) == 8, "CCollBSPNode no longer matches the collision file format");
+static_assert(sizeof(CCollObjTriData) == 64, "CCollObjTriData no longer matches the collision file format");
+#endif
 
 } // namespace Nx
 

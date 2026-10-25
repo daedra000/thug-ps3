@@ -12,6 +12,7 @@
 #include "anim_vertdefs.h"
 #include "nx_init.h"
 #include "material.h"
+#include <core/endian.h>
 #include "scene.h"
 #include "render.h"
 
@@ -573,6 +574,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 	// Get number of materials.
 	uint32 new_materials;
 	MemoryRead( &new_materials, sizeof( uint32 ), 1, p_data );
+	Endian::Fix32Array( &new_materials, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 	
 	Lst::HashTable< sMaterial >* pMaterialTable;
 
@@ -599,16 +601,20 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 
 		// Get material checksum.
 		MemoryRead( &pMat->m_checksum, sizeof( uint32 ), 1, p_data );
+		Endian::Fix32Array( &pMat->m_checksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get material name checksum.
 		MemoryRead( &pMat->m_name_checksum, sizeof( uint32 ), 1, p_data );
+		Endian::Fix32Array( &pMat->m_name_checksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get number of passes.
 		MemoryRead( &pMat->m_passes, sizeof( uint32 ), 1, p_data );
+		Endian::Fix32Array( &pMat->m_passes, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get alpha cutoff value.
 		uint32 AlphaCutoff;
 		MemoryRead( &AlphaCutoff, sizeof( uint32 ), 1, p_data );
+		Endian::Fix32Array( &AlphaCutoff, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		Dbg_Assert( AlphaCutoff <= 0xFF );
 		pMat->m_alpha_cutoff = (uint8)AlphaCutoff;
 
@@ -617,6 +623,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 		
 		// Get draw order.
 		MemoryRead( &pMat->m_draw_order, sizeof( float ), 1, p_data );
+		Endian::Fix32Array( &pMat->m_draw_order, ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		
 		// Get single sided flag.
 		bool single_sided;
@@ -628,6 +635,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 		// Get z-bias value.
 		int zbias;
 		MemoryRead( &zbias, sizeof( int ), 1, p_data );
+		Endian::Fix32Array( &zbias, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		pMat->m_zbias = (uint8)(( zbias > 16 ) ? 16 : zbias );
 
 		// Get grassify flag and (optionally) grassify data.
@@ -636,14 +644,18 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 		if( grassify )
 		{
 			MemoryRead( &pMat->m_grass_height, sizeof( float ), 1, p_data );
+			Endian::Fix32Array( &pMat->m_grass_height, ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			MemoryRead( &pMat->m_grass_layers, sizeof( int ), 1, p_data );
+			Endian::Fix32Array( &pMat->m_grass_layers, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		}
 
 		// Get specular power and (optionally) specular color.
 		MemoryRead( &pMat->m_specular_color[3], sizeof( float ), 1, p_data );
+		Endian::Fix32Array( &pMat->m_specular_color[3], ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		if( pMat->m_specular_color[3] > 0.0f )
 		{
 			MemoryRead( &pMat->m_specular_color[0], sizeof( float ) * 3, 1, p_data );
+			Endian::Fix32Array( &pMat->m_specular_color[0], ( sizeof( float ) * 3 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		}
 
 		// Neutral under proven otherwise.
@@ -653,9 +665,11 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 			// Get texture checksum.
 			uint32 TextureChecksum;
 			MemoryRead( &TextureChecksum, sizeof( uint32 ), 1, p_data );
+			Endian::Fix32Array( &TextureChecksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get material flags.
 			MemoryRead( &pMat->m_flags[pass], sizeof( uint32 ), 1, p_data );
+			Endian::Fix32Array( &pMat->m_flags[pass], ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get pass color flag.
 			bool has_color;
@@ -663,6 +677,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 
 			// Get pass color.
 			MemoryRead( &pMat->m_color[pass][0], sizeof( float ) * 3, 1, p_data );
+			Endian::Fix32Array( &pMat->m_color[pass][0], ( sizeof( float ) * 3 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Check for color being neutral.
 			if( neutral_material_color )
@@ -676,6 +691,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 			// Get ALPHA register value.
 			uint64 reg_alpha;
 			MemoryRead( &reg_alpha, sizeof( uint64 ), 1, p_data );
+			Endian::Fix( *(&reg_alpha) );	// PS3: PC data is little-endian
 
 			uint32	blend_mode		= (uint32)( reg_alpha & 0xFFFFFFUL );
 			uint32	fixed_alpha		= (uint32)( reg_alpha >> 32 );
@@ -694,14 +710,18 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 			// Get UV addressing types.
 			uint32 u_addressing, v_addressing;
 			MemoryRead( &u_addressing, sizeof( uint32 ), 1, p_data );
+			Endian::Fix32Array( &u_addressing, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			MemoryRead( &v_addressing, sizeof( uint32 ), 1, p_data );
+			Endian::Fix32Array( &v_addressing, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			pMat->m_uv_addressing[pass] = (( v_addressing << 16 ) | u_addressing );
 			
 			// Get environment map u and v tiling multiples.
 			MemoryRead( &pMat->m_envmap_tiling[pass][0], sizeof( float ) * 2, 1, p_data );
+			Endian::Fix32Array( &pMat->m_envmap_tiling[pass][0], ( sizeof( float ) * 2 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get minification and magnification filtering mode.
 			MemoryRead( &pMat->m_filtering_mode[pass], sizeof( uint32 ), 1, p_data );
+			Endian::Fix32Array( &pMat->m_filtering_mode[pass], ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Read uv wibble data if present.
 			if( pMat->m_flags[pass] & MATFLAG_UV_WIBBLE )
@@ -712,12 +732,14 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 				// Create uv wibble params structure.
 				pMat->mp_UVWibbleParams[pass] = new sUVWibbleParams;
 				MemoryRead( pMat->mp_UVWibbleParams[pass], sizeof( float ) * 8, 1, p_data );
+				Endian::Fix32Array( pMat->mp_UVWibbleParams[pass], ( sizeof( float ) * 8 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			}
 
 			// Read vertex color wibble data.
 			if(( pass == 0 ) && ( pMat->m_flags[0] & MATFLAG_VC_WIBBLE ))
 			{
 				MemoryRead( &NumSeqs, sizeof( uint32 ), 1, p_data );
+				Endian::Fix32Array( &NumSeqs, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				pMat->m_num_wibble_vc_anims = NumSeqs;
 
 				// Create sequence data array.
@@ -729,9 +751,11 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 				for( seq = 0; seq < NumSeqs; ++seq )
 				{ 
 					MemoryRead( &NumKeys, sizeof( uint32 ), 1, p_data );
+					Endian::Fix32Array( &NumKeys, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					int phase;
 					MemoryRead( &phase, sizeof( int ), 1, p_data );
+					Endian::Fix32Array( &phase, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Create array for keyframes.
 					pMat->mp_wibble_vc_params[seq].m_num_keyframes	= NumKeys;
@@ -740,6 +764,7 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 
 					// Read keyframes into array.
 					MemoryRead( pMat->mp_wibble_vc_params[seq].mp_keyframes, sizeof( sVCWibbleKeyframe ), NumKeys, p_data );
+					for( uint32 k = 0; k < NumKeys; ++k ) Endian::Fix( (pMat->mp_wibble_vc_params[seq].mp_keyframes)[k].m_time );	// PS3: the colour bytes need no swap
 				}
 			}
 
@@ -758,9 +783,13 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 
 				int num_keyframes, period, iterations, phase;
 				MemoryRead( &num_keyframes, sizeof( int ), 1, p_data );
+				Endian::Fix32Array( &num_keyframes, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &period, sizeof( int ), 1, p_data );			// This value is currently discarded.
+				Endian::Fix32Array( &period, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &iterations, sizeof( int ), 1, p_data );
+				Endian::Fix32Array( &iterations, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &phase, sizeof( int ), 1, p_data );
+				Endian::Fix32Array( &phase, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 				Dbg_Assert( num_keyframes > 0 );
 
@@ -772,10 +801,12 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 				for( int ati = 0; ati < num_keyframes; ++ati )
 				{
 					MemoryRead( &pMat->mp_wibble_texture_params->mp_keyframes[pass][ati].m_time,		sizeof( uint32 ), 1, p_data );
+					Endian::Fix32Array( &pMat->mp_wibble_texture_params->mp_keyframes[pass][ati].m_time, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Read the texture checksum.
 					uint32 cs;
 					MemoryRead( &cs, sizeof( uint32 ), 1, p_data );
+					Endian::Fix32Array( &cs, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Set the TextureChecksum variable so the mp_tex member will get populated.
 					if( ati == 0 )
@@ -809,9 +840,13 @@ Lst::HashTable< sMaterial >	*LoadMaterialsFromMemory( void **pp_mem, Lst::HashTa
 
 				// Get mipmap info.
 				MemoryRead( &MMAG, sizeof( uint32 ), 1, p_data );
+				Endian::Fix32Array( &MMAG, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &MMIN, sizeof( uint32 ), 1, p_data );
+				Endian::Fix32Array( &MMIN, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &K, sizeof( uint32 ), 1, p_data );
+				Endian::Fix32Array( &K, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				MemoryRead( &L, sizeof( uint32 ), 1, p_data );
+				Endian::Fix32Array( &L, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				
 				// Default PS2 value for K appears to be -8.0f - we are interested in deviations from this value.
 				pMat->m_k[pass]	= ( *(float*)&K ) + 8.0f;
@@ -887,6 +922,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 	// Get number of materials.
 	uint32 new_materials;
 	File::Read( &new_materials, sizeof( uint32 ), 1, p_FH );
+	Endian::Fix32Array( &new_materials, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 	
 	Lst::HashTable< sMaterial >* pMaterialTable;
 
@@ -913,16 +949,20 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 
 		// Get material checksum.
 		File::Read( &pMat->m_checksum, sizeof( uint32 ), 1, p_FH );
+		Endian::Fix32Array( &pMat->m_checksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get material name checksum.
 		File::Read( &pMat->m_name_checksum, sizeof( uint32 ), 1, p_FH );
+		Endian::Fix32Array( &pMat->m_name_checksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get number of passes.
 		File::Read( &pMat->m_passes, sizeof( uint32 ), 1, p_FH );
+		Endian::Fix32Array( &pMat->m_passes, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 		// Get alpha cutoff value.
 		uint32 AlphaCutoff;
 		File::Read( &AlphaCutoff, sizeof( uint32 ), 1, p_FH );
+		Endian::Fix32Array( &AlphaCutoff, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		pMat->m_alpha_cutoff = (uint8)AlphaCutoff;
 
 		// Get sorted flag.
@@ -930,6 +970,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 		
 		// Get draw order.
 		File::Read( &pMat->m_draw_order, sizeof( float ), 1, p_FH );
+		Endian::Fix32Array( &pMat->m_draw_order, ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		
 		// Get single sided flag.
 		bool single_sided;
@@ -941,6 +982,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 		// Get z-bias value.
 		int zbias;
 		File::Read( &zbias, sizeof( int ), 1, p_FH );
+		Endian::Fix32Array( &zbias, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		pMat->m_zbias = (uint8)(( zbias > 16 ) ? 16 : zbias );
 
 		// Get grassify flag and (optionally) grassify data.
@@ -949,14 +991,18 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 		if( grassify )
 		{
 			File::Read( &pMat->m_grass_height, sizeof( float ), 1, p_FH );
+			Endian::Fix32Array( &pMat->m_grass_height, ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			File::Read( &pMat->m_grass_layers, sizeof( int ), 1, p_FH );
+			Endian::Fix32Array( &pMat->m_grass_layers, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		}
 
 		// Get specular power and (optionally) specular color.
 		File::Read( &pMat->m_specular_color[3], sizeof( float ), 1, p_FH );
+		Endian::Fix32Array( &pMat->m_specular_color[3], ( sizeof( float ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		if( pMat->m_specular_color[3] > 0.0f )
 		{
 			File::Read( &pMat->m_specular_color[0], sizeof( float ) * 3, 1, p_FH );
+			Endian::Fix32Array( &pMat->m_specular_color[0], ( sizeof( float ) * 3 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 		}
 
 		// Neutral under proven otherwise.
@@ -966,9 +1012,11 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 			// Get texture checksum.
 			uint32 TextureChecksum;
 			File::Read( &TextureChecksum, sizeof( uint32 ), 1, p_FH );
+			Endian::Fix32Array( &TextureChecksum, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get material flags.
 			File::Read( &pMat->m_flags[pass], sizeof( uint32 ), 1, p_FH );
+			Endian::Fix32Array( &pMat->m_flags[pass], ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get pass color flag.
 			bool has_color;
@@ -976,6 +1024,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 
 			// Get pass color.
 			File::Read( &pMat->m_color[pass][0], sizeof( float ) * 3, 1, p_FH );
+			Endian::Fix32Array( &pMat->m_color[pass][0], ( sizeof( float ) * 3 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Check for color being neutral.
 			if( neutral_material_color )
@@ -989,6 +1038,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 			// Get ALPHA register value.
 			uint64 reg_alpha;
 			File::Read( &reg_alpha, sizeof( uint64 ), 1, p_FH );
+			Endian::Fix( *(&reg_alpha) );	// PS3: PC data is little-endian
 
 			uint32	blend_mode		= (uint32)( reg_alpha & 0xFFFFFFUL );
 			uint32	fixed_alpha		= (uint32)( reg_alpha >> 32 );
@@ -1007,14 +1057,18 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 			// Get UV addressing types.
 			uint32 u_addressing, v_addressing;
 			File::Read( &u_addressing, sizeof( uint32 ), 1, p_FH );
+			Endian::Fix32Array( &u_addressing, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			File::Read( &v_addressing, sizeof( uint32 ), 1, p_FH );
+			Endian::Fix32Array( &v_addressing, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			pMat->m_uv_addressing[pass] = (( v_addressing << 16 ) | u_addressing );
 			
 			// Get environment map u and v tiling multiples.
 			File::Read( &pMat->m_envmap_tiling[pass][0], sizeof( float ) * 2, 1, p_FH );
+			Endian::Fix32Array( &pMat->m_envmap_tiling[pass][0], ( sizeof( float ) * 2 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Get minification and magnification filtering mode.
 			File::Read( &pMat->m_filtering_mode[pass], sizeof( uint32 ), 1, p_FH );
+			Endian::Fix32Array( &pMat->m_filtering_mode[pass], ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 			// Read uv wibble data if present.
 			if( pMat->m_flags[pass] & MATFLAG_UV_WIBBLE )
@@ -1025,12 +1079,14 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 				// Create uv wibble params structure.
 				pMat->mp_UVWibbleParams[pass] = new sUVWibbleParams;
 				File::Read( pMat->mp_UVWibbleParams[pass], sizeof( float ) * 8, 1, p_FH );
+				Endian::Fix32Array( pMat->mp_UVWibbleParams[pass], ( sizeof( float ) * 8 ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 			}
 
 			// Read vertex color wibble data.
 			if(( pass == 0 ) && ( pMat->m_flags[0] & MATFLAG_VC_WIBBLE ))
 			{
 				File::Read( &NumSeqs, sizeof( uint32 ), 1, p_FH );
+				Endian::Fix32Array( &NumSeqs, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				pMat->m_num_wibble_vc_anims = NumSeqs;
 
 				// Create sequence data array.
@@ -1042,9 +1098,11 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 				for( seq = 0; seq < NumSeqs; ++seq )
 				{ 
 					File::Read( &NumKeys, sizeof( uint32 ), 1, p_FH );
+					Endian::Fix32Array( &NumKeys, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					int phase;
 					File::Read( &phase, sizeof( int ), 1, p_FH );
+					Endian::Fix32Array( &phase, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Create array for keyframes.
 					pMat->mp_wibble_vc_params[seq].m_num_keyframes	= NumKeys;
@@ -1053,6 +1111,7 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 
 					// Read keyframes into array.
 					File::Read( pMat->mp_wibble_vc_params[seq].mp_keyframes, sizeof( sVCWibbleKeyframe ), NumKeys, p_FH );
+					for( uint32 k = 0; k < NumKeys; ++k ) Endian::Fix( (pMat->mp_wibble_vc_params[seq].mp_keyframes)[k].m_time );	// PS3: the colour bytes need no swap
 				}
 			}
 
@@ -1071,9 +1130,13 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 
 				int num_keyframes, period, iterations, phase;
 				File::Read( &num_keyframes, sizeof( int ), 1, p_FH );
+				Endian::Fix32Array( &num_keyframes, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &period, sizeof( int ), 1, p_FH );			// This value is currently discarded.
+				Endian::Fix32Array( &period, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &iterations, sizeof( int ), 1, p_FH );
+				Endian::Fix32Array( &iterations, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &phase, sizeof( int ), 1, p_FH );
+				Endian::Fix32Array( &phase, ( sizeof( int ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 				Dbg_Assert( num_keyframes > 0 );
 
@@ -1085,10 +1148,12 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 				for( int ati = 0; ati < num_keyframes; ++ati )
 				{
 					File::Read( &pMat->mp_wibble_texture_params->mp_keyframes[pass][ati].m_time,		sizeof( uint32 ), 1, p_FH );
+					Endian::Fix32Array( &pMat->mp_wibble_texture_params->mp_keyframes[pass][ati].m_time, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Read the texture checksum.
 					uint32 cs;
 					File::Read( &cs, sizeof( uint32 ), 1, p_FH );
+					Endian::Fix32Array( &cs, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 
 					// Set the TextureChecksum variable so the mp_tex member will get populated.
 					if( ati == 0 )
@@ -1129,9 +1194,13 @@ Lst::HashTable< sMaterial >	*LoadMaterials( void *p_FH, Lst::HashTable< Nx::CTex
 
 				// Get mipmap info.
 				File::Read( &MMAG, sizeof( uint32 ), 1, p_FH );
+				Endian::Fix32Array( &MMAG, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &MMIN, sizeof( uint32 ), 1, p_FH );
+				Endian::Fix32Array( &MMIN, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &K, sizeof( uint32 ), 1, p_FH );
+				Endian::Fix32Array( &K, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				File::Read( &L, sizeof( uint32 ), 1, p_FH );
+				Endian::Fix32Array( &L, ( sizeof( uint32 ) ) * ( 1 ) / 4 );	// PS3: PC data is little-endian
 				
 				// Default PS2 value for K appears to be -8.0f - we are interested in deviations from this value.
 				pMat->m_k[pass]	= ( *(float*)&K ) + 8.0f;

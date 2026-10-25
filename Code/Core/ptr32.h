@@ -1,0 +1,46 @@
+/*****************************************************************************
+**	THUG PS3: 32-bit pointer slots for data used in place from files.
+**
+**	Some file formats (collision, for one) are mapped straight onto structs whose
+**	pointer members are 4-byte offsets on disc, fixed up to real pointers after
+**	loading. On a 64-bit target the structs would no longer match the files. On
+**	the PS3 every address the game uses is below 4 GB, so those members can stay
+**	32 bits wide: Ptr32<T> stores a pointer in 4 bytes and behaves like a T*.
+**
+**	DATA_PTR(T) is Ptr32<T> on 64-bit targets and a plain T* everywhere else, so
+**	the PC build is unchanged. PtrBits(p) gives the raw 32-bit value of either.
+*****************************************************************************/
+
+#ifndef __CORE_PTR32_H
+#define __CORE_PTR32_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+template<typename T>
+struct Ptr32
+{
+	// No constructors: keeps the type trivial, so it can live in unions and in
+	// structs that are read straight from files.
+	uint32_t m_bits;
+
+	operator T*() const { return (T*)(uintptr_t)m_bits; }
+	T* operator->() const { return (T*)(uintptr_t)m_bits; }
+	T& operator*() const { return *(T*)(uintptr_t)m_bits; }
+	Ptr32& operator=(T* p) { m_bits = (uint32_t)(uintptr_t)p; return *this; }
+	Ptr32& operator+=(ptrdiff_t n) { return *this = (T*)*this + n; }
+	Ptr32& operator-=(ptrdiff_t n) { return *this = (T*)*this - n; }
+	Ptr32& operator++() { return *this += 1; }
+	T* get() const { return (T*)*this; }
+};
+
+template<typename T> inline uint32_t PtrBits(T* p) { return (uint32_t)(uintptr_t)p; }
+template<typename T> inline uint32_t PtrBits(const Ptr32<T>& p) { return p.m_bits; }
+
+#if defined(__LP64__) || defined(_WIN64)
+#define DATA_PTR(T) Ptr32<T>
+#else
+#define DATA_PTR(T) T*
+#endif
+
+#endif	// __CORE_PTR32_H
