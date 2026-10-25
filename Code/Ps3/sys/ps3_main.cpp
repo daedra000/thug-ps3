@@ -12,6 +12,31 @@
 #include <sysutil/sysutil.h>
 #include <sysmodule/sysmodule.h>
 #include <net/net.h>
+#include <sys/process.h>
+
+// Main thread: priority 1001, 1 MB stack (lv2's default is 64 KB; the game was built for
+// Windows' 1 MB). Same as the GridSiege ports.
+SYS_PROCESS_PARAM(1001, 0x100000);
+
+// Boot trail: USRDIR/thug-ps3-boot.txt, written with plain lv2 calls from the first static
+// constructor on, so a crash before the log opens still says how far start-up got.
+static void BootMark(const char* what)
+{
+	s32 fd;
+	if (sysFsOpen(PS3_USRDIR "/thug-ps3-boot.txt", SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, NULL, 0) != 0)
+		return;
+	u64 put;
+	sysFsWrite(fd, what, strlen(what), &put);
+	sysFsWrite(fd, "\n", 1, &put);
+	sysFsClose(fd);
+	sysFsChmod(PS3_USRDIR "/thug-ps3-boot.txt", 0100666);	// readable over FTP
+}
+
+__attribute__((constructor(101))) static void BootFirstConstructor()
+{
+	sysFsUnlink(PS3_USRDIR "/thug-ps3-boot.txt");
+	BootMark("static constructors started");
+}
 
 namespace
 {
@@ -42,7 +67,14 @@ namespace
 		sysFsUnlink(old);
 		sysLv2FsRename(path, old);
 		if (sysFsOpen(path, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &s_logFd, NULL, 0) != 0)
+		{
 			s_logFd = -1;
+			BootMark("could not open the log in the app folder; trying USRDIR");
+			if (sysFsOpen(PS3_USRDIR "/thug-ps3.log", SYS_O_WRONLY | SYS_O_CREAT | SYS_O_TRUNC, &s_logFd, NULL, 0) != 0)
+				s_logFd = -1;
+		}
+		if (s_logFd >= 0) sysFsChmod(path, 0100666);
+		BootMark(s_logFd >= 0 ? "log open" : "log could not be opened");
 
 		FILE* f = funopen(NULL, NULL, LogWrite, NULL, NULL);
 		if (f)
@@ -70,6 +102,8 @@ namespace Ps3Platform
 
 void Init(int argc, char** argv)
 {
+	BootMark("main() reached");
+	if (argc > 0 && argv && argv[0]) BootMark(argv[0]);
 	if (argc > 0)
 		Ps3Fs::SetAppPath(argv[0]);
 	OpenLog();

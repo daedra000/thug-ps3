@@ -125,6 +125,15 @@ jobs:
           HEADLESS=$([ "${{ matrix.variant }}" = headless ] && echo 1 || echo 0)
           make -f Makefile.ps3 HEADLESS=$HEADLESS -k -j"$(nproc)" 2>&1 | tee build.log
 
+      - name: Report ELF size
+        if: always()
+        run: |
+          elf=$(ls build-ps3/*/thug-ps3.elf 2>/dev/null | head -1)
+          [ -n "$elf" ] || exit 0
+          ppu-size -A "$elf" | awk 'NR>2 && $2>65536 {printf "%s=%dKB ", $1, $2/1024}' > sizes.txt
+          echo "::notice title=ELF sections over 64 KB::$(cat sizes.txt)"
+          echo "::notice title=Largest symbols::$(ppu-nm -S --size-sort -C "$elf" | tail -12 | awk '{printf "%s %dKB | ", $4, strtonum("0x"$2)/1024}')"
+
       - name: Report errors
         if: always()
         run: python3 tools/ci-annotate.py build.log "$GITHUB_WORKSPACE"
