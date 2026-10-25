@@ -1,4 +1,11 @@
 #include <sys/timer.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+extern int g_ps3SceneTrace;	// p_nxsector.cpp
+#define PS3_MESH_TRACE(...) do { if (g_ps3SceneTrace > 0) Ps3Platform::Trace(__VA_ARGS__); } while (0)
+#else
+#define PS3_MESH_TRACE(...) do { } while (0)
+#endif
 #include <sys/file/filesys.h>
 #include <core/macros.h>
 
@@ -1778,17 +1785,22 @@ void sMesh::Initialize(int				num_vertices,
 {
 	// First thing to do is grab the material pointer for this mesh.
 	mp_material = ((sScene*)p_scene)->GetMaterial(material_checksum);
+	PS3_MESH_TRACE("[mesh] material 0x%08x -> %p", (unsigned)material_checksum, (void*)mp_material);
+
+	// (Checked before its first use: the PC code read it first.)
+	if (mp_material == NULL)
+	{
+#ifdef __PLAT_PS3__
+		Ps3Platform::Trace("[mesh] %s: material 0x%08x not found, mesh skipped", debug_name ? debug_name : "?", (unsigned)material_checksum);
+#endif
+		Dbg_Assert(0);
+		return;
+	}
 
 	// LWSS: hack seen in PC binary.
 	if (mp_material->m_reg_alpha[0] == vBLEND_MODE_BLEND_PREVIOUS_MASK || mp_material->m_reg_alpha[0] == vBLEND_MODE_BLEND_INVERSE_PREVIOUS_MASK)
 	{
 		mp_material->m_reg_alpha[0] = 0;
-	}
-
-	if (mp_material == NULL)
-	{
-		Dbg_Assert(0);
-		return;
 	}
 
 	if ((num_index_sets == 0) || (p_num_indices[0] == 0))
@@ -1849,6 +1861,7 @@ void sMesh::Initialize(int				num_vertices,
 		m_num_indices[ib] = p_num_indices[ib];
 	}
 
+	PS3_MESH_TRACE("[mesh] indices %u..%u, %u vertices, index buffers made", (unsigned)min_index, (unsigned)max_index, (unsigned)vertices_for_this_mesh);
 	// Use the material flags to figure the vertex format.
 	int vertex_size = 3 * sizeof(float);
 
@@ -2040,6 +2053,8 @@ void sMesh::Initialize(int				num_vertices,
 		((VertexMysteryMeat*)wibble_ptr_thing)->length += (vertex_size * vertices_for_this_mesh + 31) & 0xFFFFFFE0;
 	}
 
+	PS3_MESH_TRACE("[mesh] vertex size %d, vertex buffer %p (D3D %p, raw %p)", vertex_size, (void*)mp_vertex_buffer[0],
+		mp_vertex_buffer[0] ? (void*)mp_vertex_buffer[0]->vertexBuffer : NULL, mp_vertex_buffer[0] ? (void*)mp_vertex_buffer[0]->rawdata : NULL);
 	BYTE* p_byte = NULL;
 
 	if (p_weights && this->m_biggest_index_used == -1)
@@ -2056,6 +2071,7 @@ void sMesh::Initialize(int				num_vertices,
 	}
 	// lwss end
 	
+	PS3_MESH_TRACE("[mesh] writing vertices to %p", (void*)p_byte);
 	// Copy in vertex position data (for vertices that are used).
 	uint32		byte_write_offset = 0;
 	float* p_read = &p_positions[min_index * 3];
@@ -2267,6 +2283,7 @@ void sMesh::Initialize(int				num_vertices,
 		//CreateDuplicateVertexBuffers( 1 );
 	}
 
+	PS3_MESH_TRACE("[mesh] vertices written");
 	// Process the workspace array.
 	int offset = 0;
 	for( int v = 0; v <= max_index; ++v )
@@ -2300,6 +2317,7 @@ void sMesh::Initialize(int				num_vertices,
 		mp_index_buffer[ib]->ApplyData();
 	}
 	
+	PS3_MESH_TRACE("[mesh] indices written");
 	// Can now remove the mesh workspace array.
 	delete [] p_mesh_workspace_array;
 	
@@ -2311,10 +2329,12 @@ void sMesh::Initialize(int				num_vertices,
 	//}
 
 	// Set the pixel shader regardless.
+	PS3_MESH_TRACE("[mesh] pixel shader (HLSL %d)", (int)EngineGlobals.hasHLSLv101);
 	if (EngineGlobals.hasHLSLv101)
 		GetPixelShader(mp_material, &m_pixel_shader);
 	else
 		m_pixel_shader = NULL;
+	PS3_MESH_TRACE("[mesh] pixel shader %p", (void*)m_pixel_shader);
 
 	if( num_index_sets > 1 )
 	{
