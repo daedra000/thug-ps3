@@ -23,10 +23,7 @@
 **							  	  Includes									**
 *****************************************************************************/
 
-//#ifdef __PLAT_PS3__
-#include <ps3_platform.h>
-#endif
-#include <xtl.h>
+//#include <xtl.h>
 
 #include <core/defines.h>
 
@@ -40,6 +37,9 @@
 #include <gel/music/music.h>
 
 #include <SDL.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 /*****************************************************************************
 **								DBG Information								**
