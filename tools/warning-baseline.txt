@@ -1,6 +1,101 @@
-# bootstrap
 # tools/warning-gate.py baseline: count<TAB>file<TAB>flag<TAB>message
-# Placeholder: the gate only reports until this is replaced by the warning-baseline.txt.new
-# that the release job of .github/workflows/ps3.yml uploads (GCC 13 output; no local
-# PS3 GCC was available to generate it). Regenerate after fixing warnings with:
-#   python3 tools/warning-gate.py update tools/warning-baseline.txt build.log
+# Known occurrences of the gated warnings (regenerate with: warning-gate.py update).
+3	core/defines.h	-Wint-to-pointer-cast	cast to pointer from integer of different size
+2	core/defines.h	-fpermissive	cast from 'char*' to 'uint' {aka 'unsigned int'} loses precision
+2	core/defines.h	-fpermissive	cast from 'void*' to 'uint' {aka 'unsigned int'} loses precision
+1	core/math/vector.inl	-Wmaybe-uninitialized	'best_pos.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'best_pos.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'best_pos.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'hover_offset.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'hover_offset.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'hover_offset.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'hover_offset.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'intersect_point.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'intersect_point.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'intersect_point.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'intersect_point.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'new_facing.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'position_to_point_to.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'position_to_point_to.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'position_to_point_to.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'position_to_point_to.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'rotated.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'total_vel.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'total_vel.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'total_vel.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'total_vel.Mth::Vector::col[3]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'u.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'u.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'u.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'v.Mth::Vector::col[0]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'v.Mth::Vector::col[1]' may be used uninitialized
+1	core/math/vector.inl	-Wmaybe-uninitialized	'v.Mth::Vector::col[2]' may be used uninitialized
+1	core/math/vector.inl	-Wuninitialized	'center_pos.Mth::Vector::col[3]' is used uninitialized
+1	core/math/vector.inl	-Wuninitialized	'rot.Mth::Matrix::row[3][0]' is used uninitialized
+1	core/math/vector.inl	-Wuninitialized	'rot.Mth::Matrix::row[3][1]' is used uninitialized
+1	core/math/vector.inl	-Wuninitialized	'rot.Mth::Matrix::row[3][2]' is used uninitialized
+1	core/math/vector.inl	-Wuninitialized	'rotated.Mth::Vector::col[3]' is used uninitialized
+2	gel/components/animationcomponent.cpp	-fpermissive	cast from 'char*' to 'unsigned int' loses precision
+1	gel/mainloop/mainloop.cpp	-fpermissive	cast from 'void*' to 'UINT' {aka 'unsigned int'} loses precision
+2	gel/net/app/netapp.cpp	-fpermissive	cast from 'char*' to 'unsigned int' loses precision
+4	gel/net/handler/nethndlr.cpp	-fpermissive	cast from 'char*' to 'unsigned int' loses precision
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_max.Mth::Vector::col[0]' may be used uninitialized
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_max.Mth::Vector::col[1]' may be used uninitialized
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_max.Mth::Vector::col[2]' may be used uninitialized
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_min.Mth::Vector::col[0]' may be used uninitialized
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_min.Mth::Vector::col[1]' may be used uninitialized
+1	gfx/2d/element3d.cpp	-Wmaybe-uninitialized	'element_world_min.Mth::Vector::col[2]' may be used uninitialized
+1	gfx/bonedanim.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	gfx/bonedanim.cpp	-fpermissive	cast from 'Gfx::CBonedAnimFrameData*' to 'unsigned int' loses precision
+10	gfx/bonedanim.cpp	-fpermissive	cast from 'uint8*' {aka 'unsigned char*'} to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/dx9/nx/instance.cpp	-fpermissive	cast from 'Mth::Matrix*' to 'uint32' {aka 'unsigned int'} loses precision
+1	gfx/dx9/nx/render.cpp	-Wmaybe-uninitialized	'blend_op' may be used uninitialized
+1	gfx/dx9/nx/render.cpp	-Wmaybe-uninitialized	'dest_blend' may be used uninitialized
+1	gfx/dx9/nx/render.cpp	-Wmaybe-uninitialized	'result' may be used uninitialized
+1	gfx/dx9/nx/render.cpp	-Wmaybe-uninitialized	'src_blend' may be used uninitialized
+4	gfx/dx9/nx/render.cpp	-fpermissive	cast from 'NxXbox::sTexture*' to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/dx9/nx/scene.cpp	-fpermissive	cast from 'IDirect3DPixelShader9*' to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/dx9/nx/scene.cpp	-fpermissive	cast from 'NxXbox::sMaterial*' to 'uint32' {aka 'unsigned int'} loses precision
+1	gfx/dx9/p_nxmiscfx.cpp	-fpermissive	cast from 'Nx::sXboxShatterInstanceDetails*' to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/dx9/p_nxmiscfx.cpp	-fpermissive	cast from 'Nx::sXboxSplatInstanceDetails*' to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/nxlightman.cpp	-fpermissive	cast from 'Nx::CSector*' to 'uint32' {aka 'unsigned int'} loses precision
+3	gfx/nxmiscfx.cpp	-fpermissive	cast from 'Nx::sScreenFlashDetails*' to 'uint32' {aka 'unsigned int'} loses precision
+1	gfx/nxmiscfx.cpp	-fpermissive	cast from 'Nx::sShatterInstanceDetails*' to 'uint32' {aka 'unsigned int'} loses precision
+3	gfx/nxmiscfx.cpp	-fpermissive	cast from 'Nx::sSplatTrailInstanceDetails*' to 'uint32' {aka 'unsigned int'} loses precision
+2	gfx/nxtextured3dpoly.cpp	-fpermissive	cast from 'Nx::CTextured3dPoly*' to 'uint32' {aka 'unsigned int'} loses precision
+1	objects/rail.h	-fpermissive	cast from 'Obj::CRailNode*' to 'int' loses precision
+1	objects/rail.h	-fpermissive	cast from 'const Obj::CRailNode*' to 'int' loses precision
+2	sk/gamenet/serverlist.cpp	-fpermissive	cast from 'GameNet::ServerInfo*' to 'uint32' {aka 'unsigned int'} loses precision
+1	sk/objects/navigation.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	sk/objects/navigation.cpp	-fpermissive	cast from 'Obj::CNavNode*' to 'int' loses precision
+1	sk/objects/rail.h	-fpermissive	cast from 'Obj::CRailNode*' to 'int' loses precision
+1	sk/objects/rail.h	-fpermissive	cast from 'const Obj::CRailNode*' to 'int' loses precision
+1	sk/parkeditor2/edmap.cpp	-Wmaybe-uninitialized	'dumb' may be used uninitialized
+1	sk/parkeditor2/edmap.cpp	-Wmaybe-uninitialized	'gap_pos.Mth::Vector::col[0]' may be used uninitialized
+1	sk/parkeditor2/edmap.cpp	-Wmaybe-uninitialized	'gap_pos.Mth::Vector::col[2]' may be used uninitialized
+2	sk/parkeditor2/edmap.cpp	-fpermissive	cast from 'Ed::CParkManager::CompressedGap*' to 'uint32' {aka 'unsigned int'} loses precision
+4	sk/parkeditor2/edmap.cpp	-fpermissive	cast from 'Ed::CParkManager::CompressedMapHeader*' to 'uint32' {aka 'unsigned int'} loses precision
+2	sk/parkeditor2/edmap.cpp	-fpermissive	cast from 'uint8*' {aka 'unsigned char*'} to 'uint32' {aka 'unsigned int'} loses precision
+2	sk/scripting/cfuncs.cpp	-fpermissive	cast from 'char*' to 'int' loses precision
+2	sys/file/filelibrary.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	sys/file/filelibrary.cpp	-fpermissive	cast from 'File::CFileLibrary*' to 'unsigned int' loses precision
+1	sys/file/filelibrary.cpp	-fpermissive	cast from 'uint8*' {aka 'unsigned char*'} to 'uint32' {aka 'unsigned int'} loses precision
+3	sys/file/pip.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+2	sys/file/pip.cpp	-fpermissive	cast from 'Pip::SPreContained*' to 'uint32' {aka 'unsigned int'} loses precision
+1	sys/file/pip.cpp	-fpermissive	cast from 'Pip::SPreHeader*' to 'uint32' {aka 'unsigned int'} loses precision
+3	sys/file/pip.cpp	-fpermissive	cast from 'char*' to 'uint32' {aka 'unsigned int'} loses precision
+1	sys/file/pip.cpp	-fpermissive	cast from 'uint8*' {aka 'unsigned char*'} to 'uint32' {aka 'unsigned int'} loses precision
+2	sys/file/pre.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	sys/file/pre.cpp	-fpermissive	cast from 'File::PreMgr*' to 'unsigned int' loses precision
+1	sys/file/pre.cpp	-fpermissive	cast from 'uint8*' {aka 'unsigned char*'} to 'unsigned int' loses precision
+1	sys/file/xbox/p_asyncfilesys.cpp	-fpermissive	cast from 'HANDLE' {aka 'void*'} to 'int' loses precision
+1	sys/file/xbox/p_filesys.cpp	-fpermissive	cast from 'HANDLE' {aka 'void*'} to 'uint32' {aka 'unsigned int'} loses precision
+1	sys/mem/alloc.cpp	-fpermissive	cast from 'void*' to 'uint' {aka 'unsigned int'} loses precision
+3	sys/mem/heap.cpp	-fpermissive	cast from 'void*' to 'uint' {aka 'unsigned int'} loses precision
+4	sys/mem/memman.cpp	-fpermissive	cast from 'char*' to 'uint' {aka 'unsigned int'} loses precision
+1	sys/mem/pile.cpp	-fpermissive	cast from 'void*' to 'uint' {aka 'unsigned int'} loses precision
+2	sys/mem/region.cpp	-fpermissive	cast from 'void*' to 'int' loses precision
+5	sys/memcard/win32/p_mcman.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	sys/memcard/win32/p_mcman.cpp	-fpermissive	cast from 'HANDLE' {aka 'void*'} to 'int' loses precision
+1	sys/sio/win32/p_siodev.cpp	-Wint-to-pointer-cast	cast to pointer from integer of different size
+1	sys/sio/win32/p_siodev.cpp	-fpermissive	cast from 'void*' to 'uint32' {aka 'unsigned int'} loses precision
