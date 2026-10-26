@@ -123,6 +123,11 @@ HRESULT IDirect3DSurface9::GetContainer(REFIID, void** pp)
 // ---------------------------------------------------------------------------
 // Textures
 // ---------------------------------------------------------------------------
+// Main-memory copies held by textures (each also has its own copy in RSX memory), for the
+// [gfx] frame lines in the log: how much freeing the copy after upload would save.
+volatile unsigned g_ps3TextureCount;
+volatile unsigned long long g_ps3TextureRamBytes;
+
 IDirect3DTexture9::IDirect3DTexture9(UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool)
 	: IDirect3DBaseTexture9(D3DRTYPE_TEXTURE), m_width(w), m_height(h), m_levels(0), m_usage(usage),
 	  m_format(fmt), m_pool(pool), m_data(NULL), m_size(0), m_dirty(true), m_backend(NULL)
@@ -146,6 +151,8 @@ IDirect3DTexture9::IDirect3DTexture9(UINT w, UINT h, UINT levels, DWORD usage, D
 	m_data = (BYTE*)memalign(128, m_size ? m_size : 128);
 	memset(m_data, 0, m_size);
 	memset(m_surfaces, 0, sizeof(m_surfaces));
+	g_ps3TextureCount = g_ps3TextureCount + 1;
+	g_ps3TextureRamBytes = g_ps3TextureRamBytes + m_size;
 }
 
 IDirect3DTexture9::~IDirect3DTexture9()
@@ -160,6 +167,8 @@ IDirect3DTexture9::~IDirect3DTexture9()
 		}
 	}
 	free(m_data);
+	g_ps3TextureCount = g_ps3TextureCount - 1;
+	g_ps3TextureRamBytes = g_ps3TextureRamBytes - m_size;
 }
 
 UINT IDirect3DTexture9::LevelWidth(UINT level) const  { UINT w = m_width >> level; return w ? w : 1; }

@@ -67,7 +67,7 @@ static struct Stats
 {
 	unsigned draws, drawn, skipped, uploads, uploadKB, ringKB, programs, programFailures, ringFull, offscreen;
 } s_stats;
-static char s_statsLine[256];
+static char s_statsLine[384];
 
 static bool FlagFile(const char* name)
 {
@@ -1386,12 +1386,17 @@ void DrawFrameStart()
 	rsxInvalidateVertexCache(s_ctx);
 }
 
+extern volatile unsigned g_ps3TextureCount;				// d3d9_device.cpp
+extern volatile unsigned long long g_ps3TextureRamBytes;
+
 const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
-		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB), %u KB through the ring, %u programs (%u failed), ring full %u",
+		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB), %u KB through the ring, %u programs (%u failed), ring full %u; "
+		"%u textures, %u KB of them in main RAM",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB,
-		s_stats.ringKB, s_stats.programs, s_stats.programFailures, s_stats.ringFull);
+		s_stats.ringKB, s_stats.programs, s_stats.programFailures, s_stats.ringFull,
+		g_ps3TextureCount, (unsigned)(g_ps3TextureRamBytes / 1024));
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
 	memset(&s_stats, 0, sizeof(s_stats));
 	s_stats.programs = programs;
