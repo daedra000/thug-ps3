@@ -31,6 +31,11 @@ namespace Pcm
 	// You wanna loop a track?  Wait until this track is done, and PLAY IT AGAIN SAM!
 	bool PCMAudio_PlayMusicTrack(const char *filename);
 	bool PCMAudio_PlayMusicTrack(uint32 checksum);
+#ifdef __PLAT_PS3__
+	// A movie's sound track (Gel/Movies/Ps3/p_movies.cpp), on the music channel.
+	bool PCMAudio_PlayMovieAudio(const char *path, float volume);
+	void PCMAudio_StopMovieAudio();
+#endif
 	bool PCMAudio_PlaySoundtrackMusicTrack(size_t soundtrack, size_t track);
 	//bool PCMAudio_PlayStream( uint32 checksum, int whichStream, float volumeL, float volumeR, float pitch, bool preload = false );
 	bool PCMAudio_PlayStream(uint32 checksum, int whichStream, Sfx::sVolume *p_volume, float pitch, bool preload = false);

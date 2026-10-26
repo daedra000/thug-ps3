@@ -227,6 +227,15 @@ Manager::~Manager( void )
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+#ifdef __PLAT_PS3__
+// Reads the pads outside the task list, for loops that run outside the main loop (movies).
+void Manager::ProcessDevices( void )
+{
+	if( m_process_devices_task )
+		process_devices( *m_process_devices_task );
+}
+#endif
+
 //void Manager::ProcessDevices( void )
 //{
 //	Device*					device;

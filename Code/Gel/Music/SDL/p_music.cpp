@@ -900,6 +900,28 @@ namespace Pcm
 		return true;
 	}
 
+#ifdef __PLAT_PS3__
+	bool PCMAudio_PlayMovieAudio(const char *path, float volume)
+	{
+		MusicDecoder *track = new MusicDecoder(stdfs::path(path));
+		if (track->bink == nullptr)
+		{
+			delete track;
+			return false;
+		}
+		float coef[5] = { volume, volume, volume, volume, volume };
+		track->SetVolume(coef);
+		track->Play();
+		ReplaceStream(music_stream, track);
+		return true;
+	}
+
+	void PCMAudio_StopMovieAudio()
+	{
+		ReplaceStream(music_stream, nullptr);
+	}
+#endif
+
 	/******************************************************************/
 	/*                                                                */
 	/*                                                                */

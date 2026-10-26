@@ -37,6 +37,10 @@
 
 #include <sys/profiler.h>
 
+#ifdef __PLAT_PS3__
+namespace Ps3Movie { void Play( const char *pName ); }	// Code/Ps3/video/ps3_movie.cpp
+#endif
+
 
 /*****************************************************************************
 **								DBG Information								**
@@ -51,6 +55,9 @@ namespace Flx
 
 void PlayMovie( const char *pMovieName )
 {
+#ifdef __PLAT_PS3__
+	Ps3Movie::Play( pMovieName );
+#endif
 	return; // lwss: stubbed for now..
 	//PMovies_PlayMovie( pMovieName );
 }
