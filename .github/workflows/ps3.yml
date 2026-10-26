@@ -161,6 +161,8 @@ jobs:
           [ -n "$elf" ] || exit 0
           # Function descriptors (.opd, what function pointers hold) and code, sorted by address.
           ppu-nm -C --defined-only "$elf" | sort > thug-ps3.map
+          # Plus each function's code address, so a [crash] pc/lr/stack line can be named.
+          python3 tools/opd-map.py "$elf" thug-ps3.map || echo "opd-map failed: the map has descriptors only"
 
       - name: Look up log addresses (tools/lookup-addresses.txt)
         if: always() && matrix.variant == 'headless'

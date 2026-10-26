@@ -117,7 +117,7 @@ CFLAGS   := $(CFLAGS_INIT) $(COMMON_FLAGS) $(filter-out -fpermissive,$(GAME_FLAG
 LDFLAGS  := $(MACHDEP) -Wl,--no-multi-toc $(LIBPSL1GHT_LIB) -L$(PORTLIBS)/lib
 # Start-up allocation logging / memcap.txt (Code/Ps3/sys/ps3_diag.cpp)
 LDFLAGS  += -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memalign,--wrap=free
-LIBS     := -lio -lsysmodule -lsysutil -lsysfs -lnet -lrt -llv2 -lm
+LIBS     := -lio -llv2dbg -lsysmodule -lsysutil -lsysfs -lnet -lrt -llv2 -lm
 ifneq ($(HEADLESS),1)
   LIBS   := -lrsx -lgcm_sys -laudio $(LIBS)
 endif

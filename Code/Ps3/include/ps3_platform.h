@@ -85,6 +85,14 @@ namespace Ps3Platform
 	// Trace, then the log synced to disc: for the steps just before a suspected crash
 	// (a crash or power-off can otherwise lose the last 2 s of the log).
 	void Mark(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+	// One line straight to the log file and TTY (no stdio: safe from the crash handler, while
+	// the stopped thread may hold stdio's lock), then synced to disc.
+	void LogNow(const char* text);
+	// Where the game is, for the crash handler: last step, main loop label, script, C function.
+	void LogWhere(const char* prefix);
+	// The PPU exception handler (Code/Ps3/sys/ps3_crash.cpp).
+	void InstallCrashHandler();
+	extern char* volatile s_stackTop;		// the game thread's stack top (crash backtraces)
 
 	// Text straight to the log; never allocates (usable inside the malloc wrappers).
 	void RawWrite(const char* text);

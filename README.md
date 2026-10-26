@@ -13,45 +13,38 @@ Many PS3 lessons come from [re3-PS3](https://github.com/stingziz0u/re3-PS3) and
 
 ## Status
 
-Work in progress. **It does not run on a console yet.**
+**Playable on a console** (HEN): menus, levels, skating, story mode start, movies, music and
+sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
 
 - [x] Import kisak-thug; build on GitHub Actions (ps3toolchain + PSL1GHT, cached)
 - [x] PS3 platform target (`__PLAT_PS3__` alongside the PC code paths), PSL1GHT Makefile
-- [x] Windows-cased and backslashed `#include`s resolved without renaming files
 - [x] System layer: start-up, log file, XMB events, case-insensitive paths for the PC data,
       Win32 API stand-ins (threads, timers, files, directory search)
+- [x] Little-endian PC data on the big-endian PS3 (see [docs/ps3-byte-order.md](docs/ps3-byte-order.md))
+- [x] RSX renderer: textures, buffers, programs generated from the fixed-function state and the
+      game's ps_1_1 shaders, drawing into textures; 720p, the game's widescreen mode on 16:9
 - [x] Input: DualShock 3 (the game's PS2 pad layout maps one to one)
-- [x] Audio output: the game's mixer on an 8-channel libaudio port
-- [x] D3D9 layer with a headless backend; RSX backend stage 1 (video mode, flip, clears), with
-      the command-buffer fix from GridSiege's RSX renderer (no random RSX lock-ups)
-- [x] Builds and links with the PPU GCC; both PKGs are produced by CI
-- [x] Little-endian PC data on the big-endian PS3: every known loader converts (see
-      [docs/ps3-byte-order.md](docs/ps3-byte-order.md)); untested on a console
-- [x] RSX renderer (untested on a console): textures, vertex/index buffers, programs generated
-      from the fixed-function state, texture stages and the game's ps_1_1 shaders, assembled
-      at run time by an embedded copy of PSL1GHT's cgcomp
-- [x] Drawing into textures (blur buffers, shadow texture, imposters)
-- [x] Shader maths checked on a PC against D3D9's fixed-function pipeline
-      (`tools/rsx-asm-test`, run by CI)
-- [ ] Start-up on a console: the headless build sometimes stops before `main()`, otherwise
-      hangs while the core systems are set up (being narrowed down with the log)
-- [x] Music and streamed sounds: the PC data's audio-only Bink files (`Data/streams/music`)
-      are decoded by `Code/Ps3/audio/bink_audio.cpp` (checked against ffmpeg on a PC with
-      `tools/bink-audio-test`); untested on a console
-- [ ] Saves (`USRDIR/Save`)
+- [x] Audio: music, level ambience (`streams/pcm/pcm.wad`) and sound effects (16-bit PCM and
+      Xbox ADPCM)
+- [x] Movies: the PC data's Bink 1 movies (`Code/Ps3/video/bink_video.cpp`, LGPL 2.1+, derived
+      from FFmpeg; checked against ffmpeg with `tools/bink-video-test`); Start or X skips
+- [x] Crash log: a PPU exception handler (liblv2dbg) logs pc, registers and a backtrace;
+      `thug-ps3.map` from the CI artifacts names the addresses
+- [ ] Story mode cutscenes past the first (being checked)
+- [ ] Saves (`USRDIR/Save`): written to a `.tmp` file and swapped in when complete; untested
 
-## Installing (once it runs)
+## Installing
 
 1. Install `thug-ps3.pkg` on a PS3 with HEN or CFW. It appears in the XMB as
    **Tony Hawk's Underground**.
 2. The PKG creates `/dev_hdd0/game/THUG00001/USRDIR/Data`. Copy the contents of the `Data`
-   folder from your PC installation of THUG into it (by FTP). Letter case doesn't matter.
-3. The log is `USRDIR/thug-ps3.log` (the previous run's is `thug-ps3.old.log`). Please include
-   it with any report.
-4. While the renderer is being finished, the game saves a screenshot about every 30 seconds
-   (from 10 s in) as `USRDIR/thug-frame-000.bmp`, `-001`, ... (also on a USB drive), and logs
-   every draw of that frame. The game pauses for a moment at each one. An empty
-   `USRDIR/rsx_no_capture.txt` turns this off.
+   folder from your PC installation of THUG into it (by FTP). Letter case doesn't matter. The
+   movies in `Data/movies/bik` must be the full files (some downloads ship them empty).
+3. The log is `USRDIR/thug-ps3.log` (the previous run's is `thug-ps3.old.log`), with a copy on
+   a USB drive if one is plugged in. Please include it with any report.
+4. For finding rendering bugs, an empty `USRDIR/rsx_capture.txt` makes the game save a
+   screenshot about every 30 seconds as `USRDIR/thug-frame-NNN.bmp` and log every draw of that
+   frame. Each capture pauses the game for several seconds; it is off by default.
 
 Two PKGs are built:
 

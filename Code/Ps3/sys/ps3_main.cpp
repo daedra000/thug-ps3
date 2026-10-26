@@ -20,8 +20,10 @@
 #include <exception>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <malloc.h>
 
 namespace Audio { void Shutdown(bool wait); }	// Code/Ps3/audio/ps3_audio.cpp
+namespace Ps3Platform { extern volatile int g_ps3FilesBeingWritten; }	// ps3_win32.cpp: saves in progress
 
 // No SYS_PROCESS_PARAM: builds that set one (priority 1001, 1 MB stack, 1 MB malloc
 // pages, as GridSiege does) went back to the XMB before main() on a console, while
@@ -168,6 +170,11 @@ namespace
 	void SystemThread(void*)
 	{
 		u64 start = sysGetSystemTime(), lastBeat = start, lastSync = start;
+		// Hang watchdog: the main loop frame hasn't moved for 10 s (a long load or a movie
+		// does that too, so it only reports, once per stall, with the log synced).
+		unsigned watchFrame = 0;
+		u64 watchSince = start;
+		bool watchReported = false;
 		for (;;)
 		{
 			sysUtilCheckCallback();
@@ -180,6 +187,17 @@ namespace
 				lastSync = now;
 				sysLv2FsFsync(s_logFd);
 				if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
+			}
+			if (g_ps3Frame != watchFrame)
+			{
+				watchFrame = g_ps3Frame;
+				watchSince = now;
+				watchReported = false;
+			}
+			else if (!watchReported && g_ps3Frame && now - watchSince > 10000000)
+			{
+				watchReported = true;
+				Ps3Platform::LogWhere("[hang] no new main loop frame for 10 s (a load, a movie, or a hang):");
 			}
 			if (now - lastBeat >= 5000000)
 			{
@@ -196,7 +214,9 @@ namespace
 						s_traceText[0] ? " | last trace: " : "", s_traceText);
 				RawLog(line);
 			}
-			if (s_quit && s_quitTime && now - s_quitTime > 3000000)
+			// (Not while a save is being written, for up to 10 s: it would be lost.)
+			if (s_quit && s_quitTime && now - s_quitTime > 3000000 &&
+				(Ps3Platform::g_ps3FilesBeingWritten == 0 || now - s_quitTime > 10000000))
 			{
 				RawLog("[quit] the game did not exit within 3 s of Quit Game: exiting now\n");
 				Audio::Shutdown(false);	// stop the port; don't wait for a mixer the game may be blocking
@@ -226,7 +246,7 @@ namespace Ps3Platform
 {
 
 // Top of the game thread's stack, for the stack use shown on each [step] line.
-static char* volatile s_stackTop = NULL;
+char* volatile s_stackTop = NULL;
 static sys_ppu_thread_t s_gameThread;
 static const u64 kGameStack = 1024 * 1024;
 
@@ -307,6 +327,12 @@ static void OnTerminate()
 
 void Init(int argc, char** argv)
 {
+	// newlib gives the top of its heap back to lv2 when over 128 KB of it is free, and a
+	// stale pointer into memory given back kills the thread where PC would read old data
+	// (reVC-PS3 hit this). Keep the heap mapped; it is reused all the same, and it also saves
+	// the sbrk calls for the per-upload staging buffers.
+	mallopt(M_TRIM_THRESHOLD, 0x7fffffff);
+
 	// Unbuffered from the first line: nothing is lost if the next instruction crashes.
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
@@ -318,6 +344,7 @@ void Init(int argc, char** argv)
 		Ps3Fs::SetAppPath(argv[0]);
 	OpenLog();
 	printf("MAIN STARTED\n");
+	InstallCrashHandler();
 	printf("THUG PS3 (%s build), running from %s\n", PS3_HEADLESS ? "headless" : "normal", Ps3Fs::AppDir());
 	ReadDiagnosticSwitches();
 	if (NoThreads()) printf("[diag] nothreads.txt: no threads of our own; the game's CreateThread calls are refused\n");
@@ -382,6 +409,24 @@ bool SystemMenuOpen()
 void FlushLog()
 {
 	fflush(stdout);
+}
+
+void LogNow(const char* text)
+{
+	RawLog(text);
+	if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
+}
+
+void LogWhere(const char* prefix)
+{
+	char line[400];
+	snprintf(line, sizeof(line), "%s main loop frame %u, task %p, at %s, script %s, cfunc %p (name it with thug-ps3.map), member 0x%08x, "
+		"interp in 0x%08x line %u token %u, runscript 0x%08x, last step: %s\n",
+		prefix, g_ps3Frame, (const void*)g_ps3CurrentTask, g_ps3Where ? (const char*)g_ps3Where : "-",
+		g_ps3ScriptName ? (const char*)g_ps3ScriptName : "-", (const void*)g_ps3CFunction, g_ps3MemberFunction,
+		g_ps3ScriptSub, g_ps3ScriptLine, g_ps3ScriptToken, g_ps3RunScript, (const char*)s_lastStep);
+	LogNow(line);
 }
 
 void Mark(const char* fmt, ...)
