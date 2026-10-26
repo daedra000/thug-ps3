@@ -473,6 +473,14 @@ void CAssMan::DestroyReferences( CAsset* pAsset )
 
 //		printf ("Deleting Reference %p of type %d, <%s>, <%s>\n",p_asset->mp_ref_asset,p_asset->mp_ref_asset->GetType(),p_asset->mp_ref_asset->Name(), p_asset->mp_ref_asset->GetText());
 		uint32 id = pAsset->mp_ref_asset->m_id;
+#ifdef __PLAT_PS3__
+		{
+			static int s_refs;
+			if (s_refs++ < 60)
+				printf("[anim]   destroying reference 0x%08x to asset 0x%08x (ref permanent %d, asset permanent %d)\n", id, pAsset->m_id,
+					(int)pAsset->mp_ref_asset->m_permanent, (int)pAsset->m_permanent);
+		}
+#endif
 		pAsset->mp_ref_asset->Unlink();
 		delete pAsset->mp_ref_asset; 
 		mp_asset_table->FlushItem(id);		
@@ -760,6 +768,11 @@ void CAssMan::UnloadAllTables( bool destroy_permanent )
 	// set + anim checksum) and how many permanent assets it keeps.
 	int ps3_unloaded = 0, ps3_kept = 0, ps3_logged = 0;
 	printf("[anim] UnloadAllTables(%s)\n", destroy_permanent ? "all" : "non-permanent");
+	{
+		// The skater's Idle (animload_thps5_human + Idle) went missing in levels.
+		CAsset* p_idle = mp_asset_table->GetItem(0x3cd9317f);
+		printf("[anim]   skater Idle reference 0x3cd9317f: %s, permanent %d\n", p_idle ? "present" : "absent", p_idle ? (int)p_idle->m_permanent : -1);
+	}
 #endif
 	 
 	p_asset = mp_assetlist_head->mp_next;
