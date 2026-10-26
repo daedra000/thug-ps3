@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <lv2/sysfs.h>
+#include <sys/file.h>
 #include <sys/thread.h>
 #include <sys/mutex.h>
 #include <sys/cond.h>
@@ -61,7 +62,23 @@ namespace
 	{
 		s32 fd;
 		bool writable;
+		// A whole file being written (the game's saves): written to <path>.tmp and renamed
+		// over the real file when it closes, so a power cut or a full disk mid-save leaves
+		// the old save, not half of each.
+		bool replace;
+		bool failed;		// a write failed: keep the old file
+		char path[1024];
 	};
+}
+
+namespace Ps3Platform
+{
+	// Saves being written (the forced exit after XMB "Quit Game" waits for them).
+	volatile int g_ps3FilesBeingWritten = 0;
+}
+
+namespace
+{
 
 	__thread DWORD s_lastError = 0;	// per thread, as on Win32
 
@@ -319,9 +336,37 @@ BOOL CloseHandle(HANDLE hh)
 		return TRUE;
 	}
 	case kFile:
-		sysFsClose(((FileHandle*)base)->fd);
-		delete (FileHandle*)base;
-		return TRUE;
+	{
+		FileHandle* f = (FileHandle*)base;
+		BOOL ok = TRUE;
+		if (f->writable)
+			sysLv2FsFsync(f->fd);	// on disc before it counts as written
+		sysFsClose(f->fd);
+		if (f->replace)
+		{
+			char tmp[1100];
+			snprintf(tmp, sizeof(tmp), "%s.tmp", f->path);
+			if (f->failed)
+			{
+				printf("[save] writing %s failed: the old file is kept\n", f->path);
+				sysFsUnlink(tmp);
+				ok = FALSE;
+			}
+			else
+			{
+				sysFsUnlink(f->path);
+				if (sysLv2FsRename(tmp, f->path) != 0)
+				{
+					printf("[save] couldn't rename %s into place\n", tmp);
+					ok = FALSE;
+				}
+			}
+			Ps3Fs::InvalidateParent(f->path);
+			__sync_fetch_and_sub(&Ps3Platform::g_ps3FilesBeingWritten, 1);
+		}
+		delete f;
+		return ok;
+	}
 	}
 	return FALSE;
 }
@@ -496,8 +541,28 @@ HANDLE CreateFileA(LPCSTR name, DWORD access, DWORD, LPSECURITY_ATTRIBUTES, DWOR
 	default: break;
 	}
 
+	// Win32 CREATE_NEW fails if the file exists.
+	if (disposition == CREATE_NEW && Ps3Fs::Exists(path))
+	{
+		s_lastError = 80;	// ERROR_FILE_EXISTS
+		return INVALID_HANDLE_VALUE;
+	}
+
+	// A write-only file that will be (re)written whole (the only such CreateFile user is
+	// the memory card code, for saves): write it beside the real one, then swap in on close.
+	const bool replace = write && !(access & GENERIC_READ) &&
+		(disposition == OPEN_ALWAYS || disposition == CREATE_ALWAYS || disposition == CREATE_NEW);
+	char openPath[1100];
+	if (replace)
+	{
+		snprintf(openPath, sizeof(openPath), "%s.tmp", path);
+		flags |= SYS_O_CREAT | SYS_O_TRUNC;
+	}
+	else
+		snprintf(openPath, sizeof(openPath), "%s", path);
+
 	s32 fd;
-	if (sysFsOpen(path, flags, &fd, NULL, 0) != 0)
+	if (sysFsOpen(openPath, flags, &fd, NULL, 0) != 0)
 	{
 		s_lastError = ERROR_FILE_NOT_FOUND;
 		return INVALID_HANDLE_VALUE;
@@ -509,6 +574,11 @@ HANDLE CreateFileA(LPCSTR name, DWORD access, DWORD, LPSECURITY_ATTRIBUTES, DWOR
 	h->kind = kFile;
 	h->fd = fd;
 	h->writable = write;
+	h->replace = replace;
+	h->failed = false;
+	snprintf(h->path, sizeof(h->path), "%s", path);
+	if (replace)
+		__sync_fetch_and_add(&Ps3Platform::g_ps3FilesBeingWritten, 1);
 	s_lastError = ERROR_SUCCESS;
 	return h;
 }
@@ -553,7 +623,14 @@ BOOL WriteFile(HANDLE hh, LPCVOID buf, DWORD toWrite, LPDWORD written, LPOVERLAP
 	if (!h || hh == INVALID_HANDLE_VALUE || h->kind != kFile) return FALSE;
 	if (!SeekForOverlapped(h, ov)) return FALSE;
 	u64 put = 0;
-	if (sysFsWrite(h->fd, buf, toWrite, &put) != 0) return FALSE;
+	if (sysFsWrite(h->fd, buf, toWrite, &put) != 0 || put < toWrite)
+	{
+		// A full disk shows up as a short write: report it, and keep the old file.
+		h->failed = true;
+		if (written) *written = (DWORD)put;
+		s_lastError = 112;	// ERROR_DISK_FULL
+		return FALSE;
+	}
 	if (written) *written = (DWORD)put;
 	if (ov) { ov->InternalHigh = put; if (ov->hEvent) SetEvent(ov->hEvent); }
 	return TRUE;

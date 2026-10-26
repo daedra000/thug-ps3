@@ -117,6 +117,16 @@ void CALLBACK loadingBarTimerCallback( UINT uTimerID, UINT uMsg, DWORD_PTR dwUse
 	{
 		// LWSS: Changes for PC (Done!)
 		WaitForSingleObject(NxXbox::EngineGlobals.g_asyncRenderMutex, 0xFFFFFFFF);
+#ifdef __PLAT_PS3__
+		// timeKillEvent doesn't wait for a callback that is already running: one that was
+		// waiting for the lock while the loading screen was hidden must not draw now, in
+		// the middle of the game's own frame.
+		if( NxXbox::EngineGlobals.loadingbar_timer_event == 0 || !NxXbox::EngineGlobals.loadingscreen_visible )
+		{
+			ReleaseMutex(NxXbox::EngineGlobals.g_asyncRenderMutex);
+			return;
+		}
+#endif
 		D3DDevice_BeginScene(); 
 		
 		DrawLoadScreenTexture();

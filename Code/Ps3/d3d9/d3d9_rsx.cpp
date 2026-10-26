@@ -35,6 +35,7 @@
 #include <rsx/rsx.h>
 #include <sysutil/video.h>
 #include <sys/systime.h>
+#include <lv2/mutex.h>
 #include <vector>
 #include <ps3_fs.h>
 #include "d3d9_rsx_internal.h"
@@ -375,13 +376,39 @@ void Shutdown()
 	// The game never shuts the device down before exiting.
 }
 
+static sys_lwmutex_t s_deviceLock;
+static volatile bool s_deviceLockReady;
+
+void DeviceLock()
+{
+	if (!s_deviceLockReady)
+	{
+		// First use is on the game thread at start-up, before the loading-bar timer runs.
+		sys_lwmutex_attr_t attr;
+		memset(&attr, 0, sizeof(attr));
+		attr.attr_protocol = SYS_LWMUTEX_PROTOCOL_PRIO;
+		attr.attr_recursive = SYS_LWMUTEX_ATTR_RECURSIVE;
+		strcpy(attr.name, "d3ddev");
+		sysLwMutexCreate(&s_deviceLock, &attr);
+		s_deviceLockReady = true;
+	}
+	sysLwMutexLock(&s_deviceLock, 0);
+}
+
+void DeviceUnlock()
+{
+	sysLwMutexUnlock(&s_deviceLock);
+}
+
 void BeginFrame(IDirect3DDevice9*)
 {
+	DeviceGuard guard;
 	if (s_ready) FrameBegin();
 }
 
 void Present(IDirect3DDevice9*)
 {
+	DeviceGuard guard;
 	if (!s_ready) return;
 	FrameBegin();	// a frame with no draws or clears still flips a valid buffer
 	s_frameReady = false;
@@ -421,6 +448,7 @@ void Present(IDirect3DDevice9*)
 
 void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
 {
+	DeviceGuard guard;
 	if (!s_ready) return;
 	u32 mask = 0;
 	if (flags & D3DCLEAR_TARGET)  mask |= GCM_CLEAR_R | GCM_CLEAR_G | GCM_CLEAR_B | GCM_CLEAR_A;

@@ -9,6 +9,18 @@ class IDirect3DDevice9;
 
 namespace Ps3Gfx
 {
+// One recursive lock around every backend entry point: the shim's stand-in for D3D's
+// MULTITHREADED device. The loading bar draws from a timer thread while the game thread
+// releases textures and buffers, and both touch the deferred-free list, the bound-texture
+// table and the command buffer.
+void DeviceLock();
+void DeviceUnlock();
+struct DeviceGuard
+{
+	DeviceGuard() { DeviceLock(); }
+	~DeviceGuard() { DeviceUnlock(); }
+};
+
 	extern gcmContextData* s_ctx;
 	extern u32 s_frameSeq;		// frames submitted so far (the frame fence counts these)
 	extern bool s_skipFrame;	// this frame is not being drawn (the system holds the display)
