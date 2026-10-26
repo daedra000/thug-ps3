@@ -167,14 +167,17 @@ namespace
 	// hasn't gone by then. (Grid Siege runs its system callbacks on a thread too.)
 	void SystemThread(void*)
 	{
-		u64 start = sysGetSystemTime(), lastBeat = start;
+		u64 start = sysGetSystemTime(), lastBeat = start, lastSync = start;
 		for (;;)
 		{
 			sysUtilCheckCallback();
 			u64 now = sysGetSystemTime();
-			if (s_logDirty && s_logFd >= 0)
+			// Sync the log every 2 s at most: a sync holds the file, and the game's own log
+			// writes wait behind it (syncing every 50 ms showed up as stutter).
+			if (s_logDirty && s_logFd >= 0 && now - lastSync > 2000000)
 			{
 				s_logDirty = false;
+				lastSync = now;
 				sysLv2FsFsync(s_logFd);
 				if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
 			}
@@ -359,9 +362,16 @@ bool QuitRequested()
 
 void RequestQuit()
 {
-	printf("[quit] the game's Quit was chosen\n");
+	// The game's own shutdown path stalls (the 3 s fallback always ended up doing the exit),
+	// and nothing needs saving at this point, so leave straight away.
+	printf("[quit] the game's Quit was chosen: exiting to the XMB\n");
 	s_quitTime = sysGetSystemTime();
 	s_quit = true;
+	Audio::Shutdown(false);	// stop the port without waiting on the mixer
+	fflush(stdout);
+	if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
+	sysProcessExit(0);
 }
 
 bool SystemMenuOpen()

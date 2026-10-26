@@ -73,8 +73,8 @@ enum { kLabelIndex = 255, kFrameLabel = 253 };
 // kCaptureEvery frames (about 30 s), one frame's draws are logged ([cap] lines) and the
 // finished picture is saved in USRDIR (and on a USB drive) as thug-frame-NNN.bmp, NNN
 // counting up and wrapping after kCaptureFiles (so a long session keeps the last hour).
-// An empty USRDIR/rsx_no_capture.txt turns it off. Each capture stalls the game for a
-// moment while the picture is written.
+// Off unless an empty USRDIR/rsx_capture.txt exists: each capture stalled the game for
+// about 10 s (the draw log plus reading the picture back from video memory, twice).
 bool s_capture;
 static const unsigned kCaptureFrame = 600, kCaptureEvery = 1800, kCaptureFiles = 120;
 static bool s_captureOff;
@@ -354,9 +354,9 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		s_ready = true;
 		{
 			char path[600];
-			snprintf(path, sizeof(path), "%s/rsx_no_capture.txt", Ps3Fs::AppDir());
-			s_captureOff = Ps3Fs::Exists(path);
-			if (s_captureOff) printf("[gfx] rsx_no_capture.txt: no frame captures\n");
+			snprintf(path, sizeof(path), "%s/rsx_capture.txt", Ps3Fs::AppDir());
+			s_captureOff = !Ps3Fs::Exists(path);
+			if (!s_captureOff) printf("[gfx] rsx_capture.txt: capturing a frame every 30 s\n");
 		}
 		if (!DrawInit())
 			GpuLog("draw set-up failed: frames will be cleared but not drawn");

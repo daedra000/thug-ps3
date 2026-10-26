@@ -159,6 +159,12 @@ void CALLBACK loadingBarTimerCallback( UINT uTimerID, UINT uMsg, DWORD_PTR dwUse
 		LODWORD(vertexes[19]) = loadingBarBorderColor;
 
 		NxXbox::set_texture(0, 0);
+#ifdef __PLAT_PS3__
+		// The bar has no texture, but stage 0 is still set to output the texture (from the
+		// picture drawn above), which the RSX backend reads as white: take the vertex colour.
+		D3DDevice_SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+		D3DDevice_SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+#endif
 		D3DDevice_SetRenderState(D3DRS_ZENABLE, 0);
 		NxXbox::set_vertex_shader(D3DFVF_DIFFUSE | D3DFVF_XYZRHW);
 		D3DDevice_DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertexes, 20);

@@ -61,6 +61,7 @@ Dbg_DefineProject( GEL, "GEL Library" )
 void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+#include <sys/systime.h>
 #endif
 #ifdef __PLAT_PS3__
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
@@ -401,6 +402,21 @@ void		Manager::MainLoop( void )
 			// The first frames, then every 10 s or so (60 Hz), in the log.
 			++s_ps3Frame;
 			g_ps3Frame = s_ps3Frame;
+			// Hitches: a main loop frame that took over 150 ms (outside the first frames,
+			// which load), with where the previous frame ended up, to find the freezes.
+			{
+				static u64 s_ps3LastFrameTime = 0;
+				static unsigned s_ps3Hitches = 0;
+				const u64 now = sysGetSystemTime();
+				if (s_ps3LastFrameTime && s_ps3Frame > 30 && now - s_ps3LastFrameTime > 150000 && s_ps3Hitches < 300)
+				{
+					++s_ps3Hitches;
+					printf("[hitch] frame %u took %u ms (task %p, at %s, script 0x%08x line %u)\n", s_ps3Frame,
+						(unsigned)((now - s_ps3LastFrameTime) / 1000), (const void*)g_ps3CurrentTask,
+						g_ps3Where ? (const char*)g_ps3Where : "-", g_ps3ScriptSub, g_ps3ScriptLine);
+				}
+				s_ps3LastFrameTime = now;
+			}
 			g_ps3TraceTasks = s_ps3Frame <= 2;
 			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || (s_ps3Frame <= 600 ? s_ps3Frame % 60 == 0 : s_ps3Frame % 600 == 0))
 			{
