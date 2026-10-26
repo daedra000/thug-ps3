@@ -285,6 +285,10 @@ sTexture *LoadTexture( const char *p_filename )
 		uint16	original_height;
 		uint32	palette_data_size;
 	};
+#if defined(__PLAT_PS3__)
+	// Read straight from the PC .img files.
+	static_assert(sizeof(sIMGHeader) == 32, "sIMGHeader no longer matches the .img file format");
+#endif
 
 	void *p_FH = File::Open( p_filename, "rb" );
 	

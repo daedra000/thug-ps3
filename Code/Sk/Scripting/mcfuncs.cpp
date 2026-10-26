@@ -163,6 +163,12 @@ struct SMcFileHeader
 	
 	int mVersion;
 };
+
+#if defined(__PLAT_PS3__)
+// Saves are written and read as raw bytes; keep the header the same size as on the PC.
+static_assert(sizeof(bool) == 1, "bool must be one byte, as on the PC");
+static_assert(sizeof(SMcFileHeader) == 20, "SMcFileHeader no longer matches the PC layout");
+#endif
 	
 /*****************************************************************************
 **								 Private Data								**

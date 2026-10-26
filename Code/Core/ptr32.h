@@ -16,6 +16,27 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+
+// A pointer going into a 32-bit slot. Every PS3 address the game uses is below 4 GB
+// today; if one ever isn't, the slot would silently hold a different address, so on
+// 64-bit builds say so (once) in the log rather than crash somewhere unrelated later.
+inline uint32_t PtrTo32(const void* p)
+{
+	uintptr_t v = (uintptr_t)p;
+#if defined(__LP64__) || defined(_WIN64)
+	if (v >> 32)
+	{
+		static bool s_logged = false;
+		if (!s_logged)
+		{
+			s_logged = true;
+			printf("PS3: pointer %p stored in a 32-bit field loses its top half\n", p);
+		}
+	}
+#endif
+	return (uint32_t)v;
+}
 
 template<typename T>
 struct Ptr32
@@ -27,7 +48,7 @@ struct Ptr32
 	operator T*() const { return (T*)(uintptr_t)m_bits; }
 	T* operator->() const { return (T*)(uintptr_t)m_bits; }
 	T& operator*() const { return *(T*)(uintptr_t)m_bits; }
-	Ptr32& operator=(T* p) { m_bits = (uint32_t)(uintptr_t)p; return *this; }
+	Ptr32& operator=(T* p) { m_bits = PtrTo32(p); return *this; }
 	Ptr32& operator+=(ptrdiff_t n) { return *this = (T*)*this + n; }
 	Ptr32& operator-=(ptrdiff_t n) { return *this = (T*)*this - n; }
 	Ptr32& operator++() { return *this += 1; }

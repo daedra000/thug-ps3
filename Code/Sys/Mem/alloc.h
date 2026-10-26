@@ -36,6 +36,13 @@
 #define __EFFICIENT__		// Comment in for efficient allocation.
 #endif		// __PLAT_NGC__
 
+// THUG PS3: __EFFICIENT__ packs a block's size into a 24-bit field (16 MB at most), but the
+// PS3 heaps are far bigger and freeing merges neighbouring free blocks with no size check,
+// so a merged block could silently wrap its size. Keep it off here unless that is handled.
+#if defined(__PLAT_PS3__) && defined(__EFFICIENT__)
+#error "__EFFICIENT__ (24-bit block sizes) is not safe with the PS3 heap sizes"
+#endif
+
 //#ifdef	__PLAT_NGPS__											  
 #define	__LINKED_LIST_HEAP__    
 //#else

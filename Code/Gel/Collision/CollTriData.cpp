@@ -147,25 +147,65 @@ CCollObjTriData::~CCollObjTriData()
 /* loaded. The layout walk mirrors CScene::read_collision.        */
 /******************************************************************/
 
-void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
+// Values written into SReadHeader::m_pad3 (padding the code owns) once a buffer has
+// been looked at, so a second Pip::Load of the same cached buffer knows its state
+// without guessing from the data. A real file's padding is never either value.
+enum
+{
+	vCOLL_FILE_CONVERTED	= 0x50533342,	// 'PS3B': converted to big-endian, layout checked
+	vCOLL_FILE_BAD			= 0x50533358,	// 'PS3X': layout ran past the file; don't use it
+};
+
+bool	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
 {
 #ifndef __PLAT_NGC__
-	if (Endian::kHostIsLittle || !p_file)
+	if (!p_file)
 	{
-		return;
+		return false;
+	}
+	if (Endian::kHostIsLittle)
+	{
+		return true;
+	}
+	if (file_size < sizeof(SReadHeader))
+	{
+		printf("PS3: collision file too small (%u bytes), not used\n", (unsigned) file_size);
+		return false;
 	}
 
 	SReadHeader *p_header = (SReadHeader *) p_file;
-	// The version is a small number; still little-endian it reads as a huge one.
-	// Converted data is left alone, so loading the same file twice is fine.
-	if ((uint32) p_header->m_version < 0x10000)
+	if ((uint32) p_header->m_pad3 == vCOLL_FILE_CONVERTED)
 	{
-		return;
+		return true;
 	}
+	if ((uint32) p_header->m_pad3 == vCOLL_FILE_BAD)
+	{
+		return false;
+	}
+
+	// Every region below is bounded by the file size: the counts and offsets come
+	// from the file, and a bad or truncated file must not make us swap bytes in
+	// whatever memory follows the buffer. Sizes are worked out in 64 bits so that
+	// large counts can't wrap around.
+	uint8 *p_end = p_file + file_size;
+	#define COLL_FITS(p, bytes)	((p) >= p_file && (p) <= p_end && (uint64)(bytes) <= (uint64)(p_end - (p)))
+	#define COLL_FAIL(what)		do { printf("PS3: collision file layout runs past its %u bytes (%s), not used\n", (unsigned) file_size, what); \
+									 p_header->m_pad3 = (int) vCOLL_FILE_BAD; return false; } while (0)
+
 	Endian::Fix32Array(p_header, sizeof(SReadHeader) / 4);
+	if (p_header->m_num_objects < 0 || p_header->m_total_num_verts < 0 ||
+		p_header->m_total_num_faces_large < 0 || p_header->m_total_num_faces_small < 0 ||
+		p_header->m_total_num_verts_large < 0 || p_header->m_total_num_verts_small < 0)
+	{
+		COLL_FAIL("negative count");
+	}
 
 	CCollObjTriData *p_objects = (CCollObjTriData *) (p_file + sizeof(SReadHeader));
 	int num_objects = p_header->m_num_objects;
+	if (!COLL_FITS((uint8 *) p_objects, (uint64) num_objects * sizeof(CCollObjTriData)))
+	{
+		COLL_FAIL("object table");
+	}
 	for (int i = 0; i < num_objects; ++i)
 	{
 		CCollObjTriData &o = p_objects[i];
@@ -181,19 +221,34 @@ void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
 		Endian::Fix(o.m_pad1);
 	}
 
-	uint8 *p_end = p_file + file_size;
 	uint8 *p_base_vert_addr = (uint8 *) (p_objects + num_objects);
 	p_base_vert_addr = (uint8 *) (((uintptr_t) (p_base_vert_addr + 15)) & ~(uintptr_t) 15);
-	uint8 *p_base_intensity_addr = p_base_vert_addr + (p_header->m_total_num_verts_large * GetVertElemSize() +
-													   p_header->m_total_num_verts_small * GetVertSmallElemSize());
+	uint64 vert_bytes = (uint64) p_header->m_total_num_verts_large * GetVertElemSize() +
+						(uint64) p_header->m_total_num_verts_small * GetVertSmallElemSize();
+	if (!COLL_FITS(p_base_vert_addr, vert_bytes + (uint64) p_header->m_total_num_verts))
+	{
+		COLL_FAIL("vertex and intensity arrays");
+	}
+	uint8 *p_base_intensity_addr = p_base_vert_addr + vert_bytes;
 	uint8 *p_base_face_addr = p_base_intensity_addr + p_header->m_total_num_verts;
 	p_base_face_addr = (uint8 *) (((uintptr_t) (p_base_face_addr + 3)) & ~(uintptr_t) 3);
+	uint64 face_bytes = (uint64) p_header->m_total_num_faces_large * GetFaceElemSize() +
+						(uint64) p_header->m_total_num_faces_small * GetFaceSmallElemSize();
+	if (!COLL_FITS(p_base_face_addr, face_bytes))
+	{
+		COLL_FAIL("face arrays");
+	}
 
 	// Vertices and faces, per object (each uses either the large or the small kind).
 	for (int i = 0; i < num_objects; ++i)
 	{
 		CCollObjTriData &o = p_objects[i];
 		uint8 *p_verts = p_base_vert_addr + PtrBits(o.mp_float_vert);
+		uint64 obj_vert_bytes = (uint64) o.m_num_verts * (o.m_use_fixed_verts ? GetVertSmallElemSize() : GetVertElemSize());
+		if (!COLL_FITS(p_verts, obj_vert_bytes))
+		{
+			COLL_FAIL("object vertices");
+		}
 		if (o.m_use_fixed_verts)
 		{
 			Endian::Fix16Array(p_verts, o.m_num_verts * 3);		// SFixedVert: 3 x uint16
@@ -204,6 +259,11 @@ void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
 		}
 
 		uint8 *p_faces = p_base_face_addr + PtrBits(o.mp_faces);
+		uint64 obj_face_bytes = (uint64) o.m_num_faces * (o.m_use_face_small ? sizeof(SFaceSmall) : sizeof(SFace));
+		if (!COLL_FITS(p_faces, obj_face_bytes))
+		{
+			COLL_FAIL("object faces");
+		}
 		if (o.m_use_face_small)
 		{
 			for (int f = 0; f < o.m_num_faces; ++f)
@@ -221,12 +281,19 @@ void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
 
 	// BSP nodes: two 32-bit words each. As little-endian words, a leaf's
 	// axis/pad/face-count bytes come out in the big-endian SLeaf order.
-	uint8 *p_node_array_size = p_base_face_addr + (p_header->m_total_num_faces_large * GetFaceElemSize() +
-												   p_header->m_total_num_faces_small * GetFaceSmallElemSize());
+	uint8 *p_node_array_size = p_base_face_addr + face_bytes;
 	p_node_array_size += (p_header->m_total_num_faces_large & 1) ? 2 : 0;
+	if (!COLL_FITS(p_node_array_size, 4))
+	{
+		COLL_FAIL("BSP size word");
+	}
 	Endian::Fix(*(uint32 *) p_node_array_size);
 	uint32 node_array_size = *(uint32 *) p_node_array_size;
 	uint8 *p_base_node_addr = p_node_array_size + 4;
+	if (!COLL_FITS(p_base_node_addr, node_array_size))
+	{
+		COLL_FAIL("BSP nodes");
+	}
 	Endian::Fix32Array(p_base_node_addr, node_array_size / 4);
 
 	// Face index arrays (uint16) run to the end of the file.
@@ -235,7 +302,12 @@ void	CCollObjTriData::sFixFileByteOrder(uint8 *p_file, uint32 file_size)
 	{
 		Endian::Fix16Array(p_base_face_idx_addr, (p_end - p_base_face_idx_addr) / 2);
 	}
+
+	#undef COLL_FITS
+	#undef COLL_FAIL
+	p_header->m_pad3 = (int) vCOLL_FILE_CONVERTED;
 #endif	// !__PLAT_NGC__
+	return true;
 }
 
 bool	CCollObjTriData::InitCollObjTriData(CScene * p_scene, void *p_base_vert_addr, void *p_base_intensity_addr,
@@ -378,14 +450,16 @@ CCollBSPNode * CCollBSPNode::clone(bool instance)
 #endif //	__NOPT_ASSERT__
 
 		// Now adjust the pointers by finding the differences
-		int node_address_diff = (int) p_new_bsp_array - (int) this;
-		int face_address_diff = (int) p_new_face_index_array - (int) p_orig_face_index_array;
+		// intptr_t, not int: on the 64-bit PS3 build an (int) cast drops the top half of
+		// the address, and a sign-extended result would be wrong above 0x80000000.
+		intptr_t node_address_diff = (intptr_t) p_new_bsp_array - (intptr_t) this;
+		intptr_t face_address_diff = (intptr_t) p_new_face_index_array - (intptr_t) p_orig_face_index_array;
 		for (int i = 0; i < num_nodes; i++)
 		{
 			if (p_new_bsp_array[i].IsNode())
 			{
 				// Adjust branch pointers
-				p_new_bsp_array[i].m_node.m_children.SetBasePointer((CCollBSPNode *)((int) p_new_bsp_array[i].m_node.m_children.GetBasePointer() + node_address_diff));
+				p_new_bsp_array[i].m_node.m_children.SetBasePointer((CCollBSPNode *)((intptr_t) p_new_bsp_array[i].m_node.m_children.GetBasePointer() + node_address_diff));
 			}
 			else
 			{

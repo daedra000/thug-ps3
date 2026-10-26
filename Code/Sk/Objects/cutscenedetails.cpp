@@ -3231,6 +3231,50 @@ void CCutsceneData::load_models()
 
 				// used for cutscene head scaling
 				uint8* pWeightMapData = (uint8*)mp_fileLibrary->GetFileData( pFileInfo->fileNameChecksum, CRCD(0x2cd4107d,"WGT"), false );
+#ifdef __PLAT_PS3__
+				// PS3: version, vertex count and 3 weights per vertex are little-endian; the
+				// indices after them are bytes. The version word isn't
+				// read anywhere, so once the buffer is converted it is overwritten with a
+				// marker, in case this runs again on the same buffer: guessing from the
+				// count's value (as before) misfires when the count reads the same both ways.
+				// The count comes from the file, so the whole block is checked against the
+				// file's size first; a file that doesn't fit is logged and skipped (the head
+				// then loads without scaling).
+				if ( pWeightMapData )
+				{
+					static const uint32 vWGT_CONVERTED = 0x50533342;	// 'PS3B'
+					static const uint32 vWGT_BAD = 0x50533358;			// 'PS3X'
+					const File::SFileInfo* pWgtInfo = mp_fileLibrary->GetFileInfo( pFileInfo->fileNameChecksum, CRCD(0x2cd4107d,"WGT"), false );
+					uint32 wgt_size = ( pWgtInfo && pWgtInfo->fileSize > 0 ) ? (uint32)pWgtInfo->fileSize : 0;
+					uint32* pWgtVersion = (uint32*)pWeightMapData;
+					if ( wgt_size < 8 )
+					{
+						printf( "PS3: cutscene weight map %08x too small (%u bytes), not used\n", pFileInfo->fileNameChecksum, wgt_size );
+						pWeightMapData = NULL;
+					}
+					else if ( *pWgtVersion != vWGT_CONVERTED && *pWgtVersion != vWGT_BAD )
+					{
+						uint64 num_verts = Endian::Le32( *(uint32*)( pWeightMapData + 4 ));
+						// The 3 floats per vertex that get swapped must lie inside the file.
+						if ( 8 + num_verts * 3 * sizeof(float) <= wgt_size )
+						{
+							Endian::Fix32Array( pWeightMapData, 2 );
+							Endian::Fix32Array( pWeightMapData + 8, (size_t)num_verts * 3 );
+							*pWgtVersion = vWGT_CONVERTED;
+						}
+						else
+						{
+							printf( "PS3: cutscene weight map %08x: %llu verts don't fit its %u bytes, not used\n",
+									pFileInfo->fileNameChecksum, (unsigned long long)num_verts, wgt_size );
+							*pWgtVersion = vWGT_BAD;
+						}
+					}
+					if ( pWeightMapData && *pWgtVersion != vWGT_CONVERTED )
+					{
+						pWeightMapData = NULL;
+					}
+				}
+#endif
 				if ( pWeightMapData )
 				{
 					Nx::SMeshScalingParameters theParams;
@@ -3265,16 +3309,6 @@ void CCutsceneData::load_models()
 						testBoneScales[4] = get_scale( pCASModelStruct, CRCD(0x1dbcfae8,"nose_bone_group") );
 					}
 
-#ifdef __PLAT_PS3__
-					// PS3: version, vertex count and 3 weights per vertex are little-endian; the
-					// indices after them are bytes. The count is far smaller in the right byte order,
-					// which tells whether the buffer has been converted already.
-					if( Endian::Swap32( *(uint32*)( pWeightMapData + 4 )) < *(uint32*)( pWeightMapData + 4 ))
-					{
-						Endian::Fix32Array( pWeightMapData, 2 );
-						Endian::Fix32Array( pWeightMapData + 8, *(int*)( pWeightMapData + 4 ) * 3 );
-					}
-#endif
 					// skip past version number
 					pWeightMapData += sizeof(int); 
 

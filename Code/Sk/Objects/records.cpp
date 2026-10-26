@@ -397,7 +397,7 @@ void 		CRecordTable::WriteIntoStructure(Script::CStruct *pIn)
 		pArray->SetStructure(i,pStruct);
 	}
 
-	pIn->AddComponent(Script::GenerateCRC("RecordTable"),ESYMBOLTYPE_ARRAY,(int)pArray);
+	pIn->AddArrayPointer(Script::GenerateCRC("RecordTable"), pArray);
 }
 			
 
@@ -499,32 +499,32 @@ void		CLevelRecords::WriteIntoStructure(Script::CStruct *pIn)
 	Script::CStruct *pStruct=new Script::CStruct;
    	Dbg_MsgAssert(mp_highScores,("NULL mp_highScores"));
 	mp_highScores->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("HighScores"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("HighScores"), pStruct);
 	
 	pStruct=new Script::CStruct;
    	Dbg_MsgAssert(mp_bestCombos,("NULL mp_bestCombos"));
 	mp_bestCombos->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("BestCombos"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("BestCombos"), pStruct);
 	
 	pStruct=new Script::CStruct;
    	Dbg_MsgAssert(mp_longestCombo,("NULL mp_longestCombo"));
 	mp_longestCombo->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("LongestCombo"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("LongestCombo"), pStruct);
 	
 	pStruct=new Script::CStruct;
    	Dbg_MsgAssert(mp_longestGrind,("NULL mp_longestGrind"));
 	mp_longestGrind->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("LongestGrind"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("LongestGrind"), pStruct);
 	
 	pStruct=new Script::CStruct;
    	Dbg_MsgAssert(mp_longestLipTrick,("NULL mp_longestLipTrick"));
 	mp_longestLipTrick->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("LongestLipTrick"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("LongestLipTrick"), pStruct);
    	
 	pStruct=new Script::CStruct;
 	Dbg_MsgAssert(mp_longestManual,("NULL mp_longestManual"));
 	mp_longestManual->WriteIntoStructure(pStruct);
-	pIn->AddComponent(Script::GenerateCRC("LongestManual"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pStruct);
+	pIn->AddStructurePointer(Script::GenerateCRC("LongestManual"), pStruct);
 }
 			
 
@@ -624,7 +624,7 @@ void 		CGameRecords::WriteIntoStructure(Script::CStruct *pIn)
 		pArray->SetStructure(i,pStruct);
 	}
 
-	pIn->AddComponent(Script::GenerateCRC("GameRecords"),ESYMBOLTYPE_ARRAY,(int)pArray);
+	pIn->AddArrayPointer(Script::GenerateCRC("GameRecords"), pArray);
 	pIn->AddComponent(Script::GenerateCRC("DefaultInitials"),ESYMBOLTYPE_STRING,mp_defaultInitials->Get());
 }
 			

@@ -1282,11 +1282,20 @@ void CStruct::AddComponent(uint32 nameChecksum, ESymbolType type, int integer)
 		case ESYMBOLTYPE_FLOAT:
 			AddFloat(nameChecksum,*(float*)&integer);
 			break;
+		// A pointer squeezed through an int only survives while it fits in 31 bits; on the
+		// 64-bit PS3 build a higher address would come back sign-extended and wrong. Call
+		// AddStructurePointer/AddArrayPointer with the pointer instead (all callers do now).
 		case ESYMBOLTYPE_STRUCTUREPOINTER:
-			AddStructurePointer(nameChecksum,(CStruct*)integer);
+#ifdef __PLAT_PS3__
+			if (integer < 0) printf("PS3: AddComponent got a structure pointer that doesn't fit an int (%08x)\n", (unsigned)integer);
+#endif
+			AddStructurePointer(nameChecksum,(CStruct*)(intptr_t)integer);
 			break;
 		case ESYMBOLTYPE_ARRAY:
-			AddArrayPointer(nameChecksum,(CArray*)integer);
+#ifdef __PLAT_PS3__
+			if (integer < 0) printf("PS3: AddComponent got an array pointer that doesn't fit an int (%08x)\n", (unsigned)integer);
+#endif
+			AddArrayPointer(nameChecksum,(CArray*)(intptr_t)integer);
 			break;
 		case ESYMBOLTYPE_NAME:
 			AddChecksum(nameChecksum,(uint32)integer);

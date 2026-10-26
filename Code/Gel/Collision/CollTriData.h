@@ -111,8 +111,10 @@ private:
 		CCollBSPNode *	GetGreaterBranch() const { return IsLeftGreater() ? GetLeftBranch() : GetRightBranch(); }
 
 		// These two are needed for the cloning function
-		CCollBSPNode *	GetBasePointer() const { return (CCollBSPNode *) (m_left_child_and_flags & ~0x3); }
-		void			SetBasePointer(CCollBSPNode *p_base) { m_left_child_and_flags = ((uint32) p_base) | (m_left_child_and_flags & 0x3); }
+		// The field is 32 bits wide (file layout), so the pointer must lie below 4 GB;
+		// PtrTo32 logs it on 64-bit builds if one ever doesn't.
+		CCollBSPNode *	GetBasePointer() const { return (CCollBSPNode *) (uintptr_t) (m_left_child_and_flags & ~0x3); }
+		void			SetBasePointer(CCollBSPNode *p_base) { m_left_child_and_flags = PtrTo32(p_base) | (m_left_child_and_flags & 0x3); }
 
 		bool			IsLeftGreater() const { return m_left_child_and_flags & mLEFT_IS_GREATER; }
 		void			SetLeftGreater(bool greater);
@@ -222,8 +224,10 @@ public:
 
 	// THUG PS3: the collision files are little-endian; convert one (as returned by
 	// Pip::Load, header included) to host order in place. Safe to call again on
-	// data that's already converted.
-	static void			sFixFileByteOrder(uint8 *p_file, uint32 file_size);
+	// data that's already converted (a marker in the header padding says so).
+	// Returns false, after logging, when the file's own counts and offsets run
+	// past file_size; the data must not be used then.
+	static bool			sFixFileByteOrder(uint8 *p_file, uint32 file_size);
 	bool				DeleteBSPTree();				// Delete the BSP Tree
 
 	uint32				GetChecksum() const;
@@ -728,6 +732,7 @@ inline CCollObjTriData::SFaceInfo *	CCollObjTriData::get_face_info(int face_idx)
 // These are read straight from the PC collision files: their layout must match.
 static_assert(sizeof(CCollBSPNode) == 8, "CCollBSPNode no longer matches the collision file format");
 static_assert(sizeof(CCollObjTriData) == 64, "CCollObjTriData no longer matches the collision file format");
+static_assert(sizeof(CCollObjTriData::SReadHeader) == 32, "SReadHeader no longer matches the collision file format");
 #endif
 
 } // namespace Nx

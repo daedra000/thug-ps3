@@ -695,12 +695,12 @@ void CSkaterCareer::WriteIntoStructure(Script::CScriptStructure *pIn)
 
 	// Insert the above arrays into a new structure.
 	Script::CScriptStructure *pTemp=new Script::CScriptStructure;
-	pTemp->AddComponent(Script::GenerateCRC("GoalFlags"),ESYMBOLTYPE_ARRAY,(int)pGoalFlags);
-	pTemp->AddComponent(Script::GenerateCRC("LevelFlags"),ESYMBOLTYPE_ARRAY,(int)pLevelFlags);
-	pTemp->AddComponent(Script::GenerateCRC("GlobalFlags"),ESYMBOLTYPE_ARRAY,(int)pGlobalFlags);
+	pTemp->AddArrayPointer(Script::GenerateCRC("GoalFlags"), pGoalFlags);
+	pTemp->AddArrayPointer(Script::GenerateCRC("LevelFlags"), pLevelFlags);
+	pTemp->AddArrayPointer(Script::GenerateCRC("GlobalFlags"), pGlobalFlags);
 	
 #if 1	
-	pTemp->AddComponent(Script::GenerateCRC("GapChecklists"),ESYMBOLTYPE_ARRAY,(int)pGapChecklists);
+	pTemp->AddArrayPointer(Script::GenerateCRC("GapChecklists"), pGapChecklists);
 #endif
 	
 	pTemp->AddArrayPointer( "VisitedLevels", pVisitedLevels );
@@ -715,7 +715,7 @@ void CSkaterCareer::WriteIntoStructure(Script::CScriptStructure *pIn)
 
 	// Thrust the new structure into the passed structure.
 	Dbg_MsgAssert(pIn,("NULL pIn"));
-	pIn->AddComponent(Script::GenerateCRC("Career"),ESYMBOLTYPE_STRUCTUREPOINTER,(int)pTemp);
+	pIn->AddStructurePointer(Script::GenerateCRC("Career"), pTemp);
 	
 	// Note: The above arrays and structure are not deleted here, because pointers to them have
 	// been given to the passed structure, so it will delete them when it gets deleted.

@@ -48,6 +48,12 @@ namespace Sfx
 				uint16 block_align;
 				uint16 bits_per_sample;
 			} format = {};
+#if defined(__PLAT_PS3__)
+			// Read straight from the .wav files.
+			static_assert(sizeof(BlockHeader) == 8, "RIFF block header must be 8 bytes");
+			static_assert(sizeof(RIFFHeader) == 12, "RIFF header must be 12 bytes");
+			static_assert(sizeof(Format) == 16, "WAVE fmt block must be 16 bytes");
+#endif
 			bool looping = false;
 
 			CXBSound(void *fp)

@@ -93,7 +93,15 @@ bool			CMesh::LoadCollision(const char *p_name)
 	uint8 *p_base_addr = (uint8 *) Pip::Load(m_coll_filename);
 	if (p_base_addr)
 	{
-		Nx::CCollObjTriData::sFixFileByteOrder(p_base_addr, Pip::GetFileSize(m_coll_filename));	// PS3: PC data is little-endian
+		// PS3: PC data is little-endian. A file whose layout runs past its own size is
+		// left alone and the mesh gets no collision, rather than reading past the buffer.
+		if (!Nx::CCollObjTriData::sFixFileByteOrder(p_base_addr, Pip::GetFileSize(m_coll_filename)))
+		{
+			m_num_coll_objects = 0;
+			mp_coll_objects = NULL;
+			Mem::PopMemProfile();
+			return false;
+		}
 		Nx::CCollObjTriData::SReadHeader *p_header = (Nx::CCollObjTriData::SReadHeader *) p_base_addr;
 		p_base_addr += sizeof(Nx::CCollObjTriData::SReadHeader);
 
@@ -113,16 +121,17 @@ bool			CMesh::LoadCollision(const char *p_name)
 		// Calculate base addresses for vert and face arrays
 		uint8 *p_base_vert_addr = (uint8 *) (mp_coll_objects + m_num_coll_objects);
 #ifndef __PLAT_NGC__
-		p_base_vert_addr = (uint8 *)(((uint)(p_base_vert_addr+15)) & 0xFFFFFFF0);	// Align to 128 bit boundary
+		// uintptr_t, not uint: on a 64-bit build a 32-bit cast would drop the top of the address.
+		p_base_vert_addr = (uint8 *)(((uintptr_t)(p_base_vert_addr+15)) & ~(uintptr_t)15);	// Align to 128 bit boundary
 #ifdef FIXED_POINT_VERTICES
 		uint8 *p_base_intensity_addr = p_base_vert_addr + (p_header->m_total_num_verts_large * Nx::CCollObjTriData::GetVertElemSize() +
 														   p_header->m_total_num_verts_small * Nx::CCollObjTriData::GetVertSmallElemSize());
 		uint8 *p_base_face_addr = p_base_intensity_addr + p_header->m_total_num_verts;
-		p_base_face_addr = (uint8 *)(((uint)(p_base_face_addr+3)) & 0xFFFFFFFC);	// Align to 32 bit boundary
+		p_base_face_addr = (uint8 *)(((uintptr_t)(p_base_face_addr+3)) & ~(uintptr_t)3);	// Align to 32 bit boundary
 #else
 		uint8 *p_base_intensity_addr = NULL;
 		uint8 *p_base_face_addr = p_base_vert_addr + (p_header->m_total_num_verts * Nx::CCollObjTriData::GetVertElemSize());
-		p_base_face_addr = (uint8 *)(((uint)(p_base_face_addr+15)) & 0xFFFFFFF0);	// Align to 128 bit boundary
+		p_base_face_addr = (uint8 *)(((uintptr_t)(p_base_face_addr+15)) & ~(uintptr_t)15);	// Align to 128 bit boundary
 #endif // FIXED_POINT_VERTICES
 #else
 		uint8 *p_base_face_addr = p_base_vert_addr + (p_header->m_total_num_faces * Nx::CCollObjTriData::GetVertElemSize());

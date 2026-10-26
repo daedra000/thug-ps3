@@ -2199,7 +2199,7 @@ bool ScriptGetElement(Script::CStruct *pParams, Script::CScript *pScript)
 		{
 			Script::CStruct *p_new=new Script::CStruct;
 			p_new->AppendStructure(p_array->GetStructure(index));
-			pScript->GetParams()->AddComponent(0xbebfa1c6/*Element*/,ESYMBOLTYPE_STRUCTUREPOINTER,(int)p_new);
+			pScript->GetParams()->AddStructurePointer(0xbebfa1c6/*Element*/, p_new);
 			break;
 		}	
 		case ESYMBOLTYPE_ARRAY:

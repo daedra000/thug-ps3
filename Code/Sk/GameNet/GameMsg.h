@@ -342,7 +342,7 @@ public:
 	char			m_ProSetFlags;
 	char			m_MaxPlayers;
 	int				m_TimeLeft;
-	unsigned long	m_GameMode;
+	uint32			m_GameMode;		// uint32, not unsigned long: that is 8 bytes on the 64-bit PS3 and these go over the wire
 	uint32			m_LevelId;
 	uint32			m_TeamMode;
 	
@@ -361,9 +361,11 @@ public:
 class MsgGameInfo
 {
 public:
-	unsigned long	m_GameMode;
-	unsigned long	m_TimeLimit;
-	unsigned long	m_TargetScore;
+	// uint32, not unsigned long: that is 4 bytes on the PC but 8 on the 64-bit PS3, and
+	// this message goes over the wire as it is laid out in memory.
+	uint32			m_GameMode;
+	uint32			m_TimeLimit;
+	uint32			m_TargetScore;
 	int				m_FireballLevel;
 	char			m_NumPlayers;
 	char			m_AccumulateScore;
@@ -375,6 +377,13 @@ public:
 	char			m_CrownSpawnPoint;
 	int				m_StartPoints[vMAX_PLAYERS];
 };
+
+#if defined(__PLAT_PS3__)
+// Sent as raw bytes between machines, so the PS3 layout must match the PC's (32-bit) one.
+static_assert(sizeof(bool) == 1, "bool must be one byte, as on the PC");
+static_assert(sizeof(MsgStartInfo) == 32 + 4 * vMAX_PLAYERS, "MsgStartInfo no longer matches the PC layout");
+static_assert(sizeof(MsgGameInfo) == 32 + 4 * vMAX_PLAYERS, "MsgGameInfo no longer matches the PC layout");
+#endif
 
 class MsgConnectInfo
 {

@@ -275,9 +275,16 @@ void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 #endif
 #ifdef __PLAT_PS3__
 	// The heaps keep 32-bit sizes: a huge request (a corrupt length) would wrap to a tiny block.
-	if ( size > 0x7FFFFFF0u )
+	// With __EFFICIENT__ (NGC only today) the block header's size is a 24-bit bitfield, so the
+	// limit has to come down to what that field can hold if the PS3 build ever turns it on.
+#ifdef __EFFICIENT__
+	const size_t max_block_size = 0x00FFFFF0u;
+#else
+	const size_t max_block_size = 0x7FFFFFF0u;
+#endif
+	if ( size > max_block_size )
 	{
-		printf( "[mem] refused a %llu byte allocation\n", (unsigned long long)size );
+		printf( "[mem] refused a %llu byte allocation (limit %llu)\n", (unsigned long long)size, (unsigned long long)max_block_size );
 		return NULL;
 	}
 #endif
@@ -295,6 +302,18 @@ void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 	if ( p_ret )	// if allocation was successful
 	{
 		Allocator::s_set_id( p_ret );		// stamp ID; used by Mem::Handle
+#ifdef __PLAT_PS3__
+		// Much of the game still keeps pointers in ints and 32-bit fields (the PC code was
+		// 32-bit); that holds only while addresses stay below 0x80000000. Say so once,
+		// loudly, if the heaps ever hand out a higher one.
+		static bool s_high_address_logged = false;
+		if ( (uintptr_t)p_ret >= 0x80000000u && !s_high_address_logged )
+		{
+			s_high_address_logged = true;
+			printf( "[mem] *** WARNING: %s returned %p, at or above 0x80000000: pointers kept in ints or 32-bit fields will break\n",
+					pAlloc->GetName() ? pAlloc->GetName() : "?", p_ret );
+		}
+#endif
 	}
 #ifdef __PLAT_PS3__
 	else if ( assert_on_fail )

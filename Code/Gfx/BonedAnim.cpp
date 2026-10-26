@@ -1381,16 +1381,36 @@ CBonedAnimFrameData::~CBonedAnimFrameData()
 }
 
 #ifdef __PLAT_PS3__
+// Written over the header's version word (which nothing reads after loading) once a
+// buffer is converted. Pipped anims are shared, so the same buffer can come through
+// here twice; this says so explicitly instead of guessing from the data's values.
+static const uint32 vANIM_CONVERTED = 0x50533342;	// 'PS3B'
+static const uint32 vANIM_BAD = 0x50533358;			// 'PS3X': ran past the file, don't use
+
 // PS3: converts a little-endian PC .ska buffer to host order in place, up to the
 // custom keys (ReadCustomAnimKey converts those as it copies them). Compressed
-// q/t frames are byte streams and stay as they are. Safe to call twice: the
-// version word is small, so a big value means the buffer is still little-endian.
-static void s_fix_anim_byte_order( uint8* p, int file_size )
+// q/t frames are byte streams and stay as they are. Every block is checked against
+// file_size before it is touched; a file whose counts run past its end is logged
+// and refused (false) rather than swapping bytes beyond the buffer.
+static bool s_fix_anim_byte_order( uint8* p, int file_size )
 {
-	if( Endian::kHostIsLittle || file_size < (int)( sizeof(SBonedAnimFileHeader) + sizeof(SPlatformFileHeader) )) return;
-	if( *(uint32*)p < 0x10000 ) return;		// already converted
+	if( Endian::kHostIsLittle ) return true;
+	if( !p || file_size < (int)( sizeof(SBonedAnimFileHeader) + sizeof(SPlatformFileHeader) ))
+	{
+		printf( "PS3: anim file too small (%d bytes), not used\n", file_size );
+		return false;
+	}
+	uint32* p_version = (uint32*)p;
+	if( *p_version == vANIM_CONVERTED ) return true;
+	if( *p_version == vANIM_BAD ) return false;
 
 	uint8* p_start = p;
+	uint8* p_end = p + file_size;
+	// Room for 'bytes' more at p? Done in 64 bits so huge counts can't wrap.
+	#define FITS( bytes ) ( p <= p_end && (uint64)( bytes ) <= (uint64)( p_end - p ))
+	#define FAIL( what ) do { printf( "PS3: anim file layout runs past its %d bytes (%s), not used\n", file_size, what ); \
+							  *p_version = vANIM_BAD; return false; } while( 0 )
+
 	Endian::Fix32Array( p, 3 );
 	uint32 flags = ((SBonedAnimFileHeader*)p)->flags;
 	p += sizeof(SBonedAnimFileHeader);
@@ -1405,32 +1425,38 @@ static void s_fix_anim_byte_order( uint8* p, int file_size )
 	{
 		if( flags & nxBONEDANIMFLAGS_OBJECTANIMDATA )
 		{
+			if( !FITS( (uint64)num_bones * sizeof(uint32) )) FAIL( "object anim data" );
 			Endian::Fix32Array( p, num_bones );
 			p += num_bones * sizeof(uint32);
 		}
 		if( flags & nxBONEDANIMFLAGS_PARTIALANIM )
 		{
+			if( !FITS( 4 )) FAIL( "partial anim count" );
 			Endian::Fix32Array( p, 1 );
 			int num_masks = (( *(int*)p - 1 ) / 32 ) + 1;
+			if( num_masks < 0 || !FITS( 4 + (uint64)num_masks * 4 )) FAIL( "partial anim masks" );
 			Endian::Fix32Array( p + 4, num_masks );
 			p += 4 + num_masks * 4;
 		}
 		if( flags & nxBONEDANIMFLAGS_HIRESFRAMEPOINTERS )
 		{
+			if( !FITS( (uint64)num_bones * sizeof(SHiResAnimFramePointers) )) FAIL( "frame pointers" );
 			Endian::Fix16Array( p, num_bones * 2 );
 			p += num_bones * sizeof(SHiResAnimFramePointers);
 		}
 		else
 		{
+			if( !FITS( (uint64)num_bones * sizeof(SStandardAnimFramePointers) )) FAIL( "frame pointers" );
 			p += num_bones * sizeof(SStandardAnimFramePointers);
 		}
 		ALIGN4();
 		bool hires = ( flags & nxBONEDANIMFLAGS_CAMERADATA ) || ( flags & nxBONEDANIMFLAGS_OBJECTANIMDATA );
-		uint32 num_keys = p_plat->numQKeys + p_plat->numTKeys;
+		uint64 num_keys = (uint64)p_plat->numQKeys + p_plat->numTKeys;
 		if( hires )
 		{
 			static_assert( sizeof(CHiResAnimQKey) == 16 && sizeof(CHiResAnimTKey) == 16, "hi-res key layout" );
-			for( uint32 k = 0; k < num_keys; ++k, p += 16 )
+			if( !FITS( num_keys * 16 )) FAIL( "hi-res keys" );
+			for( uint64 k = 0; k < num_keys; ++k, p += 16 )
 			{
 				Endian::Fix16Array( p, 1 );
 				Endian::Fix32Array( p + 4, 3 );
@@ -1439,11 +1465,13 @@ static void s_fix_anim_byte_order( uint8* p, int file_size )
 		else
 		{
 			static_assert( sizeof(CStandardAnimQKey) == 8 && sizeof(CStandardAnimTKey) == 8, "standard key layout" );
-			Endian::Fix16Array( p, num_keys * 4 );
+			if( !FITS( num_keys * 8 )) FAIL( "standard keys" );
+			Endian::Fix16Array( p, (int)( num_keys * 4 ));
 		}
 	}
 	else if( flags & nxBONEDANIMFLAGS_USECOMPRESSTABLE )
 	{
+		if( !FITS( 8 + (uint64)num_bones * 4 )) FAIL( "compressed frame sizes" );
 		Endian::Fix32Array( p, 2 );		// q and t alloc sizes
 		p += 8;
 		Endian::Fix16Array( p, num_bones * 2 );		// per-bone q and t frame sizes
@@ -1451,12 +1479,18 @@ static void s_fix_anim_byte_order( uint8* p, int file_size )
 		ALIGN4();
 		if( flags & nxBONEDANIMFLAGS_PARTIALANIM )
 		{
+			if( !FITS( 4 )) FAIL( "partial anim count" );
 			Endian::Fix32Array( p, 1 );
 			int num_masks = (( *(int*)p - 1 ) / 32 ) + 1;
+			if( num_masks < 0 || !FITS( 4 + (uint64)num_masks * 4 )) FAIL( "partial anim masks" );
 			Endian::Fix32Array( p + 4, num_masks );
 		}
 	}
 	#undef ALIGN4
+	#undef FITS
+	#undef FAIL
+	*p_version = vANIM_CONVERTED;
+	return true;
 }
 #endif
 
@@ -1662,7 +1696,12 @@ bool CBonedAnimFrameData::PostLoad(bool assertOnFail, int file_size, bool delete
 
 	uint8 *pFileData = (uint8 *) mp_fileBuffer;
 #ifdef __PLAT_PS3__
-	s_fix_anim_byte_order( pFileData, file_size );
+	if( !s_fix_anim_byte_order( pFileData, file_size ))
+	{
+		// The file's own counts don't fit its size: don't parse it at all.
+		m_dataLoaded = false;
+		return false;
+	}
 #endif
 
 	// read in header information
