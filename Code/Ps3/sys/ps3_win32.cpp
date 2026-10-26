@@ -817,9 +817,17 @@ BOOL FileTimeToSystemTime(const FILETIME* in, LPSYSTEMTIME out)
 // ---------------------------------------------------------------------------
 // Winsock
 // ---------------------------------------------------------------------------
-int WSAStartup(WORD, LPWSADATA data)
+int WSAStartup(WORD version, LPWSADATA data)
 {
-	if (data) memset(data, 0, sizeof(*data));
+	// Report the version asked for: Net::Manager checks for 2.2 and, if it doesn't match,
+	// returns from its constructor before setting the bandwidth, connection type and app
+	// count (a bandwidth of 0 held every message back, so the front end's skater was never made).
+	if (data)
+	{
+		memset(data, 0, sizeof(*data));
+		data->wVersion = version;
+		data->wHighVersion = version;
+	}
 	return 0;	// the network module is started by the platform layer
 }
 
