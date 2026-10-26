@@ -5,12 +5,19 @@
 //   when a draw first needs it and again after the game changes it. Buffers changed
 //   while the RSX may still be reading them, and the *UP draws' data, go through a
 //   per-frame ring (three frames deep; the frame fence makes the slot three frames back
-//   free).
+//   free). A buffer rewritten while the RSX may still read it is renamed into the ring for
+//   the frame, and only the bytes the frame's draws read are copied there.
+// - When the RSX is done: every resource records the frame that last used it, and the
+//   frame fence's label (FramesDone) says which frames have finished, so memory is reused
+//   or freed as soon as the RSX is past it rather than a fixed number of frames later.
 // - Programs: the vertex program comes from the fixed-function state (the game draws
 //   with SetFVF), the fragment program from the texture stages or the game's ps_1_1
 //   source; both are generated (Code/Ps3/rsx/rsx_shadergen.cpp), assembled at run time
 //   (rsx_asm.cpp) and cached. Fragment-program constants live in the program's code,
-//   so a program with new constant values is copied to the ring and patched.
+//   so a program with new constant values is a patched copy: a few per program are kept
+//   in RSX memory and reused across frames, and the ring takes the rest.
+// - Allocation: the backend's own records come from malloc, never operator new or the
+//   default STL allocator (see NewRecord).
 // - Conventions: vertex colours are host-order ARGB words read as 4 bytes (A,R,G,B);
 //   texels are host-order (d3d9 layer, see docs/ps3-byte-order.md); the viewport is
 //   GL-style with D3D9's half-pixel offset; D3D depth 0..w is moved to -w..w in the
@@ -46,7 +53,7 @@ extern volatile unsigned long long g_ps3TextureRamBytes;
 #include <stdlib.h>
 #include <malloc.h>
 #include <math.h>
-#include <map>
+#include <stddef.h>
 #include <string>
 #include <vector>
 #include <rsx/rsx.h>
@@ -69,9 +76,14 @@ static bool s_forceLinear, s_flipCull, s_noDraw;
 
 static struct Stats
 {
-	unsigned draws, drawn, skipped, uploads, uploadKB, ringKB, programs, programFailures, ringFull, offscreen;
+	unsigned draws, drawn, skipped, uploads, uploadKB, programs, programFailures, ringFull, offscreen;
+	unsigned overflowKB;	// ring-full fallbacks: allocated on the side instead of dropping the draw
+	unsigned texBlocks;		// re-uploads that needed a new RSX block (none was idle)
+	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
+	unsigned kicks;			// mid-frame command-buffer flushes
+	unsigned long long ringBytes;
 } s_stats;
-static char s_statsLine[384];
+static char s_statsLine[640];
 
 static bool FlagFile(const char* name)
 {
@@ -80,11 +92,117 @@ static bool FlagFile(const char* name)
 	return Ps3Fs::Exists(path);
 }
 
-// Logs a message the first `limit` times its key is seen.
-static void LogLimited(const std::string& key, int limit, const char* fmt, ...)
+// ---------------------------------------------------------------------------
+// The backend's own allocations
+// ---------------------------------------------------------------------------
+// Records (RsxTexture, RsxBuffer, RsxSurface, program entries, tables) come from malloc.
+// On the game thread ps3_new.cpp sends operator new to whichever of the game's heaps is
+// pushed at the time, so a texture first drawn during a level load would leave its record
+// in that level's heap, and std::map nodes would scatter over whatever heap each draw ran
+// under. malloc keeps them in newlib for the renderer's life. Records are plain data,
+// zeroed here and released with FreeRecord (never delete: the pairs must match).
+template <typename T> static T* NewRecord() { return (T*)calloc(1, sizeof(T)); }
+static void FreeRecord(void* p) { free(p); }
+
+// An open-addressing hash table of plain-data keys (compared with memcmp, so callers zero
+// their keys, padding included, before filling them) to pointers, in malloc'd memory.
+// Static instances need no constructor: zero is an empty table.
+template <typename K, typename V>
+class PodMap
 {
-	static std::map<std::string, int> seen;
-	int& n = seen[key];
+public:
+	V Find(const K& k) const
+	{
+		if (!m_cap) return NULL;
+		for (u32 i = Hash(k) & (m_cap - 1);; i = (i + 1) & (m_cap - 1))
+		{
+			const Slot& s = m_slots[i];
+			if (s.state == kEmpty) return NULL;
+			if (s.state == kFull && !memcmp(&s.key, &k, sizeof(K))) return s.value;
+		}
+	}
+	// k must not be in the table already. False if the table couldn't grow (out of memory).
+	bool Insert(const K& k, V v)
+	{
+		if ((m_used + 1) * 4 > m_cap * 3 && !Grow()) return false;
+		u32 i = Hash(k) & (m_cap - 1);
+		while (m_slots[i].state == kFull) i = (i + 1) & (m_cap - 1);
+		if (m_slots[i].state == kEmpty) ++m_used;
+		memcpy(&m_slots[i].key, &k, sizeof(K));
+		m_slots[i].value = v;
+		m_slots[i].state = kFull;
+		++m_count;
+		return true;
+	}
+	V Erase(const K& k)
+	{
+		if (!m_cap) return NULL;
+		for (u32 i = Hash(k) & (m_cap - 1);; i = (i + 1) & (m_cap - 1))
+		{
+			Slot& s = m_slots[i];
+			if (s.state == kEmpty) return NULL;
+			if (s.state == kFull && !memcmp(&s.key, &k, sizeof(K)))
+			{
+				s.state = kDeleted;	// a tombstone keeps later keys of the chain reachable
+				--m_count;
+				return s.value;
+			}
+		}
+	}
+	u32 Count() const { return m_count; }
+
+private:
+	enum { kEmpty = 0, kFull, kDeleted };
+	struct Slot { K key; V value; u8 state; };
+	Slot* m_slots;
+	u32 m_cap, m_count, m_used;	// m_used: full slots and tombstones
+
+	static u32 Hash(const K& k)
+	{
+		const u8* p = (const u8*)&k;
+		u32 h = 2166136261u;	// FNV-1a
+		for (size_t i = 0; i < sizeof(K); ++i) { h ^= p[i]; h *= 16777619u; }
+		return h ^ (h >> 15);
+	}
+	// Rehashes into a table at most half full (the same size when only tombstones filled it).
+	bool Grow()
+	{
+		u32 cap = m_cap ? m_cap : 64;
+		while ((m_count + 1) * 2 > cap) cap *= 2;
+		Slot* slots = (Slot*)calloc(cap, sizeof(Slot));
+		if (!slots) return false;
+		for (u32 i = 0; i < m_cap; ++i)
+		{
+			if (m_slots[i].state != kFull) continue;
+			u32 j = Hash(m_slots[i].key) & (cap - 1);
+			while (slots[j].state == kFull) j = (j + 1) & (cap - 1);
+			memcpy(&slots[j], &m_slots[i], sizeof(Slot));	// keys byte for byte, padding included
+		}
+		free(m_slots);
+		m_slots = slots;
+		m_cap = cap;
+		m_used = m_count;
+		return true;
+	}
+};
+
+// Logs a message the first `limit` times its key is seen. A small fixed table: keys are a
+// handful of literals and texture formats; once it is full, new keys share one count.
+static void LogLimited(const char* key, int limit, const char* fmt, ...)
+{
+	struct Seen { char key[40]; int n; };
+	static Seen seen[64];
+	static int used, shared;
+	int* count = NULL;
+	for (int i = 0; i < used && !count; ++i)
+		if (!strncmp(seen[i].key, key, sizeof(seen[i].key) - 1)) count = &seen[i].n;
+	if (!count && used < 64)
+	{
+		strncpy(seen[used].key, key, sizeof(seen[used].key) - 1);
+		count = &seen[used++].n;
+	}
+	if (!count) count = &shared;
+	int& n = *count;
 	if (n++ >= limit) return;
 	char buf[512];
 	va_list args;
@@ -104,59 +222,134 @@ static u32 s_ringOffset;	// RSX offset of s_ring
 static u32 s_ringUsed;
 static u32 s_ringBase;		// this frame's slot
 
+// Frame of last use, stored +1 so 0 means never used: the frame fence's label reaches that
+// value once the RSX has finished the frame (FramesDone). The signed difference keeps the
+// test right should the counters ever wrap.
+static bool GpuMayUse(u32 usedPlusOne)
+{
+	return usedPlusOne != 0 && (s32)(FramesDone() - usedPlusOne) < 0;
+}
+
+// RSX memory the GPU may still read: freed once the frame that last used it is done. The
+// fence label decides, so memory last used frames ago (most of a level being unloaded) is
+// freed on the spot, and the rest as soon as the RSX gets past it: not only at the next
+// frame start, which a load that presents nothing would hold off with both levels' memory.
+struct DeferredFree { void* mem; u32 usedPlusOne; };
+static DeferredFree* s_deferred;	// malloc'd (see NewRecord)
+static u32 s_deferredCount, s_deferredCap;
+static u32 s_deferredScanAt;		// FramesDone() at the last scan
+
+static void RunDeferredFrees()
+{
+	s_deferredScanAt = FramesDone();
+	u32 keep = 0;
+	for (u32 i = 0; i < s_deferredCount; ++i)
+	{
+		if (!GpuMayUse(s_deferred[i].usedPlusOne))
+			rsxFree(s_deferred[i].mem);
+		else
+			s_deferred[keep++] = s_deferred[i];
+	}
+	s_deferredCount = keep;
+}
+
+static void DeferFree(void* mem, u32 usedPlusOne)
+{
+	if (!mem) return;
+	if (!GpuMayUse(usedPlusOne)) { rsxFree(mem); return; }
+	if (s_deferredCount == s_deferredCap)
+	{
+		const u32 cap = s_deferredCap ? s_deferredCap * 2 : 256;
+		DeferredFree* d = (DeferredFree*)realloc(s_deferred, cap * sizeof(DeferredFree));
+		if (!d)
+		{
+			// Freeing now could pull memory from under the RSX: lose it instead.
+			LogLimited("deferoom", 3, "out of memory for the deferred-free list: RSX memory leaked");
+			return;
+		}
+		s_deferred = d;
+		s_deferredCap = cap;
+	}
+	DeferredFree d = { mem, usedPlusOne };
+	s_deferred[s_deferredCount++] = d;
+	if (FramesDone() != s_deferredScanAt) RunDeferredFrees();	// the RSX has moved on since the last scan
+}
+
+// Out of RSX memory with frees still waiting: wait for the RSX to run everything queued so
+// far (bounded, WaitIdle), after which memory last used by an earlier frame can't be in use
+// any more, and free it. Memory stamped with this frame stays: ring overflow blocks are
+// still read by this frame's later draws.
+static bool ReclaimDeferred()
+{
+	if (!s_deferredCount) return false;
+	RunDeferredFrees();
+	if (s_deferredCount && WaitIdle("reclaiming RSX memory"))
+	{
+		u32 keep = 0;
+		for (u32 i = 0; i < s_deferredCount; ++i)
+		{
+			if (s_deferred[i].usedPlusOne != s_frameSeq + 1)
+				rsxFree(s_deferred[i].mem);
+			else
+				s_deferred[keep++] = s_deferred[i];
+		}
+		s_deferredCount = keep;
+	}
+	return true;
+}
+
 static void* LocalAlloc(u32 size, u32 align, u32* offset)
 {
 	void* p = rsxMemalign(align, size);
+	if (!p && ReclaimDeferred())
+	{
+		LogLimited("reclaim", 3, "out of RSX memory for %u bytes: waited for the RSX to free what it was done with", size);
+		p = rsxMemalign(align, size);
+	}
 	if (!p) return NULL;
 	if (rsxAddressToOffset(p, offset) != 0) { rsxFree(p); return NULL; }
 	return p;
 }
 
-// RSX memory the GPU may still read: freed once the frame that last could use it is done.
-// While frame s_frameSeq is being built, frames up to s_frameSeq - 2 have finished
-// (FrameBegin waits on the frame fence); one more frame of margin is kept.
-struct DeferredFree { void* mem; u32 frame; };
-static std::vector<DeferredFree> s_deferredFrees;
-
-static void DeferFree(void* mem)
-{
-	if (!mem) return;
-	DeferredFree d = { mem, s_frameSeq };
-	s_deferredFrees.push_back(d);
-}
-
-static void RunDeferredFrees()
-{
-	size_t keep = 0;
-	for (size_t i = 0; i < s_deferredFrees.size(); ++i)
-	{
-		if (s_deferredFrees[i].frame + 3 <= s_frameSeq)
-			rsxFree(s_deferredFrees[i].mem);
-		else
-			s_deferredFrees[keep++] = s_deferredFrees[i];
-	}
-	s_deferredFrees.resize(keep);
-}
-
-// Frame of last use, stored +1 so 0 means never used.
-static bool GpuMayUse(u32 usedPlusOne)
-{
-	return usedPlusOne != 0 && usedPlusOne - 1 + 3 > s_frameSeq;
-}
-
-// Space in this frame's ring slot, or NULL when it is full.
+// Space in this frame's ring slot. When the slot is full, a block of its own instead, freed
+// once this frame is done (counted as ringFull): dropping the draw showed as flickering
+// geometry. NULL only when RSX memory is out too.
 static u8* RingAlloc(u32 size, u32 align, u32* offset)
 {
 	u32 at = (s_ringUsed + align - 1) & ~(align - 1);
 	if (at + size > kRingSize)
 	{
 		++s_stats.ringFull;
-		LogLimited("ringfull", 5, "frame ring full (%u KB): a draw was skipped", kRingSize / 1024);
-		return NULL;
+		u8* p = (u8*)LocalAlloc(size ? size : 16, align > 128 ? align : 128, offset);
+		if (!p)
+		{
+			LogLimited("ringfull", 5, "frame ring full (%u KB) and no RSX memory for %u bytes more: a draw was skipped", kRingSize / 1024, size);
+			return NULL;
+		}
+		LogLimited("ringoverflow", 3, "frame ring full (%u KB): %u bytes allocated on the side", kRingSize / 1024, size);
+		DeferFree(p, s_frameSeq + 1);
+		s_stats.overflowKB += (size + 1023) / 1024;
+		return p;
 	}
 	s_ringUsed = at + size;
 	*offset = s_ringOffset + s_ringBase + at;
 	return s_ring + s_ringBase + at;
+}
+
+// Vertex or index data was written into RSX memory: the next draw invalidates the vertex
+// cache first (a draw's own one-word invalidate is not the full sequence).
+static bool s_vertexWritten;
+
+// Mid-frame flush: hands what is queued to the RSX instead of letting it idle until a
+// segment fills or Present. Every kKickDraws draws, after a new render target, and after a
+// big texture upload.
+enum { kKickDraws = 48 };
+static unsigned s_drawsSinceKick;
+static void Kick()
+{
+	rsxFlushBuffer(s_ctx);
+	s_drawsSinceKick = 0;
+	++s_stats.kicks;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +364,13 @@ struct RsxTexture
 	bool renderTarget;	// drawn by the RSX: never uploaded from the main-memory copy
 	bool depth;			// a depth render target
 	u32 pitch;
-	u32 usedPlusOne;	// frame of the last draw that sampled it, +1 (0: never)
+	u32 usedPlusOne;	// frame of the last draw that sampled or drew into it, +1 (0: never)
+	u32 uploadedPlusOne;	// frame of the last upload, +1
+	u32 quickUploads;	// uploads in a row that came within a few frames of the one before
+	// Earlier blocks of a texture the game rewrites every frame or two (the movie player,
+	// fonts): taken back once the RSX is done with them, instead of a new block and a
+	// deferred free on every update.
+	struct Spare { u8* mem; u32 offset, bytes, usedPlusOne; } spare[2];
 };
 
 static const RsxTexture* s_bound[4];
@@ -206,10 +405,11 @@ static u32 IdentityRemap()
 
 // NV40 swizzle of a w x h image: x and y bits interleaved from the bottom (x first)
 // while both dimensions have bits left, then the larger dimension's remaining bits.
-static void SwizzleTables(u32 w, u32 h, std::vector<u32>& xt, std::vector<u32>& yt)
+// xt holds w entries, yt h entries.
+static void SwizzleTables(u32 w, u32 h, u32* xt, u32* yt)
 {
-	xt.assign(w, 0);
-	yt.assign(h, 0);
+	memset(xt, 0, w * sizeof(u32));
+	memset(yt, 0, h * sizeof(u32));
 	int xbit[16], ybit[16], c = 0;
 	for (int i = 0; i < 16; ++i)
 	{
@@ -251,6 +451,54 @@ static FormatInfo MapFormat(D3DFORMAT f)
 
 static RsxTexture* RenderTargetTexture(IDirect3DTexture9* t, RsxTexture* r);
 
+// The texture's block may still be read by the RSX (or is too small): set it aside. A
+// texture that keeps being uploaded every few frames swaps in a spare block the RSX is done
+// with, or parks the busy one as a spare; otherwise the block is freed once the RSX is done
+// with it, and so are the spares (the texture has stopped changing every frame). Two quick
+// uploads in a row are asked for, so a texture rewritten once just after it was first drawn
+// doesn't keep a spare block for good.
+static void RetireTextureBlock(RsxTexture* r, u32 total)
+{
+	const bool frequent = r->quickUploads >= 2;
+	if (frequent && r->bytes >= total)
+	{
+		for (int i = 0; i < 2; ++i)
+		{
+			RsxTexture::Spare& sp = r->spare[i];
+			if (sp.mem && sp.bytes >= total && !GpuMayUse(sp.usedPlusOne))
+			{
+				const RsxTexture::Spare cur = { r->mem, r->offset, r->bytes, r->usedPlusOne };
+				r->mem = sp.mem; r->offset = sp.offset; r->bytes = sp.bytes; r->usedPlusOne = sp.usedPlusOne;
+				sp = cur;
+				return;
+			}
+		}
+		for (int i = 0; i < 2; ++i)
+		{
+			RsxTexture::Spare& sp = r->spare[i];
+			if (!sp.mem)
+			{
+				const RsxTexture::Spare cur = { r->mem, r->offset, r->bytes, r->usedPlusOne };
+				sp = cur;
+				r->mem = NULL;
+				r->bytes = 0;
+				return;
+			}
+		}
+	}
+	DeferFree(r->mem, r->usedPlusOne);
+	r->mem = NULL;
+	r->bytes = 0;
+	if (!frequent)
+	{
+		for (int i = 0; i < 2; ++i)
+		{
+			DeferFree(r->spare[i].mem, r->spare[i].usedPlusOne);
+			memset(&r->spare[i], 0, sizeof(r->spare[i]));
+		}
+	}
+}
+
 // Makes the RSX copy of a texture current. Returns NULL if it can't be drawn.
 static RsxTexture* Texture(IDirect3DTexture9* t)
 {
@@ -263,7 +511,12 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		t->m_dirty = false;
 	}
 	if (r && r->valid && (!t->m_dirty || r->renderTarget)) return r;
-	if (!r) { r = new RsxTexture; memset(r, 0, sizeof(*r)); t->m_backend = r; }
+	if (!r)
+	{
+		r = NewRecord<RsxTexture>();
+		if (!r) { LogLimited("texrec", 3, "out of memory for a texture record"); return NULL; }
+		t->m_backend = r;
+	}
 	if (IsRenderTarget(t)) return RenderTargetTexture(t, r);
 
 	// CreateTexture refuses a texture whose main-memory copy couldn't be allocated, so this
@@ -304,17 +557,18 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		total += sizes[l];
 	}
 
-	// Never rewrite memory the RSX may still be sampling: a texture used in the last few
-	// frames gets new memory, and the old is freed once those frames are done.
+	// Never rewrite memory the RSX may still be sampling: a texture used in a frame the RSX
+	// hasn't finished gets another block (RetireTextureBlock).
+	const bool quick = r->uploadedPlusOne && s_frameSeq + 1 - r->uploadedPlusOne <= 4;
+	r->quickUploads = quick ? (r->quickUploads < 1000 ? r->quickUploads + 1 : r->quickUploads) : 0;
 	if (r->mem && (r->bytes < total || GpuMayUse(r->usedPlusOne)))
-	{
-		DeferFree(r->mem);
-		r->mem = NULL;
-	}
+		RetireTextureBlock(r, total);
 	if (!r->mem)
 	{
 		r->mem = (u8*)LocalAlloc(total, 128, &r->offset);
 		r->bytes = r->mem ? total : 0;
+		r->usedPlusOne = 0;
+		if (r->uploadedPlusOne) ++s_stats.texBlocks;
 		if (!r->mem)
 		{
 			LogLimited("texmem", 5, "out of RSX memory for a %ux%u texture", w, h);
@@ -341,7 +595,9 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		}
 		else if (swizzle)
 		{
-			std::vector<u32> xt, yt;
+			u32* xt = (u32*)malloc((lw + lh) * sizeof(u32));
+			if (!xt) { free(staging); return NULL; }
+			u32* yt = xt + lw;
 			SwizzleTables(lw, lh, xt, yt);
 			// Typed copies for the common sizes: a memcpy call per texel made big uploads slow.
 			for (u32 y = 0; y < lh; ++y)
@@ -357,6 +613,7 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 				else
 					for (u32 x = 0; x < lw; ++x) memcpy(dst + (xt[x] | yo) * fi.bpp, row + x * fi.bpp, fi.bpp);
 			}
+			free(xt);
 		}
 		else
 		{
@@ -385,9 +642,11 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	r->desc.pitch = swizzle ? 0 : linearPitch;
 	r->desc.offset = r->offset;
 	r->valid = true;
+	r->uploadedPlusOne = s_frameSeq + 1;
 	t->m_dirty = false;
 	++s_stats.uploads;
 	s_stats.uploadKB += total / 1024;
+	if (total >= 256 * 1024) Kick();	// the RSX can work through what's queued while the CPU goes on
 	return r;
 }
 
@@ -491,22 +750,76 @@ struct RsxBuffer
 	u8* mem;
 	u32 offset, size;
 	u32 persistentUsed;	// frame of the last draw that read the persistent copy (b->mem), +1 (0: never)
+	// While the persistent copy is behind (stale), the frame's draws read a renamed copy in
+	// the ring (or a ring-overflow block). Room for the whole buffer is taken, but only the
+	// bytes draws read are copied into it, from the main-memory copy (always current):
+	// [ringLo, ringHi) holds them.
 	u32 ringFrame, ringOffset;
+	u8* ring;
+	u32 ringLo, ringHi;
 	bool stale;			// the newest data is only in this frame's ring copy
 };
 
+// A fresh ring copy of the buffer for this frame, nothing copied into it yet.
+static bool RenameBuffer(RsxBuffer* b, u32 size)
+{
+	u32 off;
+	u8* p = RingAlloc(size ? size : 16, 128, &off);
+	if (!p) return false;
+	b->ring = p;
+	b->ringOffset = off;
+	b->ringFrame = s_frameSeq;
+	b->ringLo = b->ringHi = 0;
+	b->stale = true;
+	return true;
+}
+
+// Copies [lo, hi) into this frame's ring copy where it isn't there yet. The copy stays one
+// range: a gap between it and the new bytes is filled too.
+static void FillRenamed(RsxBuffer* b, const BYTE* data, u32 lo, u32 hi)
+{
+	if (hi <= lo) return;
+	u32 copied = 0;
+	if (b->ringHi <= b->ringLo)
+	{
+		memcpy(b->ring + lo, data + lo, hi - lo);
+		copied = hi - lo;
+		b->ringLo = lo;
+		b->ringHi = hi;
+	}
+	else
+	{
+		if (lo < b->ringLo) { memcpy(b->ring + lo, data + lo, b->ringLo - lo); copied += b->ringLo - lo; b->ringLo = lo; }
+		if (hi > b->ringHi) { memcpy(b->ring + b->ringHi, data + b->ringHi, hi - b->ringHi); copied += hi - b->ringHi; b->ringHi = hi; }
+	}
+	if (copied)
+	{
+		s_stats.ringBytes += copied;
+		s_vertexWritten = true;
+	}
+}
+
 // The RSX offset of a buffer's data for a draw in this frame, uploading as needed.
-// changes says what the CPU wrote since the last upload (Ps3BufferChanges in d3d9.h).
-static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3BufferChanges& changes, void*& backend, u32* offset)
+// changes says what the CPU wrote since the last upload (Ps3BufferChanges in d3d9.h);
+// [needLo, needHi) is the part of the buffer this draw reads.
+static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3BufferChanges& changes, void*& backend,
+	u32 needLo, u32 needHi, u32* offset)
 {
 	RsxBuffer* b = (RsxBuffer*)backend;
-	if (!b) { b = new RsxBuffer; memset(b, 0, sizeof(*b)); backend = b; }
+	if (!b)
+	{
+		b = NewRecord<RsxBuffer>();
+		if (!b) { LogLimited("bufrec", 3, "out of memory for a buffer record"); return false; }
+		backend = b;
+	}
 	const u32 now = s_frameSeq;
 	const bool idle = !GpuMayUse(b->persistentUsed);	// the RSX is done with the persistent copy
+	if (needHi > size) needHi = size;
+	if (needLo > needHi) needLo = needHi;
 
 	if (b->mem && b->size < size)
 	{
-		DeferFree(b->mem);	// grown: the old copy goes once the RSX is done with it
+		DeferFree(b->mem, b->persistentUsed);	// grown: the old copy goes once the RSX is done with it
 		b->mem = NULL;
 	}
 	if (!b->mem)
@@ -518,8 +831,7 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 		memcpy(b->mem, data, size);
 		b->stale = false;
 		dirty = false;
-		CmdReserve(32);
-		rsxInvalidateVertexCache(s_ctx);
+		s_vertexWritten = true;
 	}
 
 	if (dirty)
@@ -533,20 +845,27 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 			if (b->stale) { lo = 0; hi = size; }	// (idle) the persistent copy is behind: refresh it all
 			if (hi > lo) memcpy(b->mem + lo, data + lo, hi - lo);
 			b->stale = false;
-			CmdReserve(32);
-			rsxInvalidateVertexCache(s_ctx);
+			s_vertexWritten = true;
+		}
+		else if (changes.noOverwrite && b->ringFrame == now)
+		{
+			// Appended to with NOOVERWRITE after this frame renamed it: the same promise covers
+			// the ring copy, so the changed bytes it already holds are rewritten in place (the
+			// ones it doesn't hold are copied when a draw reads them).
+			u32 lo = changes.lo > b->ringLo ? changes.lo : b->ringLo;
+			u32 hi = changes.hi < b->ringHi ? changes.hi : b->ringHi;
+			if (hi > lo)
+			{
+				memcpy(b->ring + lo, data + lo, hi - lo);
+				s_stats.ringBytes += hi - lo;
+				s_vertexWritten = true;
+			}
 		}
 		else
 		{
-			// Rewritten while the RSX may still read the old data: this frame uses a ring copy.
-			u32 off;
-			u8* p = RingAlloc(size, 128, &off);
-			if (!p) return false;
-			memcpy(p, data, size);
-			b->ringFrame = now;
-			b->ringOffset = off;
-			b->stale = true;
-			s_stats.ringKB += size / 1024;
+			// Rewritten (DISCARD or a plain lock) while the RSX may still read the old data:
+			// renamed, this frame's draws read a ring copy.
+			if (!RenameBuffer(b, size)) return false;
 		}
 		dirty = false;
 	}
@@ -556,23 +875,17 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 		{
 			memcpy(b->mem, data, size);	// catch the persistent copy up once the RSX is done with it
 			b->stale = false;
-			CmdReserve(32);
-			rsxInvalidateVertexCache(s_ctx);
+			s_vertexWritten = true;
 		}
-		else
-		{
-			u32 off;
-			u8* p = RingAlloc(size, 128, &off);
-			if (!p) return false;
-			memcpy(p, data, size);
-			b->ringFrame = now;
-			b->ringOffset = off;
-			s_stats.ringKB += size / 1024;
-		}
+		else if (!RenameBuffer(b, size))
+			return false;
 	}
 
 	if (b->stale)
+	{
+		FillRenamed(b, data, needLo, needHi);
 		*offset = b->ringOffset;
+	}
 	else
 	{
 		*offset = b->offset;
@@ -581,61 +894,128 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 	return true;
 }
 
+// The smallest and largest of `count` indices (16 or 32 bits).
+static void IndexRange(const u8* idx, bool i32, u32 count, u32* lo, u32* hi)
+{
+	u32 mn = 0xFFFFFFFF, mx = 0;
+	if (i32)
+	{
+		const u32* p = (const u32*)idx;
+		for (u32 i = 0; i < count; ++i) { const u32 v = p[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+	}
+	else
+	{
+		const u16* p = (const u16*)idx;
+		for (u32 i = 0; i < count; ++i) { const u32 v = p[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+	}
+	*lo = mn;
+	*hi = mx;
+}
+
 // ---------------------------------------------------------------------------
 // Programs
 // ---------------------------------------------------------------------------
 struct VpEntry
 {
-	std::vector<unsigned char> blob;
+	u8* blob;			// the assembled program (malloc'd)
 	rsxVertexProgram* prog;
 	void* ucode;
 };
 
+// A patched copy of a fragment program (its constants written into the code), kept in RSX
+// memory across frames: draws that come back to the same constant values reuse it.
+struct FpSlot
+{
+	u8* mem;
+	u32 offset;
+	u32 usedPlusOne;	// frame of the last draw that ran it, +1
+	u32 stamp;			// least recently used goes first
+	float vals[9][4];
+};
+enum { kFpSlots = 4 };
+
 struct FpEntry
 {
-	std::vector<unsigned char> blob;
+	u8* blob;			// the assembled program (malloc'd)
 	rsxFragmentProgram* prog;
 	u8* ucode;			// in the blob
 	u32 ucodeSize;
 	u8* local;			// persistent copy in RSX memory (default constants)
 	u32 localOffset;
-	struct Const { int reg; std::vector<u32> offsets; };
-	std::vector<Const> consts;
-	float last[9][4];	// constant values in the last patched copy
+	u32 localUsed;		// frame of the last draw that ran the persistent copy, +1
+	struct Const { int reg; u32 first, count; };	// offsets[first..first+count) in the code
+	Const consts[9];
+	int numConsts;
+	u32* offsets;		// malloc'd
+	FpSlot slots[kFpSlots];
+	float last[9][4];	// constant values in this frame's last ring copy
 	u32 lastFrame, lastOffset;
 	int texMask;		// stages it samples
 };
 
-static std::map<std::string, VpEntry*> s_vps;
-static std::map<std::string, FpEntry*> s_fps;
+// Program caches, keyed by plain data (no std::string keys built per draw). A fragment
+// program is either the fixed-function one for an FsKey, or a pixel shader's (by pointer,
+// with or without fog).
+struct FpKey
+{
+	u8 kind;			// 0: fixed function (fs), 1: pixel shader (ps)
+	u8 fog;
+	u8 pad[6];
+	u64 ps;
+	FsKey fs;
+};
+static PodMap<VsKey, VpEntry*> s_vps;
+static PodMap<FpKey, FpEntry*> s_fps;
+// Consecutive draws mostly use the same programs: the last key of each is checked first.
+static VsKey s_lastVsKey;
+static VpEntry* s_lastVp;
+static FpKey s_lastFpKey;
+static FpEntry* s_lastFp;
+static u32 s_fpStamp;
 static const VpEntry* s_currentVp;
 static u32 s_currentFpOffset = 0xFFFFFFFF;
 static float s_vc[kVcCount][4];
 static bool s_vcValid[kVcCount];
 
+// The assembler fills a std::vector; the program is kept in a malloc'd copy of it.
+static u8* KeepBlob(const std::vector<unsigned char>& v)
+{
+	if (v.empty()) return NULL;
+	u8* p = (u8*)memalign(16, v.size());
+	if (p) memcpy(p, &v[0], v.size());
+	return p;
+}
+
 static VpEntry* VertexProgramFor(const VsKey& key)
 {
-	std::string k((const char*)&key, sizeof(key));
-	std::map<std::string, VpEntry*>::iterator it = s_vps.find(k);
-	if (it != s_vps.end()) return it->second;
-
-	VpEntry* e = new VpEntry;
-	e->prog = NULL;
-	e->ucode = NULL;
-	std::string src = VertexProgram(key), err;
-	if (RsxAsm::AssembleVertexProgram(src.c_str(), e->blob, &err))
+	if (s_lastVp && !memcmp(&key, &s_lastVsKey, sizeof(key))) return s_lastVp;
+	VpEntry* e = s_vps.Find(key);
+	if (!e)
 	{
-		e->prog = (rsxVertexProgram*)&e->blob[0];
-		u32 size;
-		rsxVertexProgramGetUCode(e->prog, &e->ucode, &size);
-		++s_stats.programs;
+		e = NewRecord<VpEntry>();
+		if (!e) { LogLimited("vprec", 3, "out of memory for a vertex program record"); return NULL; }
+		std::string src = VertexProgram(key), err;
+		{
+			std::vector<unsigned char> blob;
+			if (RsxAsm::AssembleVertexProgram(src.c_str(), blob, &err))
+				e->blob = KeepBlob(blob);
+		}
+		if (e->blob)
+		{
+			e->prog = (rsxVertexProgram*)e->blob;
+			u32 size;
+			rsxVertexProgramGetUCode(e->prog, &e->ucode, &size);
+			++s_stats.programs;
+		}
+		else
+		{
+			++s_stats.programFailures;
+			GpuLog("vertex program failed (%s):\n%s", err.c_str(), src.c_str());
+		}
+		if (!s_vps.Insert(key, e)) LogLimited("vpmap", 3, "out of memory for the vertex program table");
 	}
-	else
-	{
-		++s_stats.programFailures;
-		GpuLog("vertex program failed (%s):\n%s", err.c_str(), src.c_str());
-	}
-	s_vps[k] = e;
+	memcpy(&s_lastVsKey, &key, sizeof(key));
+	s_lastVp = e;
 	return e;
 }
 
@@ -646,81 +1026,167 @@ static inline u32 SwapHalves(float f)
 	return (u >> 16) | (u << 16);
 }
 
-static FpEntry* FragmentProgramFrom(const std::string& key, const std::string& src, int texMask)
+static FpEntry* FragmentProgramFrom(const FpKey& key, const std::string& src, int texMask)
 {
-	std::map<std::string, FpEntry*>::iterator it = s_fps.find(key);
-	if (it != s_fps.end()) return it->second;
-
-	FpEntry* e = new FpEntry;
-	memset(e->last, 0, sizeof(e->last));
-	e->prog = NULL;
-	e->local = NULL;
+	FpEntry* e = NewRecord<FpEntry>();
+	if (!e) { LogLimited("fprec", 3, "out of memory for a fragment program record"); return NULL; }
 	e->lastFrame = 0xFFFFFFFF;
 	e->texMask = texMask;
 	std::string err;
-	if (!src.empty() && RsxAsm::AssembleFragmentProgram(src.c_str(), e->blob, &err))
+	if (!src.empty())
 	{
-		e->prog = (rsxFragmentProgram*)&e->blob[0];
+		std::vector<unsigned char> blob;
+		if (RsxAsm::AssembleFragmentProgram(src.c_str(), blob, &err))
+		{
+			e->blob = KeepBlob(blob);
+			if (!e->blob) err = "out of memory";
+		}
+	}
+	if (e->blob)
+	{
+		e->prog = (rsxFragmentProgram*)e->blob;
 		void* ucode;
 		rsxFragmentProgramGetUCode(e->prog, &ucode, &e->ucodeSize);
 		e->ucode = (u8*)ucode;
 		e->local = (u8*)LocalAlloc(e->ucodeSize, 64, &e->localOffset);
 		if (e->local) memcpy(e->local, e->ucode, e->ucodeSize);
-		else e->prog = NULL;
+		else { e->prog = NULL; err = "out of RSX memory"; }
 
 		// Where each named constant (c0, c1...) sits in the code.
-		const u8* base = &e->blob[0];
-		const rsxProgramConst* consts = (const rsxProgramConst*)(base + e->prog->const_off);
-		for (int i = 0; i < e->prog->num_const; ++i)
+		const u8* base = e->blob;
+		const rsxProgramConst* consts = e->prog ? (const rsxProgramConst*)(base + e->prog->const_off) : NULL;
+		u32 total = 0;
+		for (int pass = 0; pass < 2 && e->prog; ++pass)
 		{
-			if (consts[i].is_internal || consts[i].index == 0xFFFFFFFF || !consts[i].name_off) continue;
-			const char* name = (const char*)(base + consts[i].name_off);
-			if (name[0] != 'c') continue;
-			FpEntry::Const c;
-			c.reg = atoi(name + 1);
-			const rsxConstOffsetTable* table = (const rsxConstOffsetTable*)(base + consts[i].index);
-			for (u32 k = 0; k < table->num; ++k) c.offsets.push_back(table->offset[k]);
-			if (c.reg >= 0 && c.reg < 9 && !c.offsets.empty()) e->consts.push_back(c);
+			if (pass == 1)
+			{
+				if (!total) break;
+				e->offsets = (u32*)malloc(total * sizeof(u32));
+				if (!e->offsets) { e->prog = NULL; err = "out of memory"; break; }
+				total = 0;
+			}
+			for (int i = 0; i < e->prog->num_const; ++i)
+			{
+				if (consts[i].is_internal || consts[i].index == 0xFFFFFFFF || !consts[i].name_off) continue;
+				const char* name = (const char*)(base + consts[i].name_off);
+				if (name[0] != 'c') continue;
+				const int reg = atoi(name + 1);
+				const rsxConstOffsetTable* table = (const rsxConstOffsetTable*)(base + consts[i].index);
+				if (reg < 0 || reg >= 9 || !table->num) continue;
+				if (pass == 1)
+				{
+					if (e->numConsts >= 9) break;
+					FpEntry::Const& c = e->consts[e->numConsts++];
+					c.reg = reg;
+					c.first = total;
+					c.count = table->num;
+					for (u32 k = 0; k < table->num; ++k) e->offsets[total + k] = table->offset[k];
+				}
+				total += table->num;
+			}
 		}
-		++s_stats.programs;
+		if (e->prog) ++s_stats.programs;
 	}
-	else
+	if (!e->prog)
 	{
 		++s_stats.programFailures;
 		GpuLog("fragment program failed (%s):\n%s", err.c_str(), src.c_str());
 	}
-	s_fps[key] = e;
+	if (!s_fps.Insert(key, e)) LogLimited("fpmap", 3, "out of memory for the fragment program table");
 	return e;
+}
+
+static void FreeFragmentProgram(FpEntry* e)
+{
+	if (s_lastFp == e) s_lastFp = NULL;
+	// The RSX may still run these: freed once those frames are done.
+	DeferFree(e->local, e->localUsed);
+	for (int i = 0; i < kFpSlots; ++i) DeferFree(e->slots[i].mem, e->slots[i].usedPlusOne);
+	free(e->offsets);
+	free(e->blob);
+	FreeRecord(e);
+}
+
+// Do the given constants match the ones in `vals`, for the registers the program reads?
+static bool SameConsts(const FpEntry* e, const float (*vals)[4], const float (*values)[4])
+{
+	for (int i = 0; i < e->numConsts; ++i)
+		if (memcmp(vals[e->consts[i].reg], values[e->consts[i].reg], 16)) return false;
+	return true;
+}
+
+// Writes the program's code with the given constants patched in to p (RSX memory).
+static void WritePatched(const FpEntry* e, u8* p, const float (*values)[4], float (*vals)[4])
+{
+	memcpy(p, e->ucode, e->ucodeSize);
+	for (int i = 0; i < e->numConsts; ++i)
+	{
+		const FpEntry::Const& c = e->consts[i];
+		const float* v = values[c.reg];
+		u32 words[4] = { SwapHalves(v[0]), SwapHalves(v[1]), SwapHalves(v[2]), SwapHalves(v[3]) };
+		for (u32 k = 0; k < c.count; ++k)
+			memcpy(p + e->offsets[c.first + k], words, 16);
+		memcpy(vals[c.reg], v, 16);
+	}
+	++s_stats.fpPatches;
 }
 
 // Loads a fragment program with the given constants (c0..c8).
 static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 {
 	u32 offset = e->localOffset;
-	if (!e->consts.empty())
+	const u32 usedPlusOne = s_frameSeq + 1;
+	if (e->numConsts)
 	{
-		bool same = e->lastFrame == s_frameSeq;
-		for (size_t i = 0; same && i < e->consts.size(); ++i)
-			same = !memcmp(e->last[e->consts[i].reg], values[e->consts[i].reg], 16);
-		if (same)
-			offset = e->lastOffset;
+		FpSlot* slot = NULL;
+		for (int i = 0; i < kFpSlots && !slot; ++i)
+			if (e->slots[i].mem && SameConsts(e, e->slots[i].vals, values)) slot = &e->slots[i];
+		if (slot)
+			offset = slot->offset;	// a kept copy with these values
+		else if (e->lastFrame == s_frameSeq && SameConsts(e, e->last, values))
+			offset = e->lastOffset;	// this frame's ring copy
 		else
 		{
-			u8* p = RingAlloc(e->ucodeSize, 64, &offset);
-			if (!p) return false;
-			memcpy(p, e->ucode, e->ucodeSize);
-			for (size_t i = 0; i < e->consts.size(); ++i)
+			// A new copy: in an empty slot, else in the least recently used slot the RSX is
+			// done with; with every slot busy, in the ring for this frame.
+			for (int i = 0; i < kFpSlots && !slot; ++i)
 			{
-				const float* v = values[e->consts[i].reg];
-				u32 words[4] = { SwapHalves(v[0]), SwapHalves(v[1]), SwapHalves(v[2]), SwapHalves(v[3]) };
-				for (size_t k = 0; k < e->consts[i].offsets.size(); ++k)
-					memcpy(p + e->consts[i].offsets[k], words, 16);
-				memcpy(e->last[e->consts[i].reg], v, 16);
+				if (e->slots[i].mem) continue;
+				e->slots[i].mem = (u8*)LocalAlloc(e->ucodeSize, 64, &e->slots[i].offset);
+				if (e->slots[i].mem) slot = &e->slots[i];
+				break;
 			}
-			e->lastFrame = s_frameSeq;
-			e->lastOffset = offset;
+			if (!slot)
+			{
+				for (int i = 0; i < kFpSlots; ++i)
+				{
+					FpSlot& c = e->slots[i];
+					if (c.mem && !GpuMayUse(c.usedPlusOne) && (!slot || c.stamp < slot->stamp)) slot = &c;
+				}
+			}
+			if (slot)
+			{
+				WritePatched(e, slot->mem, values, slot->vals);
+				offset = slot->offset;
+				if (offset == s_currentFpOffset) s_currentFpOffset = 0xFFFFFFFF;	// new code at that address: load it again
+			}
+			else
+			{
+				u8* p = RingAlloc(e->ucodeSize, 64, &offset);
+				if (!p) return false;
+				WritePatched(e, p, values, e->last);
+				e->lastFrame = s_frameSeq;
+				e->lastOffset = offset;
+			}
+		}
+		if (slot)
+		{
+			slot->usedPlusOne = usedPlusOne;
+			slot->stamp = ++s_fpStamp;
 		}
 	}
+	else
+		e->localUsed = usedPlusOne;
 	if (offset != s_currentFpOffset)
 	{
 		CmdReserve(64);
@@ -770,6 +1236,8 @@ static bool s_stateValid;
 struct ViewState { D3DVIEWPORT9 vp; RECT scissor; u32 scissorOn; };
 static ViewState s_view;
 static bool s_viewValid;
+static s32 s_scissorSent[4];	// x, y, w, h last sent (valid with s_viewValid)
+static bool s_clipsSent;		// the viewport clips, sent once per frame and render target
 
 static u16 Blend(DWORD b, bool alpha)
 {
@@ -833,48 +1301,69 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 	s.shade = rs[D3DRS_SHADEMODE] == D3DSHADE_FLAT ? GCM_SHADE_MODEL_FLAT : GCM_SHADE_MODEL_SMOOTH;
 
 	if (s_stateValid && !memcmp(&s, &s_state, sizeof(s))) return;
-	s_state = s;
-	s_stateValid = true;
+	// Only the blocks that changed are sent; everything after a frame start, a new render
+	// target or a clear (s_stateValid false).
+	const bool all = !s_stateValid;
+	const GpuState& o = s_state;
 
 	CmdReserve(160);
-	rsxSetBlendEnable(s_ctx, s.blendEnable ? GCM_TRUE : GCM_FALSE);
+	if (all || s.blendEnable != o.blendEnable) rsxSetBlendEnable(s_ctx, s.blendEnable ? GCM_TRUE : GCM_FALSE);
 	if (s.blendEnable)
 	{
-		u16 sc = Blend(s.srcBlend, false), dc = Blend(s.dstBlend, false), sa = Blend(s.srcBlend, true), da = Blend(s.dstBlend, true);
-		if (s.srcBlend == D3DBLEND_BOTHSRCALPHA) { sc = sa = GCM_SRC_ALPHA; dc = da = GCM_ONE_MINUS_SRC_ALPHA; }
-		if (s.srcBlend == D3DBLEND_BOTHINVSRCALPHA) { sc = sa = GCM_ONE_MINUS_SRC_ALPHA; dc = da = GCM_SRC_ALPHA; }
-		rsxSetBlendFunc(s_ctx, sc, dc, sa, da);
-		u16 eq = GCM_FUNC_ADD;
-		if (s.blendOp == D3DBLENDOP_SUBTRACT) eq = GCM_FUNC_SUBTRACT;
-		else if (s.blendOp == D3DBLENDOP_REVSUBTRACT) eq = GCM_FUNC_REVERSE_SUBTRACT;
-		else if (s.blendOp == D3DBLENDOP_MIN) eq = GCM_FUNC_MIN;
-		else if (s.blendOp == D3DBLENDOP_MAX) eq = GCM_FUNC_MAX;
-		rsxSetBlendEquation(s_ctx, eq, eq);
-		rsxSetBlendColor(s_ctx, s.blendColor, 0);
+		// Factors, equation and colour aren't sent while blending is off, so all go when it
+		// comes on.
+		const bool on = all || !o.blendEnable;
+		if (on || s.srcBlend != o.srcBlend || s.dstBlend != o.dstBlend)
+		{
+			u16 sc = Blend(s.srcBlend, false), dc = Blend(s.dstBlend, false), sa = Blend(s.srcBlend, true), da = Blend(s.dstBlend, true);
+			if (s.srcBlend == D3DBLEND_BOTHSRCALPHA) { sc = sa = GCM_SRC_ALPHA; dc = da = GCM_ONE_MINUS_SRC_ALPHA; }
+			if (s.srcBlend == D3DBLEND_BOTHINVSRCALPHA) { sc = sa = GCM_ONE_MINUS_SRC_ALPHA; dc = da = GCM_SRC_ALPHA; }
+			rsxSetBlendFunc(s_ctx, sc, dc, sa, da);
+		}
+		if (on || s.blendOp != o.blendOp)
+		{
+			u16 eq = GCM_FUNC_ADD;
+			if (s.blendOp == D3DBLENDOP_SUBTRACT) eq = GCM_FUNC_SUBTRACT;
+			else if (s.blendOp == D3DBLENDOP_REVSUBTRACT) eq = GCM_FUNC_REVERSE_SUBTRACT;
+			else if (s.blendOp == D3DBLENDOP_MIN) eq = GCM_FUNC_MIN;
+			else if (s.blendOp == D3DBLENDOP_MAX) eq = GCM_FUNC_MAX;
+			rsxSetBlendEquation(s_ctx, eq, eq);
+		}
+		if (on || s.blendColor != o.blendColor) rsxSetBlendColor(s_ctx, s.blendColor, 0);
 	}
-	rsxSetAlphaTestEnable(s_ctx, s.alphaTest ? GCM_TRUE : GCM_FALSE);
-	rsxSetAlphaFunc(s_ctx, Compare(s.alphaFunc), s.alphaRef);
-	rsxSetDepthTestEnable(s_ctx, s.depthTest ? GCM_TRUE : GCM_FALSE);
-	rsxSetDepthWriteEnable(s_ctx, s.depthWrite ? GCM_TRUE : GCM_FALSE);
-	rsxSetDepthFunc(s_ctx, Compare(s.depthFunc));
+	if (all || s.alphaTest != o.alphaTest) rsxSetAlphaTestEnable(s_ctx, s.alphaTest ? GCM_TRUE : GCM_FALSE);
+	if (all || s.alphaFunc != o.alphaFunc || s.alphaRef != o.alphaRef) rsxSetAlphaFunc(s_ctx, Compare(s.alphaFunc), s.alphaRef);
+	if (all || s.depthTest != o.depthTest) rsxSetDepthTestEnable(s_ctx, s.depthTest ? GCM_TRUE : GCM_FALSE);
+	if (all || s.depthWrite != o.depthWrite) rsxSetDepthWriteEnable(s_ctx, s.depthWrite ? GCM_TRUE : GCM_FALSE);
+	if (all || s.depthFunc != o.depthFunc) rsxSetDepthFunc(s_ctx, Compare(s.depthFunc));
 	// D3D culls by screen-space winding (y down). On a console the opposite of the original
 	// mapping proved right: with it, models showed their insides (a jersey's back print seen
 	// mirrored through the front) and ground seen from above was culled away. So D3DCULL_CCW
 	// culls the RSX's front (CCW) faces. rsx_flip_cull.txt brings back the old mapping.
-	rsxSetCullFaceEnable(s_ctx, s.cullEnable ? GCM_TRUE : GCM_FALSE);
-	rsxSetFrontFace(s_ctx, GCM_FRONTFACE_CCW);
-	bool cullBack = s.cullFace != D3DCULL_CCW;
-	if (s_flipCull) cullBack = !cullBack;
-	rsxSetCullFace(s_ctx, cullBack ? GCM_CULL_BACK : GCM_CULL_FRONT);
-	u32 mask = 0;
-	if (s.colorMask & D3DCOLORWRITEENABLE_RED) mask |= GCM_COLOR_MASK_R;
-	if (s.colorMask & D3DCOLORWRITEENABLE_GREEN) mask |= GCM_COLOR_MASK_G;
-	if (s.colorMask & D3DCOLORWRITEENABLE_BLUE) mask |= GCM_COLOR_MASK_B;
-	if (s.colorMask & D3DCOLORWRITEENABLE_ALPHA) mask |= GCM_COLOR_MASK_A;
-	rsxSetColorMask(s_ctx, mask);
-	rsxSetPolygonOffsetFillEnable(s_ctx, s.offsetEnable ? GCM_TRUE : GCM_FALSE);
-	if (s.offsetEnable) rsxSetPolygonOffset(s_ctx, s.offsetFactor, s.offsetUnits);
-	rsxSetShadeModel(s_ctx, s.shade);
+	if (all || s.cullEnable != o.cullEnable) rsxSetCullFaceEnable(s_ctx, s.cullEnable ? GCM_TRUE : GCM_FALSE);
+	if (all) rsxSetFrontFace(s_ctx, GCM_FRONTFACE_CCW);
+	if (all || s.cullFace != o.cullFace)
+	{
+		bool cullBack = s.cullFace != D3DCULL_CCW;
+		if (s_flipCull) cullBack = !cullBack;
+		rsxSetCullFace(s_ctx, cullBack ? GCM_CULL_BACK : GCM_CULL_FRONT);
+	}
+	if (all || s.colorMask != o.colorMask)
+	{
+		u32 mask = 0;
+		if (s.colorMask & D3DCOLORWRITEENABLE_RED) mask |= GCM_COLOR_MASK_R;
+		if (s.colorMask & D3DCOLORWRITEENABLE_GREEN) mask |= GCM_COLOR_MASK_G;
+		if (s.colorMask & D3DCOLORWRITEENABLE_BLUE) mask |= GCM_COLOR_MASK_B;
+		if (s.colorMask & D3DCOLORWRITEENABLE_ALPHA) mask |= GCM_COLOR_MASK_A;
+		rsxSetColorMask(s_ctx, mask);
+	}
+	if (all || s.offsetEnable != o.offsetEnable) rsxSetPolygonOffsetFillEnable(s_ctx, s.offsetEnable ? GCM_TRUE : GCM_FALSE);
+	if (s.offsetEnable && (all || !o.offsetEnable || memcmp(&s.offsetFactor, &o.offsetFactor, sizeof(float)) ||
+		memcmp(&s.offsetUnits, &o.offsetUnits, sizeof(float))))
+		rsxSetPolygonOffset(s_ctx, s.offsetFactor, s.offsetUnits);
+	if (all || s.shade != o.shade) rsxSetShadeModel(s_ctx, s.shade);
+	s_state = s;
+	s_stateValid = true;
 }
 
 static void ApplyView(IDirect3DDevice9* dev)
@@ -885,13 +1374,12 @@ static void ApplyView(IDirect3DDevice9* dev)
 	v.scissor = dev->m_scissor;
 	v.scissorOn = dev->m_rs[D3DRS_SCISSORTESTENABLE] != 0;
 	if (s_viewValid && !memcmp(&v, &s_view, sizeof(v))) return;
+	const bool all = !s_viewValid;
+	const bool vpChanged = all || memcmp(&v.vp, &s_view.vp, sizeof(v.vp));
 	s_view = v;
 	s_viewValid = true;
 
 	const D3DVIEWPORT9& vp = v.vp;
-	// GL-style depth (-1..1 -> MinZ..MaxZ), y flipped, plus D3D9's half-pixel offset.
-	float scale[4], offset[4];
-	ViewportTransform(vp, scale, offset);
 	int x = vp.X, y = vp.Y, w = vp.Width, h = vp.Height;
 	if (v.scissorOn)
 	{
@@ -904,15 +1392,35 @@ static void ApplyView(IDirect3DDevice9* dev)
 		h = y2 > y ? y2 - y : 0;
 	}
 	CmdReserve(96);
-	rsxSetViewport(s_ctx, vp.X, vp.Y, vp.Width, vp.Height, 0.0f, 1.0f, scale, offset);
-	for (int i = 0; i < 8; ++i) rsxSetViewportClip(s_ctx, i, 4096, 4096);
-	rsxSetScissor(s_ctx, x, y, w, h);
+	if (vpChanged)
+	{
+		// GL-style depth (-1..1 -> MinZ..MaxZ), y flipped, plus D3D9's half-pixel offset.
+		float scale[4], offset[4];
+		ViewportTransform(vp, scale, offset);
+		rsxSetViewport(s_ctx, vp.X, vp.Y, vp.Width, vp.Height, 0.0f, 1.0f, scale, offset);
+	}
+	// The clips never change (the whole 4096 x 4096 range): once per frame and render target.
+	if (!s_clipsSent)
+	{
+		for (int i = 0; i < 8; ++i) rsxSetViewportClip(s_ctx, i, 4096, 4096);
+		s_clipsSent = true;
+	}
+	const s32 sc[4] = { x, y, w, h };
+	if (all || memcmp(sc, s_scissorSent, sizeof(sc)))
+	{
+		rsxSetScissor(s_ctx, x, y, w, h);
+		memcpy(s_scissorSent, sc, sizeof(sc));
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Draws
 // ---------------------------------------------------------------------------
 static u32 s_attribMask;	// vertex attributes bound by the last draw
+// The last binding (layout, base, stride): a draw with the same one sends nothing.
+static FvfLayout s_attrLayout;
+static u32 s_attrBase, s_attrStride;
+static bool s_attrValid;
 
 static u8 PrimType(D3DPRIMITIVETYPE t, bool* ok)
 {
@@ -942,8 +1450,15 @@ static u32 VertexCount(D3DPRIMITIVETYPE type, u32 prims)
 	}
 }
 
+// FvfLayout's fields up to and including rhw (not its tail padding).
+static bool SameLayout(const FvfLayout& a, const FvfLayout& b)
+{
+	return !memcmp(&a, &b, offsetof(FvfLayout, rhw) + sizeof(a.rhw));
+}
+
 static void BindAttributes(const FvfLayout& l, u32 base, u32 stride)
 {
+	if (s_attrValid && base == s_attrBase && stride == s_attrStride && SameLayout(l, s_attrLayout)) return;
 	u32 mask = 0;
 	CmdReserve(256);
 	rsxBindVertexArrayAttrib(s_ctx, kAttrPos, 0, base + l.pos, stride, l.posSize, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
@@ -961,7 +1476,12 @@ static void BindAttributes(const FvfLayout& l, u32 base, u32 stride)
 		if (!(mask & (1u << a)) && (s_attribMask & (1u << a) || s_attribMask == 0xFFFFFFFF))
 			rsxBindVertexArrayAttrib(s_ctx, a, 0, 0, 0, 0, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
 	s_attribMask = mask;
-	rsxInvalidateVertexCache(s_ctx);
+	memcpy(&s_attrLayout, &l, sizeof(l));
+	s_attrBase = base;
+	s_attrStride = stride;
+	s_attrValid = true;
+	// No vertex-cache invalidate here: the draw invalidates it when vertex data was written
+	// (s_vertexWritten), and rsxDrawIndexArray / rsxDrawVertexArray send their own.
 }
 
 static bool Skip(const char* why)
@@ -1075,22 +1595,35 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 			tex[s] = Texture(static_cast<IDirect3DTexture9*>(bt));
 	}
 
-	// Fragment program and its constants.
+	// Fragment program and its constants. The key is plain data: a pixel shader by pointer
+	// (and fog), or the fixed-function stages (FillFsKey, once per draw).
 	FpEntry* fp = NULL;
 	float fc[9][4];
 	memset(fc, 0, sizeof(fc));
 	const bool fog = FogEnabled(dev);
 	int numTexOut = 0;
+	FpKey key;
+	memset(&key, 0, sizeof(key));
 	if (dev->m_ps)
 	{
-		const char* src = PixelShaderSource(dev->m_ps);
-		if (!src) return Skip("pixel shader without source");
-		char key[48];
-		snprintf(key, sizeof(key), "ps:%p:%d", (void*)dev->m_ps, fog ? 1 : 0);
-		std::map<std::string, FpEntry*>::iterator it = s_fps.find(key);
-		if (it != s_fps.end()) fp = it->second;
-		else
+		key.kind = 1;
+		key.fog = fog ? 1 : 0;
+		key.ps = (u64)(uintptr_t)dev->m_ps;
+	}
+	else
+	{
+		const bool has[4] = { tex[0] != NULL, tex[1] != NULL, tex[2] != NULL, tex[3] != NULL };
+		FillFsKey(dev, key.fs, has);
+	}
+	if (s_lastFp && !memcmp(&key, &s_lastFpKey, sizeof(key)))
+		fp = s_lastFp;
+	else
+	{
+		fp = s_fps.Find(key);
+		if (!fp && dev->m_ps)
 		{
+			const char* src = PixelShaderSource(dev->m_ps);
+			if (!src) return Skip("pixel shader without source");
 			std::string err, prog = PixelShaderProgram(src, fog, &err);
 			if (prog.empty()) GpuLog("pixel shader not translated (%s):\n%s", err.c_str(), src);
 			int mask = 0;
@@ -1102,41 +1635,37 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 			}
 			fp = FragmentProgramFrom(key, prog, mask);
 		}
+		else if (!fp)
+		{
+			int mask = 0;
+			for (int s = 0; s < key.fs.numStages; ++s) if (key.fs.stage[s].hasTexture) mask |= 1 << s;
+			fp = FragmentProgramFrom(key, FixedFunctionFragmentProgram(key.fs), mask);
+		}
+		if (fp)
+		{
+			memcpy(&s_lastFpKey, &key, sizeof(key));
+			s_lastFp = fp;
+		}
+	}
+	if (dev->m_ps)
+	{
 		for (int i = 0; i < 8; ++i) memcpy(fc[i], dev->m_psConst[i], 16);
 		ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcPsFogColor]);
 	}
 	else
 	{
-		FsKey fk;
-		const bool has[4] = { tex[0] != NULL, tex[1] != NULL, tex[2] != NULL, tex[3] != NULL };
-		FillFsKey(dev, fk, has);
-		std::string key = "ff:" + std::string((const char*)&fk, sizeof(fk));
-		std::map<std::string, FpEntry*>::iterator it = s_fps.find(key);
-		if (it != s_fps.end()) fp = it->second;
-		else
-		{
-			int mask = 0;
-			for (int s = 0; s < fk.numStages; ++s) if (fk.stage[s].hasTexture) mask |= 1 << s;
-			fp = FragmentProgramFrom(key, FixedFunctionFragmentProgram(fk), mask);
-		}
 		ColorToFloats(dev->m_rs[D3DRS_TEXTUREFACTOR], fc[kFcTextureFactor]);
 		ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcFogColor]);
 	}
 	if (!fp || !fp->prog) return Skip("fragment program unavailable");
 	for (int t = 0; t < 4; ++t) if (fp->texMask & (1 << t)) numTexOut = t + 1;
-	if (!dev->m_ps)
-	{
-		FsKey fk;
-		const bool has[4] = { tex[0] != NULL, tex[1] != NULL, tex[2] != NULL, tex[3] != NULL };
-		FillFsKey(dev, fk, has);
-		if (fk.numStages > numTexOut) numTexOut = fk.numStages;
-	}
+	if (!dev->m_ps && key.fs.numStages > numTexOut) numTexOut = key.fs.numStages;
 
 	// Vertex program.
 	VsKey vk;
 	FillVsKey(dev, l, numTexOut, vk);
 	VpEntry* vp = VertexProgramFor(vk);
-	if (!vp->prog) return Skip("vertex program unavailable");
+	if (!vp || !vp->prog) return Skip("vertex program unavailable");
 
 	// Vertex and index data on the RSX.
 	u32 vbase, stride, ioff = 0;
@@ -1147,30 +1676,61 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 		u8* p = RingAlloc(verts * stride, 128, &vbase);
 		if (!p) return false;
 		memcpy(p, call.vertexData, verts * stride);
-		s_stats.ringKB += verts * stride / 1024;
+		s_stats.ringBytes += verts * stride;
 		if (call.indexed)
 		{
 			const u32 isize = count * (call.indexFormat == D3DFMT_INDEX32 ? 4 : 2);
 			u8* ip = RingAlloc(isize, 16, &ioff);
 			if (!ip) return false;
 			memcpy(ip, call.indexData, isize);
+			s_stats.ringBytes += isize;
 		}
+		s_vertexWritten = true;
 	}
 	else
 	{
 		IDirect3DVertexBuffer9* vb = dev->m_streams[0];
 		if (!vb) return Skip("no vertex buffer");
 		stride = dev->m_streamStride[0] ? dev->m_streamStride[0] : l.stride;
+		IDirect3DIndexBuffer9* ib = call.indexed ? dev->m_indices : NULL;
+		if (call.indexed && !ib) return Skip("no index buffer");
+		const u32 isz = ib && ib->m_format == D3DFMT_INDEX32 ? 4 : 2;
+
+		// The bytes this draw reads, for a buffer that may have to be renamed into the ring
+		// (only those are copied there). Indexed draws scan their indices for the range
+		// rather than trusting MinIndex/NumVertices, which PC drivers ignore. Anything odd
+		// falls back to the whole buffer.
+		u32 vLo = 0, vHi = vb->m_size;
+		const RsxBuffer* vbb = (const RsxBuffer*)vb->m_backend;
+		if (vb->m_dirty || (vbb && vbb->stale))
+		{
+			long long first = -1, last = -1;
+			if (!call.indexed)
+			{
+				first = call.startVertex;
+				last = (long long)call.startVertex + count - 1;
+			}
+			else if (((unsigned long long)call.startIndex + count) * isz <= ib->m_size && ib->m_data)
+			{
+				u32 mn, mx;
+				IndexRange(ib->m_data + call.startIndex * isz, isz == 4, count, &mn, &mx);
+				first = (long long)call.baseVertex + mn;
+				last = (long long)call.baseVertex + mx;
+			}
+			const long long lo = (long long)dev->m_streamOffset[0] + first * stride;
+			long long hi = (long long)dev->m_streamOffset[0] + last * stride + stride;
+			if (hi > (long long)vb->m_size) hi = vb->m_size;
+			if (first >= 0 && last >= first && lo >= 0 && lo < hi) { vLo = (u32)lo; vHi = (u32)hi; }
+		}
 		u32 off;
-		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, &off)) return false;
+		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, vLo, vHi, &off)) return false;
 		vbase = off + dev->m_streamOffset[0];
 		if (call.indexed)
 		{
 			vbase += call.baseVertex * stride;
-			IDirect3DIndexBuffer9* ib = dev->m_indices;
-			if (!ib) return Skip("no index buffer");
-			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_changes, ib->m_backend, &ioff)) return false;
-			ioff += call.startIndex * (ib->m_format == D3DFMT_INDEX32 ? 4 : 2);
+			const u32 iLo = call.startIndex * isz;
+			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_changes, ib->m_backend, iLo, iLo + count * isz, &ioff)) return false;
+			ioff += iLo;
 		}
 		else
 			vbase += call.startVertex * stride;
@@ -1190,7 +1750,14 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	BindAttributes(l, vbase, stride);
 
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
+	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
 	CmdReserve(64 + count / 256 * 2);
+	if (s_vertexWritten)
+	{
+		// New vertex or index data in RSX memory since the last draw.
+		rsxInvalidateVertexCache(s_ctx);
+		s_vertexWritten = false;
+	}
 	if (call.indexed)
 	{
 		const bool i32 = call.vertexData ? call.indexFormat == D3DFMT_INDEX32 : dev->m_indices->m_format == D3DFMT_INDEX32;
@@ -1199,6 +1766,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	else
 		rsxDrawVertexArray(s_ctx, type, 0, count);
 	++s_stats.drawn;
+	if (++s_drawsSinceKick >= kKickDraws) Kick();
 	return true;
 }
 
@@ -1216,7 +1784,7 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 // Set-up, frames, resource notifications
 // ---------------------------------------------------------------------------
 // Surfaces the game creates on their own (CreateRenderTarget, CreateDepthStencilSurface).
-struct RsxSurface { u8* mem; u32 offset, pitch; };
+struct RsxSurface { u8* mem; u32 offset, pitch; u32 usedPlusOne; };
 
 static SurfaceDesc s_target;
 static bool s_targetValid;
@@ -1229,6 +1797,7 @@ static bool SurfaceMemory(IDirect3DSurface9* surf, u32* offset, u32* pitch)
 		if (surf->m_level != 0) return false;
 		RsxTexture* r = Texture(surf->m_owner);
 		if (!r || !r->renderTarget) return false;
+		r->usedPlusOne = s_frameSeq + 1;	// drawn into this frame: its memory stays until the RSX is done
 		*offset = r->offset;
 		*pitch = r->pitch;
 		return true;
@@ -1236,13 +1805,15 @@ static bool SurfaceMemory(IDirect3DSurface9* surf, u32* offset, u32* pitch)
 	RsxSurface* rs = (RsxSurface*)surf->m_backend;
 	if (!rs)
 	{
-		rs = new RsxSurface;
+		rs = NewRecord<RsxSurface>();
+		if (!rs) { LogLimited("surfrec", 3, "out of memory for a surface record"); return false; }
 		rs->pitch = (surf->m_width * 4 + 63) & ~63u;
 		rs->mem = (u8*)LocalAlloc(rs->pitch * surf->m_height, 4096, &rs->offset);
-		if (!rs->mem) { delete rs; LogLimited("surfmem", 5, "out of RSX memory for a %ux%u surface", surf->m_width, surf->m_height); return false; }
+		if (!rs->mem) { FreeRecord(rs); LogLimited("surfmem", 5, "out of RSX memory for a %ux%u surface", surf->m_width, surf->m_height); return false; }
 		memset(rs->mem, 0, rs->pitch * surf->m_height);
 		surf->m_backend = rs;
 	}
+	rs->usedPlusOne = s_frameSeq + 1;
 	*offset = rs->offset;
 	*pitch = rs->pitch;
 	return true;
@@ -1289,6 +1860,12 @@ static void SetSurface(const SurfaceDesc& d)
 	rsxSetSurface(s_ctx, &sf);
 	// What was drawn into a texture before must be read fresh from now on.
 	rsxInvalidateTextureCache(s_ctx, GCM_INVALIDATE_TEXTURE);
+	// A new target: what was cached for the last one is sent again (the old code re-sent
+	// all of it with each change), and what was queued for the last target goes to the RSX.
+	s_stateValid = false;
+	s_clipsSent = false;
+	s_attrValid = false;
+	Kick();
 }
 
 bool ApplyTarget(IDirect3DDevice9* dev, bool* hasDepth)
@@ -1396,6 +1973,10 @@ void DrawFrameStart()
 	memset(s_vcValid, 0, sizeof(s_vcValid));
 	memset(s_bound, 0, sizeof(s_bound));
 	s_attribMask = 0xFFFFFFFF;
+	s_attrValid = false;
+	s_clipsSent = false;
+	s_vertexWritten = false;	// invalidated just below
+	s_drawsSinceKick = 0;
 	CmdReserve(32);
 	rsxInvalidateTextureCache(s_ctx, GCM_INVALIDATE_TEXTURE);
 	rsxInvalidateVertexCache(s_ctx);
@@ -1404,10 +1985,12 @@ void DrawFrameStart()
 const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
-		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB), %u KB through the ring, %u programs (%u failed), ring full %u; "
+		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
+		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM",
-		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB,
-		s_stats.ringKB, s_stats.programs, s_stats.programFailures, s_stats.ringFull,
+		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
+		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
+		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024));
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
 	memset(&s_stats, 0, sizeof(s_stats));
@@ -1421,16 +2004,19 @@ static void FreeTexture(void* backend)
 	RsxTexture* r = (RsxTexture*)backend;
 	if (!r) return;
 	for (int u = 0; u < 4; ++u) if (s_bound[u] == r) s_bound[u] = NULL;
-	DeferFree(r->mem);	// the RSX may still read it: freed once those frames are done
-	delete r;
+	// The RSX may still read these: freed once the frames that used them are done.
+	DeferFree(r->mem, r->usedPlusOne);
+	for (int i = 0; i < 2; ++i) DeferFree(r->spare[i].mem, r->spare[i].usedPlusOne);
+	FreeRecord(r);
 }
 
 static void FreeBuffer(void* backend)
 {
 	RsxBuffer* b = (RsxBuffer*)backend;
 	if (!b) return;
-	DeferFree(b->mem);
-	delete b;
+	DeferFree(b->mem, b->persistentUsed);	// its ring copies belong to the ring (or are deferred already)
+	FreeRecord(b);
+	s_attrValid = false;	// the next draw binds its attributes again, whatever lands at that address
 }
 
 void TextureChanged(IDirect3DTexture9*) {}	// uploaded on the next draw that uses it (m_dirty)
@@ -1441,8 +2027,8 @@ void SurfaceReleased(IDirect3DSurface9* surf)
 	RsxSurface* rs = surf->m_owner ? NULL : (RsxSurface*)surf->m_backend;
 	if (rs)
 	{
-		DeferFree(rs->mem);
-		delete rs;
+		DeferFree(rs->mem, rs->usedPlusOne);
+		FreeRecord(rs);
 	}
 	surf->m_backend = NULL;
 	s_targetValid = false;
@@ -1460,18 +2046,15 @@ void ShaderReleased(IDirect3DPixelShader9* ps)
 	// Drop its cached programs (the key holds the pointer, which may be reused).
 	for (int fog = 0; fog < 2; ++fog)
 	{
-		char key[48];
-		snprintf(key, sizeof(key), "ps:%p:%d", (void*)ps, fog);
-		std::map<std::string, FpEntry*>::iterator it = s_fps.find(key);
-		if (it == s_fps.end()) continue;
-		FpEntry* e = it->second;
-		s_fps.erase(it);
-		if (e)
-		{
-			DeferFree(e->local);	// the RSX may still run it: freed once those frames are done
-			delete e;
-		}
+		FpKey key;
+		memset(&key, 0, sizeof(key));
+		key.kind = 1;
+		key.fog = (u8)fog;
+		key.ps = (u64)(uintptr_t)ps;
+		if (FpEntry* e = s_fps.Erase(key))
+			FreeFragmentProgram(e);	// also forgets it as the last program used
 	}
+	s_lastFp = NULL;
 }
 
 UINT VideoMemoryFree()

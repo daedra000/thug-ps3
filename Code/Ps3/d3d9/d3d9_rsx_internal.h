@@ -26,7 +26,12 @@ struct DeviceGuard
 	extern bool s_skipFrame;	// this frame is not being drawn (the system holds the display)
 	extern bool s_capture;		// this frame is being captured: each draw is logged ([cap] lines)
 
-	void CmdReserve(u32 words);	// room for `words` command words (see d3d9_rsx.cpp)
+	void CmdReserve(u32 words);	// room for `words` command words (see d3d9_rsx.cpp); if there is
+								// none mid-frame, the rest of the frame is dropped (s_skipFrame)
+	// Frames the RSX has finished: the frame fence's label. Frame n (s_frameSeq == n while it
+	// is built) is done once this reaches n + 1, so a "used in frame n, +1" stamp compares
+	// straight against it.
+	u32 FramesDone();
 	void GpuLog(const char* fmt, ...);
 	bool WaitIdle(const char* what);
 

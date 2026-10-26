@@ -30,13 +30,13 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
 #include <malloc.h>
 #include <unistd.h>
 #include <rsx/rsx.h>
 #include <sysutil/video.h>
 #include <sys/systime.h>
 #include <lv2/mutex.h>
-#include <vector>
 #include <ps3_fs.h>
 #include "d3d9_rsx_internal.h"
 
@@ -64,6 +64,8 @@ static u32 s_label = 1;
 static bool s_firstFrame = true;
 static bool s_frameReady;	// this frame has passed the flip gate
 bool s_skipFrame;	// the system holds the display: this frame is not drawn
+static bool s_frameAborted;	// the command buffer ran out mid-frame: the rest of the frame is dropped
+static unsigned s_fenceTimeouts;
 static bool s_flipPending;
 static int s_heldFrames, s_forcedRun;
 static unsigned s_skipped, s_forced;
@@ -96,7 +98,10 @@ static void SaveBmp(const char* path, const u32* pixels, u32 w, u32 h, u32 pitch
 	hdr[26] = 1; hdr[28] = 24;	// planes, bits per pixel
 	for (int b = 0; b < 4; ++b) hdr[34 + b] = (u8)(dataSize >> (8 * b));
 	fwrite(hdr, 1, 54, f);
-	std::vector<u8> row(padded, 0);
+	// malloc, not a std::vector: the game's heaps stay out of the renderer (ps3_new.cpp
+	// sends new on the game thread to whichever heap the game has pushed).
+	u8* row = (u8*)calloc(1, padded);
+	if (!row) { fclose(f); printf("[gfx] capture: out of memory for %s\n", path); return; }
 	for (u32 y = 0; y < h; ++y)
 	{
 		const u32* src = (const u32*)((const u8*)pixels + (h - 1 - y) * pitch);	// BMP rows go bottom up
@@ -107,8 +112,9 @@ static void SaveBmp(const char* path, const u32* pixels, u32 w, u32 h, u32 pitch
 			row[x * 3 + 1] = (u8)(c >> 8);
 			row[x * 3 + 2] = (u8)(c >> 16);
 		}
-		fwrite(&row[0], 1, padded, f);
+		fwrite(row, 1, padded, f);
 	}
+	free(row);
 	fclose(f);
 	printf("[gfx] capture: saved %s\n", path);
 }
@@ -147,7 +153,20 @@ void CmdReserve(u32 words)
 		if (logged++ < 5)
 			printf("[gfx] command buffer: no room for %u words (callback %d, %u free)\n", words, (int)r,
 				(unsigned)(s_ctx->end - s_ctx->current));
+		// Writing on would go past the segment (or through PSL1GHT's own callback, which can
+		// leave garbage in the stream), so the rest of this frame is dropped: draws and clears
+		// check s_skipFrame, and Present only fences what was queued.
+		if (s_frameReady && !s_skipFrame)
+		{
+			s_skipFrame = true;
+			s_frameAborted = true;
+		}
 	}
+}
+
+u32 FramesDone()
+{
+	return *(vu32*)gcmGetLabelAddress(kFrameLabel);
 }
 
 void GpuLog(const char* fmt, ...)
@@ -251,18 +270,26 @@ static void FrameBegin()
 	// The RSX must have finished the frame before last, which read the buffer we are
 	// about to draw into (the flip status alone can't say so after a forced flip).
 	int t = 0;
-	for (; t < 4000 && *(vu32*)gcmGetLabelAddress(kFrameLabel) + 1 < s_frameSeq; ++t) usleep(250);
+	for (; t < 4000 && FramesDone() + 1 < s_frameSeq; ++t) usleep(250);
 	if (t == 4000)
 	{
-		static int logged;
-		if (logged++ < 5)
-			GpuLog("frame fence: the RSX is over a frame behind after 1 s (label %u, frame %u)",
-				*(vu32*)gcmGetLabelAddress(kFrameLabel), s_frameSeq);
+		// Still behind after 1 s. Drawing on would reuse the frame ring slot and the back
+		// buffer the RSX may still be reading, so this frame is skipped instead (nothing is
+		// queued, so Present neither fences nor flips) and the next frame waits again. The
+		// log says so now and then, the way WaitIdle does.
+		++s_fenceTimeouts;
+		if (s_fenceTimeouts <= 5 || s_fenceTimeouts % 60 == 0)
+			GpuLog("frame fence: the RSX is over a frame behind after 1 s (label %u, frame %u): frame skipped (%u so far)",
+				FramesDone(), s_frameSeq, s_fenceTimeouts);
+		s_skipFrame = true;
+		++s_skipped;
+		return;
 	}
 	// Change segments here, between frames, if the frame might not fit. libgcm's segments
 	// are 32 KB, and a fresh one has 7167 words free, so ask for less than that: 7168
 	// could never be met, and forced a segment change at the start of every frame.
 	CmdReserve(6 * 1024);
+	if (s_skipFrame) return;	// no room: CmdReserve dropped the frame
 	SetRenderTarget();
 	DrawFrameStart();
 	const unsigned frame = s_frames + 1;
@@ -413,7 +440,22 @@ void Present(IDirect3DDevice9*)
 	FrameBegin();	// a frame with no draws or clears still flips a valid buffer
 	s_frameReady = false;
 	++s_frames;
-	if (!s_skipFrame)
+	if (s_frameAborted)
+	{
+		// The command buffer ran out part-way through: what was queued still runs, and it may
+		// read this frame's ring slot and memory freed after it. Fence it (no flip: the
+		// picture is incomplete) so the ring and the deferred frees stay in step; if even the
+		// fence doesn't fit, the frame counter stays put and the next frame waits on it.
+		s_frameAborted = false;
+		CmdReserve(16);
+		if (s_ctx->current + 16 <= s_ctx->end)
+		{
+			rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);
+			rsxFlushBuffer(s_ctx);
+		}
+		s_capture = false;
+	}
+	else if (!s_skipFrame)
 	{
 		CmdReserve(64);
 		rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);	// the frame fence
@@ -463,6 +505,7 @@ void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags
 	if (!mask) return;
 	const D3DVIEWPORT9& vp = dev->m_viewport;
 	CmdReserve(64);
+	if (s_skipFrame) return;	// no room left: CmdReserve dropped the frame
 	rsxSetColorMask(s_ctx, GCM_COLOR_MASK_R | GCM_COLOR_MASK_G | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A);
 	rsxSetDepthWriteEnable(s_ctx, GCM_TRUE);
 	rsxSetClearColor(s_ctx, color);	// D3DCOLOR is ARGB, as the RSX wants
@@ -485,6 +528,7 @@ void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags
 		}
 		if (x1 <= x0 || y1 <= y0) continue;
 		CmdReserve(32);
+		if (s_skipFrame) break;	// no room left: CmdReserve dropped the frame
 		rsxSetScissor(s_ctx, (u16)x0, (u16)y0, (u16)(x1 - x0), (u16)(y1 - y0));
 		rsxClearSurface(s_ctx, mask);
 	}
