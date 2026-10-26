@@ -36,6 +36,10 @@
 #include "../rsx/rsx_shadergen.h"
 #include "../rsx/rsx_pipeline.h"
 
+// Textures' main-memory copies, counted in d3d9_device.cpp (for DrawStats).
+extern volatile unsigned g_ps3TextureCount;
+extern volatile unsigned long long g_ps3TextureRamBytes;
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -1386,9 +1390,6 @@ void DrawFrameStart()
 	rsxInvalidateVertexCache(s_ctx);
 }
 
-extern volatile unsigned g_ps3TextureCount;				// d3d9_device.cpp
-extern volatile unsigned long long g_ps3TextureRamBytes;
-
 const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
@@ -1396,7 +1397,7 @@ const char* DrawStats()
 		"%u textures, %u KB of them in main RAM",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB,
 		s_stats.ringKB, s_stats.programs, s_stats.programFailures, s_stats.ringFull,
-		g_ps3TextureCount, (unsigned)(g_ps3TextureRamBytes / 1024));
+		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024));
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
 	memset(&s_stats, 0, sizeof(s_stats));
 	s_stats.programs = programs;
