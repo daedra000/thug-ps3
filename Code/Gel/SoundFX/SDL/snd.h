@@ -55,7 +55,11 @@ namespace Snd
 				}
 
 				// Interpolate
-				signed long sample = sample_a + (((unsigned long long)coord * (sample_b - sample_a)) >> 16);
+				// Signed 64-bit maths: with the unsigned version a falling waveform gave a huge
+				// value where long is 64 bits (PS3), heard as static. (It only worked on PC because
+				// long is 32 bits there and the result was cut back down.)
+				const int frac = (int)(coord & 0xFFFF);
+				const int sample = sample_a + (int)(((long long)frac * (sample_b - sample_a)) >> 16);
 				return (float)sample / (float)0x8000;
 			}
 
