@@ -1555,6 +1555,12 @@ void Score::position_balance_meter(bool state, float value, bool isVertical)
 	Front::CScreenElementManager* p_manager = Front::CScreenElementManager::Instance();
 	Mdl::Skate * skate_mod = Mdl::Skate::Instance();
 	Obj::CSkater* pSkater = skate_mod->GetSkaterById( m_skaterId );
+#ifdef __PLAT_PS3__
+	// The main menu's skater does manuals and grinds on its own; its balance meter showed
+	// over the menu. The front end never shows it.
+	if( skate_mod->GetGameMode()->IsFrontEnd())
+		state = false;
+#endif
 
 	Front::CSpriteElement *p_balance_meter = (Front::CSpriteElement *) p_manager->GetElement(0xa4db8a4b + pSkater->GetHeapIndex()).Convert(); // "the_balance_meter"
 	Dbg_Assert(p_balance_meter);
