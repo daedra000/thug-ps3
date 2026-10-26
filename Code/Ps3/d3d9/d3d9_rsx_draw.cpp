@@ -21,7 +21,7 @@
 //
 // Switches for testing on a console (an empty file in USRDIR turns one on):
 //   rsx_linear_textures.txt  never swizzle textures (and so no mipmaps)
-//   rsx_flip_cull.txt        swap which triangle winding is culled
+//   rsx_flip_cull.txt        swap which triangle winding is culled (back to the old mapping)
 //   rsx_no_draw.txt          clear and flip only, draw nothing
 //   rsx_depth_clamp.txt      clamp depth instead of clipping at the near and far planes
 
@@ -832,12 +832,13 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 	rsxSetDepthTestEnable(s_ctx, s.depthTest ? GCM_TRUE : GCM_FALSE);
 	rsxSetDepthWriteEnable(s_ctx, s.depthWrite ? GCM_TRUE : GCM_FALSE);
 	rsxSetDepthFunc(s_ctx, Compare(s.depthFunc));
-	// D3D culls by screen-space winding (y down); the viewport flips y, so a triangle D3D
-	// calls clockwise is counter-clockwise to the RSX. D3DCULL_CCW (the default) culls
-	// what the RSX sees as clockwise: front face CCW, cull back.
+	// D3D culls by screen-space winding (y down). On a console the opposite of the original
+	// mapping proved right: with it, models showed their insides (a jersey's back print seen
+	// mirrored through the front) and ground seen from above was culled away. So D3DCULL_CCW
+	// culls the RSX's front (CCW) faces. rsx_flip_cull.txt brings back the old mapping.
 	rsxSetCullFaceEnable(s_ctx, s.cullEnable ? GCM_TRUE : GCM_FALSE);
 	rsxSetFrontFace(s_ctx, GCM_FRONTFACE_CCW);
-	bool cullBack = s.cullFace == D3DCULL_CCW;
+	bool cullBack = s.cullFace != D3DCULL_CCW;
 	if (s_flipCull) cullBack = !cullBack;
 	rsxSetCullFace(s_ctx, cullBack ? GCM_CULL_BACK : GCM_CULL_FRONT);
 	u32 mask = 0;
@@ -1325,7 +1326,7 @@ bool DrawInit()
 	s_flipCull = FlagFile("rsx_flip_cull.txt");
 	s_noDraw = FlagFile("rsx_no_draw.txt");
 	if (s_forceLinear) GpuLog("rsx_linear_textures.txt: textures stay linear");
-	if (s_flipCull) GpuLog("rsx_flip_cull.txt: culling the other winding");
+	if (s_flipCull) GpuLog("rsx_flip_cull.txt: the old cull mapping");
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 
 	s_ring = (u8*)LocalAlloc(kRingSize * kRingFrames, 1024 * 1024, &s_ringOffset);
