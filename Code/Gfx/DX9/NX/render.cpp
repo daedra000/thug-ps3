@@ -20,6 +20,9 @@
 #include "instance.h"
 #include "occlude.h"
 #include "billboard.h"
+#ifdef __PLAT_PS3__
+#include <ps3_fs.h>
+#endif
 
 //#include "PixelShader0.h"
 //#include "PixelShader0IVA.h"
@@ -3208,6 +3211,24 @@ void render_shadow_volumes( sScene *p_scene, uint32 viewport )
 }
 
 
+#ifdef __PLAT_PS3__
+// Test switches (empty files in USRDIR) for objects blinking at the screen edges:
+// no_frustum_cull.txt draws every world mesh, no_occlusion.txt skips the occluder test.
+extern uint32 NumOcclusionPolys;
+static int s_ps3NoFrustumCull = -1, s_ps3NoOcclusion = -1;
+static bool Ps3CullSwitch(int& flag, const char* name)
+{
+	if (flag < 0)
+	{
+		char path[600];
+		snprintf(path, sizeof(path), "%s/%s", Ps3Fs::AppDir(), name);
+		flag = Ps3Fs::Exists(path) ? 1 : 0;
+		printf("[cull] %s %s\n", name, flag ? "present: switched off" : "absent");
+	}
+	return flag != 0;
+}
+#endif
+
 #define			VISIBLE_MESH_ARRAY_SIZE		4096
 static sMesh	*visible_mesh_array[VISIBLE_MESH_ARRAY_SIZE];
 
@@ -3219,6 +3240,20 @@ static sMesh	*visible_mesh_array[VISIBLE_MESH_ARRAY_SIZE];
 void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 {
 	sMaterial		*p_material					= NULL;
+#ifdef __PLAT_PS3__
+	if( Ps3CullSwitch( s_ps3NoOcclusion, "no_occlusion.txt" ))
+		flags &= ~vRENDER_OCCLUDED;
+	if( Ps3CullSwitch( s_ps3NoFrustumCull, "no_frustum_cull.txt" ))
+		flags |= vRENDER_NO_CULLING;
+	{
+		static uint32 s_loggedPolys = 0xFFFFFFFF;
+		if( NumOcclusionPolys != s_loggedPolys )
+		{
+			s_loggedPolys = NumOcclusionPolys;
+			printf( "[cull] %u occlusion polys in the level\n", (unsigned)NumOcclusionPolys );
+		}
+	}
+#endif
 	bool			no_culling					= ( flags & vRENDER_NO_CULLING ) > 0 ;
 	bool			render;
 	int				visible_mesh_array_index	= 0;
