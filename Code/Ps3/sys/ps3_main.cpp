@@ -357,6 +357,13 @@ bool QuitRequested()
 	return s_quit;
 }
 
+void RequestQuit()
+{
+	printf("[quit] the game's Quit was chosen\n");
+	s_quitTime = sysGetSystemTime();
+	s_quit = true;
+}
+
 bool SystemMenuOpen()
 {
 	return s_menuOpen;

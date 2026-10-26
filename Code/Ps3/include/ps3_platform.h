@@ -38,8 +38,12 @@ namespace Ps3Platform
 	// Services the PS3 system (XMB menu, quit requests). Call once per frame.
 	void Pump();
 
-	// The user chose "Quit Game" from the XMB.
+	// The user chose "Quit Game" from the XMB (or the game's own Quit, see RequestQuit).
 	bool QuitRequested();
+
+	// The game's Quit menu: leave as for the XMB's Quit Game (the main loop ends, the
+	// game shuts down and returns to the XMB; forced after 3 s if it doesn't).
+	void RequestQuit();
 
 	// The XMB in-game menu is open (the game should pause).
 	bool SystemMenuOpen();

@@ -413,6 +413,7 @@ bool ScriptEnteringNetGame( Script::CStruct *pParams, Script::CScript *pScript )
 bool ScriptDeviceChosen( Script::CStruct *pParams, Script::CScript *pScript );
 bool ScriptLoadExecPS2( Script::CStruct *pParams, Script::CScript *pScript );
 bool ScriptExitDemo( Script::CStruct *pParams, Script::CScript *pScript );
+bool ScriptQuitGame( Script::CStruct *pParams, Script::CScript *pScript );
 
 bool ScriptGameIsOver( Script::CStruct *pParams, Script::CScript *pScript );
 

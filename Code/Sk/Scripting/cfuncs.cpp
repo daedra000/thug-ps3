@@ -159,6 +159,9 @@
 #endif
 
 #include <sk/language.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>	// Ps3Platform::RequestQuit (QuitGame)
+#endif
 
 bool DumpFunctionTimesTrigger=false;
 
@@ -13912,6 +13915,18 @@ Note the following points before calling LoadExecPS2().
 * Execute scePadEnd(). 
 * Execute sceSifExitCmd().
 */
+
+// @script | QuitGame | Quit to the system (the main menu's Quit, on PC "return to windows")
+bool ScriptQuitGame( Script::CStruct*, Script::CScript* )
+{
+#ifdef __PLAT_PS3__
+	Ps3Platform::RequestQuit();
+#else
+	extern bool gbQuit;
+	gbQuit = true;
+#endif
+	return true;
+}
 
 bool ScriptExitDemo( Script::CStruct*, Script::CScript* )
 {
