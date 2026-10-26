@@ -69,12 +69,16 @@ static unsigned s_skipped, s_forced;
 u32 s_frameSeq;
 enum { kLabelIndex = 255, kFrameLabel = 253 };
 
-// Frame capture: once the menu has settled (frame kCaptureFrame), and again every 1800
-// frames while USRDIR/rsx_capture.txt exists, one frame's draws are logged ([cap] lines)
-// and the finished picture is saved as thug-frame.bmp in USRDIR (and on a USB drive).
+// Frame capture, for finding rendering bugs: at frame kCaptureFrame and then every
+// kCaptureEvery frames (about 30 s), one frame's draws are logged ([cap] lines) and the
+// finished picture is saved in USRDIR (and on a USB drive) as thug-frame-NNN.bmp, NNN
+// counting up and wrapping after kCaptureFiles (so a long session keeps the last hour).
+// An empty USRDIR/rsx_no_capture.txt turns it off. Each capture stalls the game for a
+// moment while the picture is written.
 bool s_capture;
-static const unsigned kCaptureFrame = 600;
-static bool s_captureRepeat;
+static const unsigned kCaptureFrame = 600, kCaptureEvery = 1800, kCaptureFiles = 120;
+static bool s_captureOff;
+static unsigned s_captureIndex;
 
 static void SaveBmp(const char* path, const u32* pixels, u32 w, u32 h, u32 pitch)
 {
@@ -260,10 +264,10 @@ static void FrameBegin()
 	SetRenderTarget();
 	DrawFrameStart();
 	const unsigned frame = s_frames + 1;
-	if (frame == kCaptureFrame || (s_captureRepeat && frame > kCaptureFrame && (frame - kCaptureFrame) % 1800 == 0))
+	if (!s_captureOff && frame >= kCaptureFrame && (frame - kCaptureFrame) % kCaptureEvery == 0)
 	{
 		s_capture = true;
-		printf("[cap] frame %u: every draw follows, then the picture is saved\n", frame);
+		printf("[cap] frame %u, capture %03u: every draw follows, then the picture is saved\n", frame, s_captureIndex % kCaptureFiles);
 	}
 }
 
@@ -350,8 +354,9 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		s_ready = true;
 		{
 			char path[600];
-			snprintf(path, sizeof(path), "%s/rsx_capture.txt", Ps3Fs::AppDir());
-			s_captureRepeat = Ps3Fs::Exists(path);
+			snprintf(path, sizeof(path), "%s/rsx_no_capture.txt", Ps3Fs::AppDir());
+			s_captureOff = Ps3Fs::Exists(path);
+			if (s_captureOff) printf("[gfx] rsx_no_capture.txt: no frame captures\n");
 		}
 		if (!DrawInit())
 			GpuLog("draw set-up failed: frames will be cleared but not drawn");
@@ -392,11 +397,12 @@ void Present(IDirect3DDevice9*)
 			if (WaitIdle("capture"))
 			{
 				char path[600];
-				snprintf(path, sizeof(path), "%s/thug-frame.bmp", Ps3Fs::AppDir());
+				const unsigned n = s_captureIndex++ % kCaptureFiles;
+				snprintf(path, sizeof(path), "%s/thug-frame-%03u.bmp", Ps3Fs::AppDir(), n);
 				SaveBmp(path, s_color[s_cur], s_width, s_height, s_pitch);
 				if (const char* usb = Ps3UsbRoot())
 				{
-					snprintf(path, sizeof(path), "%s/thug-frame.bmp", usb);
+					snprintf(path, sizeof(path), "%s/thug-frame-%03u.bmp", usb, n);
 					SaveBmp(path, s_color[s_cur], s_width, s_height, s_pitch);
 				}
 			}

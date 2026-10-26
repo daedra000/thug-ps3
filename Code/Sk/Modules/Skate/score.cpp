@@ -292,6 +292,26 @@ void Score::print_trick_info_table()
 
 void Score::Update()
 {
+#ifdef __PLAT_PS3__
+	// The front end never shows the balance meter (it stayed on screen over every menu).
+	// Keep it fully transparent there each frame, whatever turned it on.
+	if( Mdl::Skate::Instance()->GetGameMode()->IsFrontEnd())
+	{
+		Obj::CSkater* p_skater = Mdl::Skate::Instance()->GetSkaterById( m_skaterId );
+		if( p_skater )
+		{
+			Front::CScreenElement* p_meter = Front::CScreenElementManager::Instance()->GetElement( 0xa4db8a4b + p_skater->GetHeapIndex()).Convert(); // "the_balance_meter"
+			static bool s_logged;
+			if( !s_logged )
+			{
+				s_logged = true;
+				printf( "[hud] front end: balance meter element %s\n", p_meter ? "found, hiding it" : "not found" );
+			}
+			if( p_meter )
+				p_meter->SetAlpha( 0.0f, Front::CScreenElement::FORCE_INSTANT );
+		}
+	}
+#endif
 	if (m_specialScore)
 	{
 		// shrink special bar

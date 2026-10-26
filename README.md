@@ -48,6 +48,10 @@ Work in progress. **It does not run on a console yet.**
    folder from your PC installation of THUG into it (by FTP). Letter case doesn't matter.
 3. The log is `USRDIR/thug-ps3.log` (the previous run's is `thug-ps3.old.log`). Please include
    it with any report.
+4. While the renderer is being finished, the game saves a screenshot about every 30 seconds
+   (from 10 s in) as `USRDIR/thug-frame-000.bmp`, `-001`, ... (also on a USB drive), and logs
+   every draw of that frame. The game pauses for a moment at each one. An empty
+   `USRDIR/rsx_no_capture.txt` turns this off.
 
 Two PKGs are built:
 

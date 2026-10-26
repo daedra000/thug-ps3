@@ -946,7 +946,7 @@ static bool Skip(const char* why)
 }
 
 // The frame capture's log line for one draw: what the draw used, so a wrong-looking part
-// of the picture (thug-frame.bmp) can be matched to its draw.
+// of the picture (thug-frame-NNN.bmp) can be matched to its draw.
 static unsigned s_capDraw;
 static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const FvfLayout& l, u32 count, u32 stride,
 	const RsxTexture* const* tex, const FpEntry* fp, bool hasDepth)
