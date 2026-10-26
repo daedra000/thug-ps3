@@ -45,9 +45,20 @@ void CFontManager::sLoadFont(const char *pName, int charSpacing, int spaceSpacin
 		}
 	}
 
+	s_init_meta_button_map();
+}
+
+// Fill the table that turns a "\\m" meta button into a glyph of the buttons font. It needs the
+// meta_button_map array from gamemenu.qb, which may not be loaded yet when the first fonts
+// load, so it is also tried again when a meta button is first looked up. Until it succeeds,
+// every meta button would draw glyph 0 of the buttons font (the triangle).
+void CFontManager::s_init_meta_button_map()
+{
 	if (!s_meta_button_map_initialized)
 	{
-		#if defined(__PLAT_XBOX__) || defined(__PLAT_WN32__) // lwss: PC version uses this as well.
+		// PS3 builds also define __PLAT_WN32__, but they load the ButtonsPs2 font for a PS3 pad,
+		// so they take the PS2 map that matches that font's glyphs.
+		#if defined(__PLAT_XBOX__) || (defined(__PLAT_WN32__) && !defined(__PLAT_PS3__)) // lwss: PC version uses this as well.
 		Script::CArray *p_array = Script::GetArray("meta_button_map_xbox", Script::ASSERT);
 		#else
 		#ifdef __PLAT_NGC__
@@ -70,6 +81,12 @@ void CFontManager::sLoadFont(const char *pName, int charSpacing, int spaceSpacin
 			}
 
 			s_meta_button_map_initialized = true;
+			#ifdef __PLAT_PS3__
+			printf("[font] meta button map loaded (%u entries):", (unsigned)p_array->GetSize());
+			for (uint i = 0; i < NUM_META_BUTTON_ENTRIES; i++)
+				printf(" %c", s_meta_button_map[i]);
+			printf("\n");
+			#endif
 		}
 	}
 }
@@ -125,6 +142,7 @@ const char *CFontManager::sTestFontLoaded(uint32 checksum)
 
 char CFontManager::sMapMetaCharacterToButton(const char *pMetaChar)
 {
+	s_init_meta_button_map();
 	Dbg_MsgAssert(s_meta_button_map_initialized, ("meta button character table not initialized"));
 	return s_meta_button_map[Str::DehexifyDigit(pMetaChar)];
 }

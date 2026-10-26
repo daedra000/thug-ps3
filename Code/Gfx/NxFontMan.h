@@ -53,6 +53,7 @@ private:
 
 	static char					s_meta_button_map[NUM_META_BUTTON_ENTRIES];
 	static bool					s_meta_button_map_initialized;
+	static void					s_init_meta_button_map();
 	
 	// The platform dependent calls
 	static Nx::CFont *			s_plat_load_font(const char *pName);

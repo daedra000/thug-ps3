@@ -205,6 +205,15 @@ void CTextElement::SetText(const char *pText)
 			*p_out++ = *p_in++;
 			*p_out++ = 'b';
 			p_in++;
+			#ifdef __PLAT_PS3__
+			static int s_ps3MetaLogs = 0;
+			if (s_ps3MetaLogs < 40)
+			{
+				++s_ps3MetaLogs;
+				char mapped = Nx::CFontManager::sMapMetaCharacterToButton(p_in);
+				printf("[font] \\m%c -> \\b%c in \"%.48s\"\n", *p_in ? *p_in : '?', mapped ? mapped : '?', pText);
+			}
+			#endif
 			*p_out++ = Nx::CFontManager::sMapMetaCharacterToButton(p_in++);
 		}
 		else
