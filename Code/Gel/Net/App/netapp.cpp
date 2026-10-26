@@ -2787,6 +2787,24 @@ bool	App::BandwidthExceeded( Conn* conn )
 
     metrics = conn->GetOutboundMetrics();
 	total_bandwidth = BandwidthUsed();
+#ifdef __PLAT_PS3__
+	// The local game's server and client found the bandwidth exceeded on every send, so the
+	// join request never left the client and no skater was made. Log the figures it used.
+	{
+		static int s_logged;
+		bool over = total_bandwidth >= m_net_man->GetBandwidth() || metrics->GetBytesPerSec() >= conn->GetBandwidth();
+		if (over && s_logged < 10)
+		{
+			++s_logged;
+			printf("[net] %s: bandwidth check: used %d of %d, conn %d bytes/s of %d, local %d, metrics %p, packets %d\n",
+				GetName(), total_bandwidth, m_net_man->GetBandwidth(), metrics->GetBytesPerSec(), conn->GetBandwidth(),
+				(int)conn->IsLocal(), (void*)metrics, metrics->GetTotalBytes());
+		}
+		// A local connection is a memory copy: there is no bandwidth to exceed.
+		if (conn->IsLocal())
+			return false;
+	}
+#endif
 	// First, make sure we haven't exceeded the total bandwidth of our connection
 	if( total_bandwidth >= m_net_man->GetBandwidth())
 	{
