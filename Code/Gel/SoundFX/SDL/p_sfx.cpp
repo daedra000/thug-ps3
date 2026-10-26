@@ -55,6 +55,10 @@ namespace Sfx
 			static_assert(sizeof(Format) == 16, "WAVE fmt block must be 16 bytes");
 #endif
 			bool looping = false;
+			// The data really is 16-bit PCM. The PC .snd files all say "PCM, 16 bits" in their
+			// fmt block, but their data is 4-bit IMA ADPCM (the SDL code's default decoder): the
+			// RIFF size gives it away, being that of the decoded PCM, four times the data.
+			bool pcm16 = false;
 
 			CXBSound(void *fp)
 			{
@@ -139,6 +143,8 @@ namespace Sfx
 						}
 					}
 				}
+
+				pcm16 = format.format == 1 && format.bits_per_sample == 16 && riff_header.header.size < 3 * size;
 
 				// Verify file was read
 				Dbg_AssertPtr(data);
@@ -249,7 +255,7 @@ namespace Sfx
 		Snd::Sound *sound = &sounds[voice];
 
 		sound->SetPointer(pInfo->p_sound_data->data.get(), pInfo->p_sound_data->size, pInfo->p_sound_data->format.sample_rate,
-			pInfo->p_sound_data->format.format == 1 && pInfo->p_sound_data->format.bits_per_sample == 16,
+			pInfo->p_sound_data->pcm16,
 			pInfo->p_sound_data->format.format == 0x69 ? pInfo->p_sound_data->format.block_align : 0);
 		sound->Play();
 		sound->SetLooping(pInfo->p_sound_data->looping);
