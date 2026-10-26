@@ -309,6 +309,20 @@ void Step(const char* what)
 	char line[300];
 	snprintf(line, sizeof(line), "[step] %s (system memory free: %u KB, stack used: %u KB of %u KB)\n", what ? what : "?", freeKB, stackKB, (unsigned)(kGameStack / 1024));
 	RawLog(line);
+
+	// Once the game runs, steps come from loading (every model, texture and animation pushes
+	// a memory profile): the memory budget at most every 2 s, from the game thread. The main
+	// loop's own every-10-s steps are left out, so a level in play doesn't fill the log.
+	static u64 s_lastReport = 0;
+	if (!s_syncEveryWrite && self == s_gameThread && what && strncmp(what, "main loop frame", 15) != 0)
+	{
+		const u64 now = sysGetSystemTime();
+		if (now - s_lastReport >= 2000000)
+		{
+			s_lastReport = now;
+			MemoryReport(what);
+		}
+	}
 }
 
 static void OnTerminate()
@@ -359,9 +373,11 @@ void Init(int argc, char** argv)
 	if (!NoThreads())
 	{
 		sys_ppu_thread_t tid;
+		// 128 KB: besides the XMB callbacks it formats the [alive] lines and the hang
+		// watchdog's LogWhere (snprintf with a 400-byte buffer), which 64 KB left little room for.
 		// Above the game thread (lower number = higher priority), so XMB events and the forced
 		// quit still run while the game busy-waits.
-		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 500, 64 * 1024, 0, (char*)"thug-sysutil") == 0;
+		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 500, 128 * 1024, 0, (char*)"thug-sysutil") == 0;
 		printf("[sys] system thread %s\n", s_sysThread ? "running" : "could not start");
 	}
 

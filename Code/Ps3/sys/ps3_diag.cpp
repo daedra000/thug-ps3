@@ -9,13 +9,18 @@
 //
 // The allocator is wrapped at link time (-Wl,--wrap=malloc,... in Makefile.ps3). The
 // wrappers must not allocate, so they format numbers by hand and write with plain lv2 calls.
+// They also count newlib's bytes in use, for the [mem] report (MemoryReport, at the end).
 
+#include <core/defines.h>
+#include <sys/mem/memman.h>
 #include <ps3_platform.h>
 #include <ps3_fs.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <malloc.h>
 #include <lv2/sysfs.h>
 #include <sys/file.h>
 
@@ -27,6 +32,9 @@ extern "C"
 	void* __real_memalign(size_t align, size_t size);
 	void __real_free(void* p);
 }
+
+namespace Ps3Mem { void Lock(); void Unlock(); }	// ps3_new.cpp: the game heaps' lock
+namespace Ps3Gfx { unsigned int VideoMemoryFree(); }	// the RSX backend's figure
 
 // The boot trail files: the first write of a run truncates each (the game's memory manager
 // may write before main(), so main() can't simply delete last run's).
@@ -175,6 +183,47 @@ namespace
 	{
 		return s_memCap && s_startup && size > kCapSize;
 	}
+
+	// newlib heap use: bytes in live blocks (malloc_usable_size, so including rounding),
+	// its peak, and the number of live blocks. Updated atomically; the peak is approximate
+	// when two threads race on it, which is fine for a report.
+	volatile long s_liveBytes;
+	volatile long s_peakBytes;
+	volatile long s_liveBlocks;
+
+	inline void CountAlloc(void* p)
+	{
+		if (!p) return;
+		const long now = __sync_add_and_fetch(&s_liveBytes, (long)malloc_usable_size(p));
+		__sync_add_and_fetch(&s_liveBlocks, 1);
+		if (now > s_peakBytes) s_peakBytes = now;
+	}
+
+	inline void CountFree(void* p)
+	{
+		if (!p) return;
+		__sync_sub_and_fetch(&s_liveBytes, (long)malloc_usable_size(p));
+		__sync_sub_and_fetch(&s_liveBlocks, 1);
+	}
+
+	// Much of the game still squeezes pointers through int or 32-bit fields (the PC code
+	// was 32-bit), which only works while every address is below 0x80000000. The heap is
+	// at 0x4xxxxxxx today; if an allocation ever lands higher, say so once and loudly,
+	// since the failures it causes show up far from here. No allocation in here.
+	volatile bool s_highAddressLogged;
+	void CheckHighAddress(const char* fn, const void* p)
+	{
+		if ((uintptr_t)p < 0x80000000u || s_highAddressLogged) return;
+		s_highAddressLogged = true;
+		char line[160], *q = line;
+		q = AppendStr(q, "[alloc] *** WARNING: ");
+		q = AppendStr(q, fn);
+		q = AppendStr(q, " returned ");
+		q = AppendHex(q, (unsigned long long)(uintptr_t)p);
+		q = AppendStr(q, ", at or above 0x80000000: pointers kept in ints or 32-bit fields will break\n");
+		*q = 0;
+		Ps3Platform::RawWrite(line);
+	}
 }
 
 extern "C"
@@ -184,6 +233,8 @@ extern "C"
 		if (Refuse(size)) { LogAlloc("malloc", size, 0, true); return 0; }
 		TraceAlloc("malloc", 0, size, 0, true);
 		void* p = __real_malloc(size);
+		CountAlloc(p);
+		CheckHighAddress("malloc", p);
 		TraceAlloc("malloc", 0, size, p, false);
 		LogAlloc("malloc", size, p, false);
 		return p;
@@ -194,6 +245,8 @@ extern "C"
 		if (Refuse(n * size)) { LogAlloc("calloc", n * size, 0, true); return 0; }
 		TraceAlloc("calloc", 0, n * size, 0, true);
 		void* p = __real_calloc(n, size);
+		CountAlloc(p);
+		CheckHighAddress("calloc", p);
 		TraceAlloc("calloc", 0, n * size, p, false);
 		LogAlloc("calloc", n * size, p, false);
 		return p;
@@ -203,7 +256,16 @@ extern "C"
 	{
 		if (Refuse(size)) { LogAlloc("realloc", size, 0, true); return 0; }
 		TraceAlloc("realloc", old, size, 0, true);
+		// The old block's size, read before realloc may free it. A failed realloc keeps the
+		// old block, except realloc(p, 0), which may free it and return NULL.
+		const long oldBytes = old ? (long)malloc_usable_size(old) : 0;
 		void* p = __real_realloc(old, size);
+		if (p || (old && size == 0))
+		{
+			if (old) { __sync_sub_and_fetch(&s_liveBytes, oldBytes); __sync_sub_and_fetch(&s_liveBlocks, 1); }
+			CountAlloc(p);
+		}
+		CheckHighAddress("realloc", p);
 		TraceAlloc("realloc", old, size, p, false);
 		LogAlloc("realloc", size, p, false);
 		return p;
@@ -214,6 +276,8 @@ extern "C"
 		if (Refuse(size)) { LogAlloc("memalign", size, 0, true); return 0; }
 		TraceAlloc("memalign", 0, size, 0, true);
 		void* p = __real_memalign(align, size);
+		CountAlloc(p);
+		CheckHighAddress("memalign", p);
 		TraceAlloc("memalign", 0, size, p, false);
 		LogAlloc("memalign", size, p, false);
 		return p;
@@ -222,6 +286,7 @@ extern "C"
 	void __wrap_free(void* p)
 	{
 		TraceAlloc("free", p, (size_t)-1, 0, true);
+		CountFree(p);
 		__real_free(p);
 		TraceAlloc("free", p, (size_t)-1, 0, false);
 	}
@@ -250,6 +315,51 @@ void StartupFinished()
 	s_startup = false;
 	LogStartupFinished();
 	printf("[diag] start-up finished: big-allocation logging%s off\n", s_memCap ? " and the 10 MB cap" : "");
+	MemoryReport("start-up finished");
+}
+
+void MemoryReport(const char* why)
+{
+	// Written in pieces straight to the log (no stdio); the line buffer is on the stack.
+	char line[512];
+	unsigned freeKB = 0, totalKB = 0;
+	MemoryInfo(&freeKB, &totalKB);
+	struct mallinfo mi = mallinfo();
+	snprintf(line, sizeof(line), "[mem] %s: system %u KB free of %u KB; newlib %ld KB in use in %ld blocks (peak %ld KB), "
+		"heap %u KB from the system with %u KB of it free; video memory free (RSX backend's figure) %u KB\n",
+		why ? why : "-", freeKB, totalKB, s_liveBytes / 1024, s_liveBlocks, s_peakBytes / 1024,
+		(unsigned)(mi.arena / 1024), (unsigned)(mi.fordblks / 1024), Ps3Gfx::VideoMemoryFree() / 1024);
+	RawWrite(line);
+
+	// The game's heaps (Mem::Manager): used, free inside the heap (fragments), and the largest
+	// block a new allocation could get (a fragment or the region's untouched space).
+	Ps3Mem::Lock();
+	Mem::Manager& mm = Mem::Manager::sHandle();
+	int n = 0;
+	char* o = line;
+	char* const end = line + sizeof(line);
+	o += snprintf(o, end - o, "[mem] heaps (used/fragments/largest KB):");
+	for (Mem::Heap* heap = mm.FirstHeap(); heap; heap = mm.NextHeap(heap))
+	{
+		char item[96];
+		const int len = snprintf(item, sizeof(item), " %s %d/%d/%d", heap->GetName() ? heap->GetName() : "?",
+			heap->mUsedMem.m_count / 1024, heap->mFreeMem.m_count / 1024, heap->LargestFreeBlock() / 1024);
+		if (len <= 0 || len >= (int)sizeof(item)) continue;
+		if (o + len + 2 >= end)
+		{
+			*o++ = '\n'; *o = 0;
+			RawWrite(line);
+			o = line;
+			o += snprintf(o, end - o, "[mem]  ");
+		}
+		memcpy(o, item, (size_t)len + 1);
+		o += len;
+		++n;
+	}
+	Ps3Mem::Unlock();
+	if (n == 0) o += snprintf(o, end - o, " none yet");
+	*o++ = '\n'; *o = 0;
+	RawWrite(line);
 }
 
 } // namespace Ps3Platform

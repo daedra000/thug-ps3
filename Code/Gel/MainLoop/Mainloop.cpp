@@ -64,11 +64,109 @@ void Win32_ApplyInputs();
 #include <sys/systime.h>
 #include <gel/scripting/script.h>
 #include <gfx/DX9/NX/nx_init.h>
+#include <sk/modules/FrontEnd/FrontEnd.h>
+#include <string.h>
 #endif
 #ifdef __PLAT_PS3__
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
 static unsigned s_ps3Frame = 0;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
+
+// Frame profiler: each main loop frame is split into phases, timed with the PPU timebase (a
+// register read, not a system call), and a summary goes to the log about every 10 s. Nothing
+// is allocated per frame.
+namespace
+{
+	enum { kProfWait, kProfLogic, kProfPre, kProfRender, kProfPresent, kProfOther, kProfPhases };
+	const char* const s_profNames[kProfPhases] = { "wait", "logic", "pre", "render", "present", "other" };
+
+	struct FrameProfile
+	{
+		u64 tbPerMs;				// timebase ticks per millisecond (79800 on a PS3)
+		u64 windowStart;
+		u64 sum[kProfPhases];		// totals over this window
+		u64 frames, skipped, slow, longFrames;
+		u64 worstTotal;
+		u64 worst[kProfPhases];		// the slowest frame's phases
+		unsigned worstFrame;
+	};
+	FrameProfile s_prof;
+
+	inline u64 ProfNow()
+	{
+		return __builtin_ppc_get_timebase();
+	}
+
+	// Ticks as "12.34" (milliseconds, two decimals) at p; returns the new end of the text.
+	char* ProfMs(char* p, char* end, u64 ticks)
+	{
+		const u64 us = s_prof.tbPerMs ? ticks * 1000 / s_prof.tbPerMs : 0;
+		int n = snprintf(p, end - p, "%u.%02u", (unsigned)(us / 1000), (unsigned)(us % 1000 / 10));
+		return (n > 0 && n < end - p) ? p + n : end - 1;
+	}
+
+	// One frame's phase times: added to the window, and the summary written once it is 10 s old.
+	void ProfCommit(const u64 ph[kProfPhases], bool skipped, unsigned frame, u64 now)
+	{
+		FrameProfile& p = s_prof;
+		if (!p.tbPerMs)
+		{
+			u64 f = sysGetTimebaseFrequency();
+			if (f < 1000000 || f > 1000000000) f = 79800000;
+			p.tbPerMs = f / 1000;
+			p.windowStart = now;
+		}
+		u64 total = 0;
+		for (int i = 0; i < kProfPhases; ++i) total += ph[i];
+		// A frame over half a second is a load or a movie: counted, but kept out of the averages.
+		if (total > 500 * p.tbPerMs)
+			++p.longFrames;
+		else
+		{
+			for (int i = 0; i < kProfPhases; ++i) p.sum[i] += ph[i];
+			++p.frames;
+			if (skipped) ++p.skipped;
+			if (total > 20 * p.tbPerMs) ++p.slow;
+			if (total > p.worstTotal)
+			{
+				p.worstTotal = total;
+				p.worstFrame = frame;
+				for (int i = 0; i < kProfPhases; ++i) p.worst[i] = ph[i];
+			}
+		}
+		if (now - p.windowStart < 10000 * p.tbPerMs)
+			return;
+
+		char line[640], *o = line, *end = line + sizeof(line);
+		o += snprintf(o, end - o, "[prof] %u frames (%u not drawn, %u over 20 ms, %u loads left out) avg ms:",
+			(unsigned)p.frames, (unsigned)p.skipped, (unsigned)p.slow, (unsigned)p.longFrames);
+		u64 avgTotal = 0;
+		for (int i = 0; i < kProfPhases && o < end - 32; ++i)
+		{
+			const u64 avg = p.frames ? p.sum[i] / p.frames : 0;
+			avgTotal += avg;
+			o += snprintf(o, end - o, "%s %s ", i ? "," : "", s_profNames[i]);
+			o = ProfMs(o, end, avg);
+		}
+		if (o < end - 32) { o += snprintf(o, end - o, " = "); o = ProfMs(o, end, avgTotal); }
+		if (o < end - 48) { o += snprintf(o, end - o, "; worst frame %u: ", p.worstFrame); o = ProfMs(o, end, p.worstTotal); o += snprintf(o, end - o, " ms ("); }
+		for (int i = 0; i < kProfPhases && o < end - 32; ++i)
+		{
+			o += snprintf(o, end - o, "%s%s ", i ? ", " : "", s_profNames[i]);
+			o = ProfMs(o, end, p.worst[i]);
+		}
+		if (o < end - 3) { *o++ = ')'; *o++ = '\n'; *o = 0; }
+		else { line[sizeof(line) - 2] = '\n'; line[sizeof(line) - 1] = 0; }
+		Ps3Platform::RawWrite(line);
+
+		const u64 tbPerMs = p.tbPerMs;
+		memset(&p, 0, sizeof(p));
+		p.tbPerMs = tbPerMs;
+		p.windowStart = now;
+	}
+}
+// Time since the last mark goes to the given phase.
+#define PS3_PROF_MARK(phase) do { const u64 n_ = ProfNow(); profPhase[phase] += n_ - profLast; profLast = n_; } while (0)
 #else
 #define PS3_PHASE(name) do { } while (0)
 #endif
@@ -359,14 +457,32 @@ void		Manager::MainLoop( void )
 
 		static int s_mainLoopCounter = 0;
 
+#ifdef __PLAT_PS3__
+		u64 profPhase[kProfPhases] = { 0 };
+		u64 profLast = ProfNow();
+#endif
 		LARGE_INTEGER perfcount;
 		QueryPerformanceCounter(&perfcount);
 		LONG itr;
 		for (itr = perfcount.HighPart; perfcount.QuadPart < __PAIR64__(v3, v4) + perf.QuadPart; itr = perfcount.HighPart)
 		{
+#ifdef __PLAT_PS3__
+			// Sleep while more than 1.5 ms remain (waking 1 ms early, as lv2 may oversleep a
+			// little), and only yield in a loop for the rest. Spinning the whole wait kept one of
+			// the PPU's two hardware threads busy for nothing, away from the loader and mixer.
+			const LONGLONG remainingUs = (LONGLONG)(__PAIR64__(v3, v4) + perf.QuadPart - perfcount.QuadPart) * 1000000 / frequency.QuadPart;
+			if (remainingUs > 1500)
+				sysUsleep((u32)(remainingUs > 20000 ? 19000 : remainingUs - 1000));
+			else
+				Sleep(0);
+#else
 			Sleep(0);
+#endif
 			QueryPerformanceCounter(&perfcount);
 		}
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfWait);
+#endif
 		DWORD v8 = (__PAIR64__(itr, perfcount.LowPart) - perf.QuadPart) >> 32;
 		DWORD v7 = perfcount.LowPart - perf.LowPart;
 		if (__PAIR64__(itr, perfcount.LowPart) - perf.QuadPart > 20 * __PAIR64__(v3, v4))
@@ -428,7 +544,34 @@ void		Manager::MainLoop( void )
 						(unsigned)((now - s_ps3LastFrameTime) / 1000), (const void*)g_ps3CurrentTask,
 						g_ps3Where ? (const char*)g_ps3Where : "-", g_ps3ScriptSub, g_ps3ScriptLine);
 				}
+				// A frame over a second is nearly always a level load or unload: log the heaps
+				// as it left them.
+				if (s_ps3LastFrameTime && s_ps3Frame > 30 && now - s_ps3LastFrameTime > 1000000)
+					Ps3Platform::MemoryReport("after a long frame (a load?)");
 				s_ps3LastFrameTime = now;
+			}
+			// The XMB in-game menu: pause the game while it is open, the way the game's own
+			// pause does (skaters, objects, spawned scripts and sound effects stop), and resume
+			// on close if this paused it. Drawing carries on, so the XMB overlay keeps updating.
+			{
+				static bool s_xmbPaused = false;
+				const bool menuOpen = Ps3Platform::SystemMenuOpen();
+				Mdl::FrontEnd* front = Mdl::FrontEnd::Instance();
+				if (menuOpen && !s_xmbPaused && front && s_ps3Frame > 30 && !front->GamePaused())
+				{
+					printf("[sys] XMB menu open: game paused\n");
+					front->PauseGame(true);
+					s_xmbPaused = true;
+				}
+				else if (!menuOpen && s_xmbPaused)
+				{
+					s_xmbPaused = false;
+					if (front && front->GamePaused())
+					{
+						printf("[sys] XMB menu closed: game resumed\n");
+						front->PauseGame(false);
+					}
+				}
 			}
 			g_ps3TraceTasks = s_ps3Frame <= 2;
 			// On a 16:9 picture, start in the game's own widescreen mode (the Xbox version
@@ -500,6 +643,9 @@ void		Manager::MainLoop( void )
 		Sys::Profiler::sStartFrame();		  		
 #	endif		
 #endif		
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfOther);
+#endif
 #ifdef __PLAT_WN32__
 		if (!NxXbox::g_disableRendering)
 #endif
@@ -521,6 +667,9 @@ void		Manager::MainLoop( void )
 #	endif		
 #	endif		
 					 
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfPre);
+#endif
 		PS3_PHASE("frame: service_system");
 		service_system();
 
@@ -563,6 +712,9 @@ void		Manager::MainLoop( void )
 //		snProfSetFlagValue(0x01);
  #endif
 		
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfLogic);
+#endif
 		PS3_PHASE("frame: sRenderWorld");
 		Nx::CEngine::sRenderWorld();		
 #ifdef	__PLAT_NGC__		
@@ -575,6 +727,9 @@ void		Manager::MainLoop( void )
 #	ifdef __USE_PROFILER__
 			Sys::CPUProfiler->PushContext( 0, 0, 0 );	 	// Black (Under Yellow) = sPostRender
 #	endif // __USE_PROFILER__
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfRender);
+#endif
 #ifdef __PLAT_WN32__
 		if (!NxXbox::g_disableRendering)
 #endif		
@@ -582,6 +737,9 @@ void		Manager::MainLoop( void )
 			PS3_PHASE("frame: sPostRender");
 			Nx::CEngine::sPostRender();		  // Previous frames profiler is rendered here
 		}
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfPresent);
+#endif
 #	ifdef __USE_PROFILER__
 		Sys::CPUProfiler->PopContext(  );
 #	endif		
@@ -595,6 +753,10 @@ void		Manager::MainLoop( void )
 		PS3_PHASE("frame: OncePerRender");
 		Tmr::OncePerRender();
 		PS3_PHASE("frame: done");
+#ifdef __PLAT_PS3__
+		PS3_PROF_MARK(kProfOther);
+		ProfCommit(profPhase, NxXbox::g_disableRendering, s_ps3Frame, profLast);
+#endif
  #ifdef	__PLAT_NGPS__		
 //		snProfSetRange( 4, (void*)NULL, (void*)-1);
  #endif		

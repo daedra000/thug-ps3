@@ -15,6 +15,7 @@ namespace
 	padInfo s_info;
 	padData s_data[kMaxPads];	// last data received (ioPadGetData only returns changes)
 	bool s_open[kMaxPads];
+	bool s_wasConnected[kMaxPads];	// as of the last SDL_PollEvent, to spot a pad plugged back in
 
 	// Handles are port + 1, so port 0 isn't a NULL pointer.
 	int Port(SDL_GameController* c)
@@ -75,7 +76,19 @@ int SDL_PollEvent(SDL_Event*)
 		if (!s_info.status[i])
 		{
 			memset(&s_data[i], 0, sizeof(s_data[i]));
+			s_wasConnected[i] = false;
 			continue;
+		}
+		if (!s_wasConnected[i])
+		{
+			// A pad (re)connected: the pad library starts it in digital-pressure mode, so the
+			// analog button pressures the game opened it with have to be asked for again.
+			s_wasConnected[i] = true;
+			if (s_open[i])
+			{
+				ioPadSetPressMode(i, PAD_PRESS_MODE_ON);
+				printf("[pad] pad %d connected: button pressures back on\n", i);
+			}
 		}
 		padData d;
 		if (ioPadGetData(i, &d) == 0 && d.len > 0)

@@ -57,6 +57,13 @@ namespace Ps3Platform
 	// Free / total user memory in KB (lv2), for the log.
 	void MemoryInfo(unsigned* freeKB, unsigned* totalKB);
 
+	// The memory budget in the log ([mem] lines): system memory, newlib's heap (bytes in use,
+	// counted by the malloc wrappers), each game heap's free space and largest free block, and
+	// what the RSX backend reports for video memory (ps3_diag.cpp). Step() calls it at most
+	// every 2 s once the game is running (level loads are full of steps), and the main loop
+	// after a frame over a second.
+	void MemoryReport(const char* why);
+
 	// Diagnostic switches (empty files in USRDIR, read at the top of main(); ps3_diag.cpp):
 	// nothreads.txt - none of our threads, and the game's CreateThread calls refused;
 	// memcap.txt - allocations over 10 MB fail during start-up. Allocations of 1 MB or

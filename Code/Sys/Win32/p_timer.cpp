@@ -28,6 +28,7 @@
 #include <mmsystem.h>
 #else
 #include <core/defines.h>
+#include <sys/systime.h>
 #endif
 #include <time.h>
 #include <sys/timer.h>
@@ -146,7 +147,13 @@ Time GetTime ( void )
  
 MicroSeconds GetTimeInUSeconds( void )
 {
+#ifdef __PLAT_PS3__
+	// The system clock in microseconds, 64-bit. timeGetTime() * 1000 is worked out in 32 bits
+	// and so wrapped every 71.6 minutes.
+	return (MicroSeconds)sysGetSystemTime();
+#else
 	return timeGetTime() * 1000;
+#endif
 }
 
 float FrameLength()

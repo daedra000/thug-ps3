@@ -52,9 +52,19 @@ void DeleteCriticalSection(LPCRITICAL_SECTION cs);
 void EnterCriticalSection(LPCRITICAL_SECTION cs);
 void LeaveCriticalSection(LPCRITICAL_SECTION cs);
 
+// Win32's Interlocked functions are full memory barriers. __sync_add_and_fetch and
+// __sync_sub_and_fetch are too; __sync_lock_test_and_set is only an acquire barrier, so the
+// exchange gets a full barrier on each side (stores before it must be visible to a thread
+// that sees the new value, as code written for Win32 expects).
 static inline LONG InterlockedIncrement(volatile LONG* p) { return __sync_add_and_fetch(p, 1); }
 static inline LONG InterlockedDecrement(volatile LONG* p) { return __sync_sub_and_fetch(p, 1); }
-static inline LONG InterlockedExchange(volatile LONG* p, LONG v) { return __sync_lock_test_and_set(p, v); }
+static inline LONG InterlockedExchange(volatile LONG* p, LONG v)
+{
+	__sync_synchronize();
+	LONG old = __sync_lock_test_and_set(p, v);
+	__sync_synchronize();
+	return old;
+}
 
 // ---------------------------------------------------------------------------
 // Files (synchronous; OVERLAPPED is accepted and treated as a plain offset)
