@@ -837,6 +837,11 @@ bool CAssMan::LoadAnim(const char* pFileName, uint32 animName, uint32 referenceC
 	{
 		if (!LoadOrGetAsset(pFileName, async_load, use_pip, m_default_permanent, 0))
 		{
+#ifdef __PLAT_PS3__
+			static int s_failed;
+			if (s_failed++ < 40)
+				printf("[anim] couldn't load %s (%s)\n", pFileName, use_pip ? "from a pip pre" : "as a file");
+#endif
 			Dbg_MsgAssert(0,("Failed to load anim %s",pFileName));
 			return false;
 		}

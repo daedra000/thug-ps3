@@ -940,6 +940,11 @@ void CAnimationComponent::Update()
 	// for subsequent animation LOD calculations.
 	Dbg_Assert(mp_suspend_component);
 	bool animate = mp_suspend_component->should_animate( &m_parent_object_dist_to_camera );
+#ifdef __PLAT_PS3__
+	// For the in-game T-pose: about every 10 s, whether the skater's (object 0) skeleton is
+	// being updated, and which animation it plays.
+	bool ps3_should = false;
+#endif
 	if ( animate )
 	{	
 		update_procedural_bones();
@@ -948,9 +953,24 @@ void CAnimationComponent::Update()
 		// for offscreen objects.
 		if ( ShouldAnimate() )
 		{
+#ifdef __PLAT_PS3__
+			ps3_should = true;
+#endif
 			update_skeleton();
 		}
 	}
+#ifdef __PLAT_PS3__
+	if ( GetObject()->GetID() == 0 )
+	{
+		static unsigned s_calls, s_updates;
+		++s_calls;
+		if ( ps3_should ) ++s_updates;
+		if ( ( s_calls % 600 ) == 1 )
+			printf( "[anim] skater: %u updates, %u with the skeleton updated (animate %d, on screen %d), anim 0x%08x (%s), set 0x%08x\n",
+				s_calls, s_updates, (int)animate, (int)ps3_should, GetCurrentSequence(),
+				Script::FindChecksumName( GetCurrentSequence() ), m_animScriptName );
+	}
+#endif
 }
 
 /******************************************************************/
@@ -1680,6 +1700,17 @@ uint32 CAnimationComponent::PlayAnim(Script::CStruct *pParams, Script::CScript *
 		}
 #endif
 
+#ifdef __PLAT_PS3__
+		// The in-game skater stood in the T-pose: this is the fallback that gives it. Say which
+		// anims were missing (and from which anim set).
+		{
+			static int s_missing;
+			if (s_missing++ < 40)
+				printf("[anim] missing anim 0x%08x (%s) in set 0x%08x (%s) for object 0x%08x: playing the default pose\n",
+					AnimChecksum, Script::FindChecksumName(AnimChecksum), m_animScriptName,
+					Script::FindChecksumName(m_animScriptName), GetObject()->GetID());
+		}
+#endif
 		// by default, a missing anim will play the christ-pose anim
 		AnimChecksum = CRCD(0x1ca1ff20,"default");
 	}

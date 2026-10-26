@@ -1319,6 +1319,16 @@ CSkeletonData::CSkeletonData()
 
 	// Default the Level0 LOD distance to a large number.
 	m_skipLODDistances[0] = MAX_LOD_DISTANCE;
+#ifdef __PLAT_PS3__
+	// No bone skipping until InitialiseBoneSkipList says otherwise: the table was left
+	// uninitialised (skeletons loaded from memory never fill it), so random bones could be
+	// skipped.
+	memset( m_skipLODTable, 0, sizeof( m_skipLODTable ));
+	for( int lod = 1; lod < BONE_SKIP_LOD_BITS; ++lod )
+	{
+		m_skipLODDistances[lod] = MAX_LOD_DISTANCE;
+	}
+#endif
 }
 
 /******************************************************************/
