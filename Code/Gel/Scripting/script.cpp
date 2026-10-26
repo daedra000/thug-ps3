@@ -3116,10 +3116,14 @@ void RunScript(uint32 scriptChecksum, CStruct *p_params, Obj::CObject *p_object,
 					break;
 				}
 #ifdef __PLAT_PS3__
-				if (++ps3Passes == 1 || ret_val == ESCRIPTRETURNVAL_BLOCKED || (ps3Passes & 0xFFFFF) == 0)
+				// Time from the end of the first pass: the first pass may do real work for
+				// seconds (loading a level), and giving up after it cut such scripts short.
+				if (++ps3Passes == 1)
+					ps3Start = sysGetSystemTime();
+				else if (ret_val == ESCRIPTRETURNVAL_BLOCKED || (ps3Passes & 0xFFFF) == 0)
 				{
 					u64 ps3Elapsed = sysGetSystemTime() - ps3Start;
-					if (ret_val == ESCRIPTRETURNVAL_BLOCKED || ps3Elapsed > 5000000)
+					if (ret_val == ESCRIPTRETURNVAL_BLOCKED || ps3Elapsed > 10000000)
 					{
 						printf("[script] RunScript %s (0x%08x) did not finish: %s, in 0x%08x line %u, after %u passes: giving up on it\n",
 							FindChecksumName(scriptChecksum), scriptChecksum,
