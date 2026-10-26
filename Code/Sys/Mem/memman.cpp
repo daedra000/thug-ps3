@@ -309,7 +309,7 @@ void*	Manager::New( size_t size, bool assert_on_fail, Allocator* pAlloc )
 			for ( Heap* heap = FirstHeap(); heap != NULL; heap = NextHeap( heap ) )
 				printf( "[mem]   heap %-16s %d bytes free\n", heap->GetName() ? heap->GetName() : "?", heap->available() );
 		}
-		Ps3Platform::FlushLog();
+		Ps3Platform::Mark( "[mem] (the NULL from that allocation may crash next)" );
 	}
 #endif
 

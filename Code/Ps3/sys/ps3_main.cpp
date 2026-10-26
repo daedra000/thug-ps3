@@ -384,6 +384,19 @@ void FlushLog()
 	fflush(stdout);
 }
 
+void Mark(const char* fmt, ...)
+{
+	char text[200];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+	fflush(stdout);
+	Trace("%s", text);
+	if (s_logFd >= 0) sysLv2FsFsync(s_logFd);
+	if (s_usbLogFd >= 0) sysLv2FsFsync(s_usbLogFd);
+}
+
 bool OnGameThread()
 {
 	if (!s_gameThread) return true;

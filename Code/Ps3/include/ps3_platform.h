@@ -82,6 +82,9 @@ namespace Ps3Platform
 	// A line written straight to the log from any thread (no stdio); the latest one is also
 	// shown on the [alive] heartbeat lines.
 	void Trace(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+	// Trace, then the log synced to disc: for the steps just before a suspected crash
+	// (a crash or power-off can otherwise lose the last 2 s of the log).
+	void Mark(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
 	// Text straight to the log; never allocates (usable inside the malloc wrappers).
 	void RawWrite(const char* text);

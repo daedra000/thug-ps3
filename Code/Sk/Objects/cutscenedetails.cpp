@@ -60,6 +60,10 @@
 #include <sys/timer.h>
 #include <sys/config/config.h>
 #include <sk/modules/FrontEnd/FrontEnd.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#include <sys/file/filesys.h>
+#endif
 
 #include <gel/scripting/script.h>
 #include <gel/scripting/symboltable.h>
@@ -3104,6 +3108,9 @@ void CCutsceneData::load_models()
 	for ( int i = 0; i < numFiles; i++ )
 	{
 		const File::SFileInfo* pFileInfo = mp_fileLibrary->GetFileInfo( i );
+#ifdef __PLAT_PS3__
+		Ps3Platform::Mark( "[cut] file %d of %d: %08x.%08x, %d bytes", i, numFiles, pFileInfo->fileNameChecksum, pFileInfo->fileExtensionChecksum, pFileInfo->fileSize );
+#endif
 
 #ifdef __PLAT_NGC__
 		uint32* pData = NULL;
@@ -4148,6 +4155,9 @@ bool CCutsceneData::Load( const char* p_fileName, bool assertOnFail, bool async_
 	
 	// based on the name of the CUT file, 
 	// we can build the name of the stream associated with it
+#ifdef __PLAT_PS3__
+	Ps3Platform::Mark( "[cut] load %s", p_fileName );
+#endif
 	char* pCutsceneName = get_cut_name( p_fileName );
 
 	//-------------------------------------------------------------
@@ -4171,6 +4181,9 @@ bool CCutsceneData::Load( const char* p_fileName, bool assertOnFail, bool async_
 	streamNameChecksum = Crc::GenerateCRCFromString(streamName);
 
 #ifndef __PLAT_NGC__
+#ifdef __PLAT_PS3__
+	Ps3Platform::Mark( "[cut] preloading stream %s", streamName );
+#endif
 	if ( !Pcm::PreLoadMusicStream( streamNameChecksum ) )
 	{
 		Dbg_Message( "Couldn't start stream...  stream %s not found?", streamName );
@@ -4256,7 +4269,26 @@ bool CCutsceneData::Load( const char* p_fileName, bool assertOnFail, bool async_
 #endif
 
 	//Mem::Manager::sHandle().InitCutsceneHeap(512 * 1024);
+#ifdef __PLAT_PS3__
+	// The whole CUT file is loaded into this heap (bottom up), then copied piece by piece
+	// to its top down end, so it must hold the file plus room for what the cutscene
+	// allocates. PC's fixed 1 MB is smaller than most CUT files (Intro_02 823 KB,
+	// FL_04 2 MB, Final 2.5 MB). Size it from the file instead.
+	{
+		int cut_size = 0;
+		void* p_cut_file = File::Open( p_fileName, "rb" );
+		if ( p_cut_file )
+		{
+			cut_size = File::GetFileSize( p_cut_file );
+			File::Close( p_cut_file );
+		}
+		int heap_size = (( cut_size + 2047 ) & ~2047 ) + 1024 * 1024;
+		Ps3Platform::Mark( "[cut] %s: %d bytes, cutscene heap %d KB (%d KB free here)", p_fileName, cut_size, heap_size / 1024, mem_available / 1024 );
+		Mem::Manager::sHandle().InitCutsceneHeap( heap_size );
+	}
+#else
 	Mem::Manager::sHandle().InitCutsceneHeap(1024 * 1024); // lwss: increase
+#endif
 	Mem::Manager::sHandle().PopContext(); 
 	//-------------------------------------------------------------
 #	if defined( __PLAT_NGC__ )
@@ -4271,7 +4303,13 @@ bool CCutsceneData::Load( const char* p_fileName, bool assertOnFail, bool async_
 
 	Mem::Manager::sHandle().PushContext(Mem::Manager::sHandle().CutsceneTopDownHeap());	
 
+#ifdef __PLAT_PS3__
+	Ps3Platform::Mark( "[cut] reading the file library" );
+#endif
 	bool success = mp_fileLibrary->Load( p_fileName, assertOnFail, async_load );
+#ifdef __PLAT_PS3__
+	Ps3Platform::Mark( "[cut] file library %s, %d files", success ? "loaded" : "FAILED", mp_fileLibrary->GetNumFiles() );
+#endif
 	
 	if ( !success )
 	{
@@ -4284,6 +4322,9 @@ bool CCutsceneData::Load( const char* p_fileName, bool assertOnFail, bool async_
 	{
 		PostLoad( assertOnFail );
 		m_dataLoaded = true;
+#ifdef __PLAT_PS3__
+		Ps3Platform::Mark( "[cut] %s ready", p_fileName );
+#endif
 	}
 
 #ifdef __PLAT_NGC__

@@ -10,6 +10,9 @@
 #include <gel/assman/assettypes.h>
 #include <gfx/nx.h>
 #include <sk/objects/cutscenedetails.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 namespace Ass
 {
@@ -22,6 +25,9 @@ namespace Ass
 int CCutsceneAsset::Load( const char* p_file, bool async_load, bool use_pip, void* pExtraData, Script::CStruct *pStruct )     // create or load the asset
 {
 	Mem::PushMemProfile( (char*)p_file );
+#ifdef __PLAT_PS3__
+	Ps3Platform::Mark( "[cut] creating the cutscene data" );
+#endif
 	
 	Obj::CCutsceneData* p_cutsceneData = new Obj::CCutsceneData;
 
