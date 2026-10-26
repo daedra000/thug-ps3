@@ -165,6 +165,7 @@ $(BUILD)/pkgfiles.stamp: FORCE
 	@rm -rf $(PKGFILES)
 	@mkdir -p $(PKGFILES)/USRDIR/Data
 	@printf "Copy the Data folder of your PC copy of Tony Hawk's Underground here.\n" > $(PKGFILES)/USRDIR/Data/PUT_PC_DATA_HERE.TXT
+	@if [ -f $(ROOT)/ps3/PIC1.PNG ]; then cp $(ROOT)/ps3/PIC1.PNG $(PKGFILES)/PIC1.PNG; fi	# XMB background (1920x1080)
 	@touch $@
 
 clean:
