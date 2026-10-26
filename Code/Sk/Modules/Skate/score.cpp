@@ -292,26 +292,6 @@ void Score::print_trick_info_table()
 
 void Score::Update()
 {
-#ifdef __PLAT_PS3__
-	// The front end never shows the balance meter (it stayed on screen over every menu).
-	// Keep it fully transparent there each frame, whatever turned it on.
-	if( Mdl::Skate::Instance()->GetGameMode()->IsFrontEnd())
-	{
-		Obj::CSkater* p_skater = Mdl::Skate::Instance()->GetSkaterById( m_skaterId );
-		if( p_skater )
-		{
-			Front::CScreenElement* p_meter = Front::CScreenElementManager::Instance()->GetElement( 0xa4db8a4b + p_skater->GetHeapIndex()).Convert(); // "the_balance_meter"
-			static bool s_logged;
-			if( !s_logged )
-			{
-				s_logged = true;
-				printf( "[hud] front end: balance meter element %s\n", p_meter ? "found, hiding it" : "not found" );
-			}
-			if( p_meter )
-				p_meter->SetAlpha( 0.0f, Front::CScreenElement::FORCE_INSTANT );
-		}
-	}
-#endif
 	if (m_specialScore)
 	{
 		// shrink special bar
@@ -1575,12 +1555,6 @@ void Score::position_balance_meter(bool state, float value, bool isVertical)
 	Front::CScreenElementManager* p_manager = Front::CScreenElementManager::Instance();
 	Mdl::Skate * skate_mod = Mdl::Skate::Instance();
 	Obj::CSkater* pSkater = skate_mod->GetSkaterById( m_skaterId );
-#ifdef __PLAT_PS3__
-	// The main menu's skater does manuals and grinds on its own; its balance meter showed
-	// over the menu. The front end never shows it.
-	if( skate_mod->GetGameMode()->IsFrontEnd())
-		state = false;
-#endif
 
 	Front::CSpriteElement *p_balance_meter = (Front::CSpriteElement *) p_manager->GetElement(0xa4db8a4b + pSkater->GetHeapIndex()).Convert(); // "the_balance_meter"
 	Dbg_Assert(p_balance_meter);
