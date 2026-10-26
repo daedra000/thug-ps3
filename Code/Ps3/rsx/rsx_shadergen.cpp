@@ -144,7 +144,11 @@ std::string VertexProgram(const VsKey& k)
 		w.Op("MAD", R(0, "x"), V(kAttrPos, "x"), C(kVcScreen, "x"), C(kVcScreen, "z"));
 		w.Op("MAD", R(0, "y"), V(kAttrPos, "y"), C(kVcScreen, "y"), C(kVcScreen, "w"));
 		w.Op("MAD", R(0, "z"), V(kAttrPos, "z"), C(kVcConsts, "w"), "-" + one);
-		w.Op("RCP", R(0, "w"), V(kAttrPos, "w"));
+		// THUG's text sets rhw to 0, which D3D9 drew as if it were 1: 1/0 here made every
+		// glyph's position infinite, so no text showed. rhw <= 0 counts as 1.
+		w.Op("SGE", R(0, "w"), zero, V(kAttrPos, "w"));
+		w.Op("ADD", R(0, "w"), R(0, "w"), V(kAttrPos, "w"));
+		w.Op("RCP", R(0, "w"), R(0, "w"));
 		w.Op("MUL", R(0, "xyz"), R(0), R(0, "w"));
 		w.Op("MOV", "result.position", R(0));
 	}

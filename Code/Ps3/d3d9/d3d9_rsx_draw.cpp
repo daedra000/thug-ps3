@@ -952,7 +952,7 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 	const RsxTexture* const* tex, const FpEntry* fp, bool hasDepth)
 {
 	const DWORD* rs = dev->m_rs;
-	char line[1024];
+	char line[1536];
 	int n = snprintf(line, sizeof(line), "[cap] #%u prim %d x%u verts %u%s fvf 0x%x stride %u %s%s | blend %d %d/%d op %d | atest %d f%d ref %d | z %d w%d f%d | cull %d | tfactor %08x | vp %d,%d %dx%d",
 		s_capDraw++, (int)call.type, (unsigned)call.primCount, (unsigned)count, call.vertexData ? " UP" : "", (unsigned)dev->m_fvf, (unsigned)stride,
 		dev->m_ps ? "ps" : "ff", fp && fp->texMask ? "" : " (no textures sampled)",
@@ -972,6 +972,15 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 		n += snprintf(line + n, sizeof(line) - n, " | v0 pos %.1f,%.1f,%.2f", p[0], p[1], p[2]);
 		if (l.diffuse >= 0) { u32 c; memcpy(&c, v0 + l.diffuse, 4); n += snprintf(line + n, sizeof(line) - n, " col %08x", (unsigned)c); }
 		if (l.numTex > 0) { float uv[2]; memcpy(uv, v0 + l.tex[0], 8); n += snprintf(line + n, sizeof(line) - n, " uv %.3f,%.3f", uv[0], uv[1]); }
+		// The next two vertices too (a degenerate triangle draws nothing).
+		for (int k = 1; k <= 2 && k < (int)count; ++k)
+		{
+			const u8* vk = v0 + k * stride;
+			float q[4] = { 0, 0, 0, 0 }, uv[2] = { 0, 0 };
+			memcpy(q, vk + l.pos, l.posSize * 4);
+			if (l.numTex > 0) memcpy(uv, vk + l.tex[0], 8);
+			n += snprintf(line + n, sizeof(line) - n, " | v%d %.1f,%.1f rhw %.2f uv %.3f,%.3f", k, q[0], q[1], l.posSize > 3 ? q[3] : 1.0f, uv[0], uv[1]);
+		}
 	}
 	printf("%s\n", line);
 	for (int s = 0; s < 4; ++s)
@@ -979,12 +988,29 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 		const DWORD* ts = dev->m_tss[s];
 		IDirect3DBaseTexture9* bt = dev->m_textures[s];
 		if (!bt && (s > 0 || ts[D3DTSS_COLOROP] == D3DTOP_DISABLE)) { if (s == 0) printf("[cap]   stage 0 disabled, no texture\n"); break; }
-		char tx[160] = "no texture";
+		char tx[256] = "no texture";
 		if (bt && bt->GetType() == D3DRTYPE_TEXTURE)
 		{
 			IDirect3DTexture9* t = static_cast<IDirect3DTexture9*>(bt);
-			snprintf(tx, sizeof(tx), "tex %p fmt %d %ux%u levels %u usage 0x%x%s%s", (void*)t, (int)t->m_format, t->m_width, t->m_height, t->m_levels,
+			int tn = snprintf(tx, sizeof(tx), "tex %p fmt %d %ux%u levels %u usage 0x%x%s%s", (void*)t, (int)t->m_format, t->m_width, t->m_height, t->m_levels,
 				(unsigned)t->m_usage, tex[s] ? "" : " NOT ON RSX (drawn white)", tex[s] && tex[s]->renderTarget ? " render target" : "");
+			// What the CPU copy holds (32-bit formats): texels with any alpha, and the brightest.
+			if ((t->m_format == D3DFMT_A8R8G8B8 || t->m_format == D3DFMT_X8R8G8B8) && t->LevelBits(0))
+			{
+				const u8* bits = (const u8*)t->LevelBits(0);
+				const u32 pitch = t->LevelPitch(0);
+				u32 withAlpha = 0, maxA = 0, maxRgb = 0;
+				for (u32 y = 0; y < t->m_height; ++y)
+					for (u32 x = 0; x < t->m_width; ++x)
+					{
+						u32 c; memcpy(&c, bits + y * pitch + x * 4, 4);
+						u32 a = c >> 24, m = ((c >> 16) & 0xFF) > (c & 0xFF) ? (c >> 16) & 0xFF : c & 0xFF;
+						if (a) ++withAlpha;
+						if (a > maxA) maxA = a;
+						if (m > maxRgb) maxRgb = m;
+					}
+				snprintf(tx + tn, sizeof(tx) - tn, " [%u texels with alpha, max alpha %02x, max r/b %02x]", withAlpha, maxA, maxRgb);
+			}
 		}
 		else if (bt) snprintf(tx, sizeof(tx), "texture of type %d (not 2D: not supported)", (int)bt->GetType());
 		const DWORD* ss = dev->m_ss[s];

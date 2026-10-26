@@ -179,7 +179,7 @@ static void TestPretransformed()
 		IDirect3DDevice9* dev = NewDevice();
 		dev->m_viewport.X = (DWORD)Rnd(0, 50); dev->m_viewport.Y = (DWORD)Rnd(0, 50);
 		Vec4 a[16]; memset(a, 0, sizeof(a));
-		float x = Rnd(0, 1280), y = Rnd(0, 720), z = Rnd(0, 1), rhw = Rnd(0.01f, 2);
+		float x = Rnd(0, 1280), y = Rnd(0, 720), z = Rnd(0, 1), rhw = (iter % 5 == 4) ? 0.0f : Rnd(0.01f, 2);	// THUG's text uses rhw 0: drawn as 1
 		a[0][0] = x; a[0][1] = y; a[0][2] = z; a[0][3] = rhw;
 		D3DCOLOR col = 0x80402010u + (rand() & 0x0F0F0F);
 		a[kAttrDiffuse] = ColorAttrib(col);
@@ -188,7 +188,7 @@ static void TestPretransformed()
 		float scale[4], offset[4];
 		ViewportTransform(dev->m_viewport, scale, offset);
 		const Vec4& o = vm->out[0];
-		Expect("rhw w", o[3], 1 / rhw);
+		Expect("rhw w", o[3], rhw > 0 ? 1 / rhw : 1.0f);
 		Expect("rhw window x", o[0] / o[3] * scale[0] + offset[0], x + 0.5f, 1e-4f);
 		Expect("rhw window y", o[1] / o[3] * scale[1] + offset[1], y + 0.5f, 1e-4f);
 		Expect("rhw window z", o[2] / o[3] * scale[2] + offset[2], z, 1e-4f);
