@@ -158,7 +158,11 @@ void		pad_printf( const char* text, ... )
 
 	va_start( args, text );
 
+#ifdef __PLAT_PS3__
+	vsnprintf( sprintf_pad, vBUFFER_SIZE, text, args);	// assert messages can be long
+#else
 	vsprintf( sprintf_pad, text, args);
+#endif
 	
 	va_end( args );
 }

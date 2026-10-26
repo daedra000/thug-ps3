@@ -1597,7 +1597,7 @@ void	PushMemProfile(char *p_type)
 		// just copy over the memory containing the name												  
 		char *p = &(sp_current_profile->m_type[0]);
 		char *q = (char*) p_type;
-		int len = min(MAX_PROFILE_NAME - 1, strlen(q)); // lwss: change size bound here. strings not guaranteed to be alloc'd to 64
+		int len = min(MAX_PROFILE_NAME - 1, (int)strlen(q)); // lwss: change size bound here. strings not guaranteed to be alloc'd to 64
 		//for (int i=0;i<MAX_PROFILE_NAME;i++)
 		for (int i=0;i<len;i++)
 		{

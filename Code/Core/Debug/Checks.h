@@ -143,7 +143,19 @@ if ( !(_c))														\
 /*                                                                */
 /******************************************************************/
 
-#ifdef __PLAT_WN32__
+#if defined(__PLAT_WN32__) && defined(__PLAT_PS3__) && defined(PS3_ASSERTS)
+
+// THUG PS3 diagnostic build (ASSERTS=1): the formatted message goes to Dbg::Assert, which
+// logs "file:line: message", syncs the log and returns (Core/Debug/Assert.cpp).
+#define Dbg_MsgAssert( _c, _params )							\
+																\
+if( !( _c ))													\
+{																\
+	Dbg::pad_printf _params;									\
+	Dbg::Assert( __FILE__, __LINE__, Dbg::sprintf_pad );		\
+}
+
+#elif defined(__PLAT_WN32__)
 
 #ifdef _CONSOLE
 #define Dbg_MsgAssert( _c, _params )							\

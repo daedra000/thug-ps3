@@ -46,6 +46,11 @@ int DumpUnwindStack( int iMaxDepth, int *pDest );
 #define _output printf
 #endif
 
+#ifdef __PLAT_PS3__
+#include <string.h>
+#include <ps3_platform.h>
+#endif
+
 #ifdef __NOPT_ASSERT__
 
 /*****************************************************************************
@@ -122,12 +127,113 @@ void	screen_assert( bool on )
 /*                                                                */
 /******************************************************************/
 
+#ifdef __PLAT_PS3__
+
+// THUG PS3 diagnostic build (make -f Makefile.ps3 ASSERTS=1): a failed assert writes
+// "[assert] file:line: message" to the log, syncs it to disc and returns, so one run
+// reports every assert it reaches instead of hanging on the first. Each assert site is
+// logged in full for its first few hits, then only at 10, 100, 1000... hits, so an assert
+// that fails every frame neither floods the log nor fsyncs every frame.
+namespace
+{
+	struct AssertSite { const char* file; unsigned line; unsigned hits; };
+	enum { kMaxSites = 512, kFullHits = 3, kMaxFullLines = 1000 };
+	AssertSite		s_sites[kMaxSites];
+	unsigned		s_numSites;
+	unsigned		s_fullLines;
+	volatile int	s_assertBusy;
+	volatile unsigned s_assertsMissed;	// another assert arrived while one was being logged
+
+	const char* short_path( const char* file )
+	{
+		if ( !file ) return "?";
+		const char* p = strstr( file, "/Code/" );
+		return p ? p + 6 : file;
+	}
+
+	bool log_this_hit( unsigned hits )
+	{
+		if ( hits <= kFullHits ) return true;
+		unsigned n = hits;
+		while ( n % 10 == 0 ) n /= 10;
+		return n == 1;		// 10, 100, 1000...
+	}
+}
+
+static void ps3_assert( const char* file, uint line, const char* reason )
+{
+	// One at a time (any thread); an assert raised while one is being logged (from the
+	// logging itself, or another thread) is only counted.
+	if ( __sync_lock_test_and_set( &s_assertBusy, 1 ))
+	{
+		__sync_fetch_and_add( &s_assertsMissed, 1 );
+		return;
+	}
+
+	AssertSite* site = NULL;
+	for ( unsigned i = 0; i < s_numSites; ++i )
+	{
+		if ( s_sites[i].line == line && s_sites[i].file == file )
+		{
+			site = &s_sites[i];
+			break;
+		}
+	}
+	if ( !site && s_numSites < kMaxSites )
+	{
+		site = &s_sites[s_numSites++];
+		site->file = file;
+		site->line = line;
+		site->hits = 0;
+	}
+	unsigned hits = site ? ++site->hits : 1;
+
+	if ( log_this_hit( hits ) && s_fullLines < kMaxFullLines )
+	{
+		++s_fullLines;
+		char text[640];
+		const char* why = reason ? reason : "(no message)";
+		int n = snprintf( text, sizeof( text ), "[assert] %s:%u: %s", short_path( file ), (unsigned)line, why );
+		if ( n < 0 ) n = 0;
+		if ( n > (int)sizeof( text ) - 2 ) n = sizeof( text ) - 2;
+		while ( n > 0 && ( text[n - 1] == '\n' || text[n - 1] == '\r' )) --n;
+		text[n] = 0;
+		for ( char* c = text; *c; ++c )
+		{
+			if ( *c == '\n' || *c == '\r' ) *c = ' ';		// one line per assert
+		}
+		unsigned missed = __sync_lock_test_and_set( &s_assertsMissed, 0 );
+		char hitText[32] = "";
+		if ( hits > 1 ) snprintf( hitText, sizeof( hitText ), " (hit %u times)", hits );
+		char missedText[48] = "";
+		if ( missed ) snprintf( missedText, sizeof( missedText ), " [%u more missed while logging]", missed );
+		size_t len = strlen( text );
+		snprintf( text + len, sizeof( text ) - len, "%s%s\n", hitText, missedText );
+		Ps3Platform::LogNow( text );					// written and synced to disc
+		if ( hits == 1 )
+		{
+			Ps3Platform::LogWhere( "[assert]   at" );	// main loop / script context, first hit only
+		}
+		if ( s_fullLines == kMaxFullLines )
+		{
+			Ps3Platform::LogNow( "[assert] too many asserts: no more are logged this run\n" );
+		}
+	}
+
+	__sync_lock_release( &s_assertBusy );
+}
+
+#endif	// __PLAT_PS3__
+
 #ifdef	__NOPT_DEBUG__
 void		Assert( char* file, uint line, Signature& sig, char* reason )
 #else
 void		Assert( char* file, uint line, char* reason )
 #endif
 {
+#ifdef __PLAT_PS3__
+	ps3_assert( file, line, reason );		// log and carry on (no trap, no hang)
+#else
 	static	char		assert_buffer1[vASSERT_BUFFER_SIZE];
 #ifdef	__NOPT_DEBUG
 	static	char		assert_buffer2[vASSERT_BUFFER_SIZE];
@@ -279,6 +385,7 @@ void		Assert( char* file, uint line, char* reason )
 		Dbg_Printf( "%s\n", tmp1 );
 		Dbg_Printf( "!!NO TRAP HANDLER SET!!\n" );
 	}
+#endif	// __PLAT_PS3__
 }
 
 /******************************************************************/

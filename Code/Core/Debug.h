@@ -35,7 +35,13 @@
 // in which case the asserts prevent the code from compiling...
 #ifdef __PLAT_WN32__
 #ifndef _CONSOLE // Ken: Asserts now compile for console apps. (see levelassetlister project)
+// THUG PS3: the PS3 build defines __PLAT_WN32__ too (it builds the PC code); the
+// diagnostic build (make -f Makefile.ps3 ASSERTS=1 -> -DPS3_ASSERTS) keeps asserts on.
+// A failed assert there logs file:line and the message, syncs the log and carries on
+// (Core/Debug/Assert.cpp).
+#if !(defined(__PLAT_PS3__) && defined(PS3_ASSERTS))
 	#undef __NOPT_ASSERT__
+#endif
 #endif	
 #endif
 

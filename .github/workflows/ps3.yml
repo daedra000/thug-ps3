@@ -104,14 +104,40 @@ jobs:
       - name: Same bytes as cgcomp -a; generated programs assemble and match D3D9 maths
         run: tools/rsx-asm-test/run.sh "$RUNNER_TEMP/psl1ght"
 
+  loader-tests-x86:
+    name: Endian helpers + Bink decoders (x86 ASan/UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: x86-64, ASan + UBSan
+        run: tools/endian-test/run.sh asan
+      - name: Install 32-bit libraries
+        run: sudo apt-get update && sudo apt-get -y install g++-multilib
+      - name: x86 -m32 (ILP32, like the PC build), ASan + UBSan
+        continue-on-error: true  # new; make it blocking once it has passed a few runs
+        run: tools/endian-test/run.sh asan32
+
+  loader-tests-be:
+    name: Endian helpers + Bink decoders (big-endian powerpc64, qemu)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the powerpc64 cross compiler and qemu-user
+        # A separate job from the -m32 one: g++-multilib and the cross compilers conflict.
+        run: sudo apt-get update && sudo apt-get -y install g++-powerpc64-linux-gnu qemu-user file
+      - name: Big-endian, as on the PS3
+        run: tools/endian-test/run.sh ppc64
+
   game:
     name: THUG PS3 (${{ matrix.variant }})
     needs: toolchain
     runs-on: ubuntu-24.04
+    # The asserts build (ASSERTS=1) is new: it doesn't fail the workflow until it has built cleanly.
+    continue-on-error: ${{ matrix.variant == 'asserts' }}
     strategy:
       fail-fast: false
       matrix:
-        variant: [headless, release]
+        variant: [headless, release, asserts]
     steps:
       - uses: actions/checkout@v5
 
@@ -135,7 +161,11 @@ jobs:
           set -o pipefail
           ppu-gcc --version | head -1
           HEADLESS=$([ "${{ matrix.variant }}" = headless ] && echo 1 || echo 0)
-          make -f Makefile.ps3 HEADLESS=$HEADLESS -k -j"$(nproc)" 2>&1 | tee build.log
+          # asserts: the release (video) build with the game's asserts logging to thug-ps3.log
+          ASSERTS=$([ "${{ matrix.variant }}" = asserts ] && echo 1 || echo 0)
+          # release: also the warnings the warning gate checks (they don't change the code)
+          WARNINGS=$([ "${{ matrix.variant }}" = release ] && echo 1 || echo 0)
+          make -f Makefile.ps3 HEADLESS=$HEADLESS ASSERTS=$ASSERTS WARNINGS=$WARNINGS -k -j"$(nproc)" 2>&1 | tee build.log
 
       - name: Report ELF size
         if: always()
@@ -151,7 +181,7 @@ jobs:
         run: |
           self=$(ls build-ps3/*/thug-ps3.self 2>/dev/null | head -1)
           [ -n "$self" ] || exit 0
-          suffix=$([ "${{ matrix.variant }}" = headless ] && echo -headless || echo)
+          suffix=$([ "${{ matrix.variant }}" = release ] && echo || echo "-${{ matrix.variant }}")
           cp "$self" "thug-ps3$suffix.self"
 
       - name: Symbol map (addresses in the log -> names)
@@ -174,6 +204,16 @@ jobs:
         if: always()
         run: python3 tools/ci-annotate.py build.log "$GITHUB_WORKSPACE"
 
+      # Fails on NEW pointer/int-truncating casts, uninitialised uses and missing returns
+      # (the known ones are in tools/warning-baseline.txt). While that file is a bootstrap
+      # placeholder it only reports, and the artifact carries warning-baseline.txt.new to commit.
+      - name: Warning gate
+        if: always() && matrix.variant == 'release'
+        run: |
+          [ -f build.log ] || exit 0
+          python3 tools/warning-gate.py check tools/warning-baseline.txt build.log
+          [ ! -f tools/warning-baseline.txt.new ] || cp tools/warning-baseline.txt.new warning-baseline.txt.new
+
       - name: Upload PKG and log
         if: always()
         uses: actions/upload-artifact@v4
@@ -185,4 +225,5 @@ jobs:
             thug-ps3*.self
             thug-ps3.map
             build.log
+            warning-baseline.txt.new
           if-no-files-found: warn

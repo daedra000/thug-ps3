@@ -495,6 +495,16 @@ typedef	sint64				nID64;
 
 #endif
 
+#ifdef __PLAT_PS3__
+// newlib only declares __isnanf/__isinff (used by asserts, Makefile.ps3 ASSERTS=1)
+#ifndef isnanf
+#define isnanf(x)	__builtin_isnan(x)
+#endif
+#ifndef isinff
+#define isinff(x)	__builtin_isinf(x)
+#endif
+#endif
+
 /******************************************************************/
 /*                                                                */
 /*                                                                */

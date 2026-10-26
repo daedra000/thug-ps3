@@ -1,0 +1,6 @@
+# bootstrap
+# tools/warning-gate.py baseline: count<TAB>file<TAB>flag<TAB>message
+# Placeholder: the gate only reports until this is replaced by the warning-baseline.txt.new
+# that the release job of .github/workflows/ps3.yml uploads (GCC 13 output; no local
+# PS3 GCC was available to generate it). Regenerate after fixing warnings with:
+#   python3 tools/warning-gate.py update tools/warning-baseline.txt build.log

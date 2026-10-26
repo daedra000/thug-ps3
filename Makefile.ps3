@@ -4,7 +4,12 @@
 #   make -f Makefile.ps3                 the game        -> thug-ps3.pkg
 #   make -f Makefile.ps3 HEADLESS=1      no video/audio/pad: runs the game logic and
 #                                        writes everything to the log -> thug-ps3-headless.pkg
-#   make -f Makefile.ps3 DEBUG=1         -g, asserts
+#   make -f Makefile.ps3 DEBUG=1         -g, _DEBUG
+#   make -f Makefile.ps3 ASSERTS=1       the game's asserts compiled in: a failed one logs
+#                                        "[assert] file:line: message" (synced) and the
+#                                        game carries on -> thug-ps3-asserts.pkg
+#   make -f Makefile.ps3 WARNINGS=1      also warn about pointer/int casts, uninitialised
+#                                        use and missing returns (tools/warning-gate.py)
 #   make -f Makefile.ps3 clean
 #
 # The source list is kisak-thug's (cmake_files.cmake) minus the Windows/Xbox
@@ -17,10 +22,15 @@ ROOT      := $(patsubst %/,%,$(dir $(THIS_MAKEFILE)))
 SRC       := $(ROOT)/Code
 HEADLESS  ?= 0
 DEBUG     ?= 0
+ASSERTS   ?= 0
+WARNINGS  ?= 0
 
 VARIANT   := release
 ifeq ($(HEADLESS),1)
   VARIANT := headless
+endif
+ifeq ($(ASSERTS),1)
+  VARIANT := $(if $(filter release,$(VARIANT)),asserts,$(VARIANT)-asserts)
 endif
 ifeq ($(DEBUG),1)
   VARIANT := $(VARIANT)-debug
@@ -59,6 +69,11 @@ ifeq ($(DEBUG),1)
 else
   DEFINES += -DNDEBUG
 endif
+# Keeps __NOPT_ASSERT__ on for the PS3 (Core/Debug.h) and logs failed asserts instead of
+# hanging (Core/Debug/Assert.cpp).
+ifeq ($(ASSERTS),1)
+  DEFINES += -DPS3_ASSERTS
+endif
 
 INCLUDES := -I$(SRC)/Ps3/include -I$(SRC) -I$(SRC)/Sk -I$(CASE_INC)
 
@@ -73,6 +88,17 @@ GAME_FLAGS := -fpermissive -fsigned-char -fno-strict-aliasing -fno-common \
 	-Wno-write-strings -Wno-narrowing -Wno-multichar -Wno-unknown-pragmas \
 	$(DEFINES) $(INCLUDES)
 
+# The warnings that matter on the PS3 (LP64, big-endian), for the CI warning gate
+# (tools/warning-gate.py compares them with tools/warning-baseline.txt). GCC reports
+# pointer -> 32-bit int casts as "loses precision [-fpermissive]" (an error without
+# -fpermissive, so always on); these add the rest. They don't change the code generated.
+ifeq ($(WARNINGS),1)
+  GAME_FLAGS += -Wint-to-pointer-cast -Wreturn-type -Wuninitialized -Wmaybe-uninitialized
+endif
+# The same set for clang (tools/ps3-check-all.sh with CHECK_WARNINGS=1).
+CHECK_WARNING_FLAGS := -Wpointer-to-int-cast -Wint-to-pointer-cast -Wvoid-pointer-to-int-cast \
+	-Wreturn-type -Wsometimes-uninitialized -Wuninitialized
+
 .PHONY: all pkg clean case-includes print-sources print-cxxflags-check check-toc FORCE
 .DEFAULT_GOAL := all
 
@@ -80,10 +106,14 @@ print-sources:
 	@for f in $(SOURCES); do echo $$f; done
 
 # For tools/ps3-check-all.sh (clang can't take -fpermissive; MSVC-style casts are
-# allowed through -fms-extensions there instead).
+# allowed through -fms-extensions there instead). CHECK_WARNINGS=1: only the
+# CHECK_WARNING_FLAGS set instead of no warnings at all.
+CHECK_FILTER := -fpermissive -fno-aggressive-loop-optimizations -fno-delete-null-pointer-checks \
+	-Wint-to-pointer-cast -Wreturn-type -Wuninitialized -Wmaybe-uninitialized
 print-cxxflags-check:
-	@echo -std=gnu++17 $(filter-out -fpermissive -fno-aggressive-loop-optimizations -fno-delete-null-pointer-checks,$(GAME_FLAGS)) \
-		-Wno-c++11-narrowing -fms-extensions -Wno-everything
+	@echo -std=gnu++17 $(filter-out $(CHECK_FILTER),$(GAME_FLAGS)) \
+		-Wno-c++11-narrowing -fms-extensions -Wno-everything \
+		$(if $(filter 1,$(CHECK_WARNINGS)),$(CHECK_WARNING_FLAGS))
 
 # Windows-cased #includes -> symlink tree (see tools/gen-case-includes.py).
 case-includes:
