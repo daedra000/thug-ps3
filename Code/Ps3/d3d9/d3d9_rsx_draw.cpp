@@ -941,7 +941,61 @@ static bool Skip(const char* why)
 {
 	++s_stats.skipped;
 	LogLimited(why, 3, "draw skipped: %s", why);
+	if (s_capture) printf("[cap]   skipped: %s\n", why);
 	return false;
+}
+
+// The frame capture's log line for one draw: what the draw used, so a wrong-looking part
+// of the picture (thug-frame.bmp) can be matched to its draw.
+static unsigned s_capDraw;
+static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const FvfLayout& l, u32 count, u32 stride,
+	const RsxTexture* const* tex, const FpEntry* fp, bool hasDepth)
+{
+	const DWORD* rs = dev->m_rs;
+	char line[1024];
+	int n = snprintf(line, sizeof(line), "[cap] #%u prim %d x%u verts %u%s fvf 0x%x stride %u %s%s | blend %d %d/%d op %d | atest %d f%d ref %d | z %d w%d f%d | cull %d | tfactor %08x | vp %d,%d %dx%d",
+		s_capDraw++, (int)call.type, (unsigned)call.primCount, (unsigned)count, call.vertexData ? " UP" : "", (unsigned)dev->m_fvf, (unsigned)stride,
+		dev->m_ps ? "ps" : "ff", fp && fp->texMask ? "" : " (no textures sampled)",
+		(int)rs[D3DRS_ALPHABLENDENABLE], (int)rs[D3DRS_SRCBLEND], (int)rs[D3DRS_DESTBLEND], (int)rs[D3DRS_BLENDOP],
+		(int)rs[D3DRS_ALPHATESTENABLE], (int)rs[D3DRS_ALPHAFUNC], (int)(rs[D3DRS_ALPHAREF] & 0xFF),
+		(int)(rs[D3DRS_ZENABLE] && hasDepth), (int)rs[D3DRS_ZWRITEENABLE], (int)rs[D3DRS_ZFUNC], (int)rs[D3DRS_CULLMODE],
+		(unsigned)rs[D3DRS_TEXTUREFACTOR], (int)dev->m_viewport.X, (int)dev->m_viewport.Y, (int)dev->m_viewport.Width, (int)dev->m_viewport.Height);
+	// The first vertex, as the CPU wrote it.
+	const u8* v0 = NULL;
+	if (call.vertexData) v0 = (const u8*)call.vertexData + (call.indexed ? call.minIndex * stride : 0);
+	else if (dev->m_streams[0])
+		v0 = dev->m_streams[0]->m_data + dev->m_streamOffset[0] + (call.indexed ? call.baseVertex * stride : call.startVertex * stride);
+	if (v0)
+	{
+		float p[4] = { 0, 0, 0, 0 };
+		memcpy(p, v0 + l.pos, l.posSize * 4);
+		n += snprintf(line + n, sizeof(line) - n, " | v0 pos %.1f,%.1f,%.2f", p[0], p[1], p[2]);
+		if (l.diffuse >= 0) { u32 c; memcpy(&c, v0 + l.diffuse, 4); n += snprintf(line + n, sizeof(line) - n, " col %08x", (unsigned)c); }
+		if (l.numTex > 0) { float uv[2]; memcpy(uv, v0 + l.tex[0], 8); n += snprintf(line + n, sizeof(line) - n, " uv %.3f,%.3f", uv[0], uv[1]); }
+	}
+	printf("%s\n", line);
+	for (int s = 0; s < 4; ++s)
+	{
+		const DWORD* ts = dev->m_tss[s];
+		IDirect3DBaseTexture9* bt = dev->m_textures[s];
+		if (!bt && (s > 0 || ts[D3DTSS_COLOROP] == D3DTOP_DISABLE)) { if (s == 0) printf("[cap]   stage 0 disabled, no texture\n"); break; }
+		char tx[160] = "no texture";
+		if (bt && bt->GetType() == D3DRTYPE_TEXTURE)
+		{
+			IDirect3DTexture9* t = static_cast<IDirect3DTexture9*>(bt);
+			snprintf(tx, sizeof(tx), "tex %p fmt %d %ux%u levels %u usage 0x%x%s%s", (void*)t, (int)t->m_format, t->m_width, t->m_height, t->m_levels,
+				(unsigned)t->m_usage, tex[s] ? "" : " NOT ON RSX (drawn white)", tex[s] && tex[s]->renderTarget ? " render target" : "");
+		}
+		else if (bt) snprintf(tx, sizeof(tx), "texture of type %d (not 2D: not supported)", (int)bt->GetType());
+		const DWORD* ss = dev->m_ss[s];
+		printf("[cap]   stage %d: %s | color op %d %x %x alpha op %d %x %x | tci %x ttf %x | addr %d %d filt %d %d %d%s\n", s, tx,
+			(int)ts[D3DTSS_COLOROP], (unsigned)ts[D3DTSS_COLORARG1], (unsigned)ts[D3DTSS_COLORARG2],
+			(int)ts[D3DTSS_ALPHAOP], (unsigned)ts[D3DTSS_ALPHAARG1], (unsigned)ts[D3DTSS_ALPHAARG2],
+			(unsigned)ts[D3DTSS_TEXCOORDINDEX], (unsigned)ts[D3DTSS_TEXTURETRANSFORMFLAGS],
+			(int)ss[D3DSAMP_ADDRESSU], (int)ss[D3DSAMP_ADDRESSV], (int)ss[D3DSAMP_MINFILTER], (int)ss[D3DSAMP_MAGFILTER], (int)ss[D3DSAMP_MIPFILTER],
+			fp && (fp->texMask & (1 << s)) ? "" : " (not sampled)");
+		if (ts[D3DTSS_COLOROP] == D3DTOP_DISABLE) break;
+	}
 }
 
 static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
@@ -1082,6 +1136,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 			BindTexture(dev, t, tex[t] ? tex[t] : &s_white);
 	BindAttributes(l, vbase, stride);
 
+	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	CmdReserve(64 + count / 256 * 2);
 	if (call.indexed)
 	{
@@ -1097,6 +1152,8 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 {
 	if (!s_drawReady || s_skipFrame) return;
+	if (s_capture && dev->m_renderTarget && dev->m_renderTarget != dev->m_backBuffer)
+		printf("[cap] (next draw goes to render target %ux%u format %d)\n", dev->m_renderTarget->m_width, dev->m_renderTarget->m_height, (int)dev->m_renderTarget->m_format);
 	++s_stats.draws;
 	DoDraw(dev, call);
 }
@@ -1264,6 +1321,7 @@ bool DrawInit()
 void DrawFrameStart()
 {
 	if (!s_drawReady) return;
+	s_capDraw = 0;
 	s_ringBase = (s_frameSeq % kRingFrames) * kRingSize;
 	s_ringUsed = 0;
 	RunDeferredFrees();

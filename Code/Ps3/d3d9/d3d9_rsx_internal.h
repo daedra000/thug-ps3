@@ -12,6 +12,7 @@ namespace Ps3Gfx
 	extern gcmContextData* s_ctx;
 	extern u32 s_frameSeq;		// frames submitted so far (the frame fence counts these)
 	extern bool s_skipFrame;	// this frame is not being drawn (the system holds the display)
+	extern bool s_capture;		// this frame is being captured: each draw is logged ([cap] lines)
 
 	void CmdReserve(u32 words);	// room for `words` command words (see d3d9_rsx.cpp)
 	void GpuLog(const char* fmt, ...);

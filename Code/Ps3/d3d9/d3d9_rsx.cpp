@@ -35,7 +35,11 @@
 #include <rsx/rsx.h>
 #include <sysutil/video.h>
 #include <sys/systime.h>
+#include <vector>
+#include <ps3_fs.h>
 #include "d3d9_rsx_internal.h"
+
+extern "C" const char* Ps3UsbRoot();	// ps3_diag.cpp: first USB drive, or NULL
 
 namespace Ps3Gfx
 {
@@ -64,6 +68,45 @@ static int s_heldFrames, s_forcedRun;
 static unsigned s_skipped, s_forced;
 u32 s_frameSeq;
 enum { kLabelIndex = 255, kFrameLabel = 253 };
+
+// Frame capture: once the menu has settled (frame kCaptureFrame), and again every 1800
+// frames while USRDIR/rsx_capture.txt exists, one frame's draws are logged ([cap] lines)
+// and the finished picture is saved as thug-frame.bmp in USRDIR (and on a USB drive).
+bool s_capture;
+static const unsigned kCaptureFrame = 600;
+static bool s_captureRepeat;
+
+static void SaveBmp(const char* path, const u32* pixels, u32 w, u32 h, u32 pitch)
+{
+	FILE* f = fopen(path, "wb");
+	if (!f) { printf("[gfx] capture: couldn't write %s\n", path); return; }
+	const u32 rowBytes = w * 3, padded = (rowBytes + 3) & ~3u, dataSize = padded * h;
+	u8 hdr[54];
+	memset(hdr, 0, sizeof(hdr));
+	hdr[0] = 'B'; hdr[1] = 'M';
+	const u32 fileSize = 54 + dataSize;
+	const u32 fields[] = { fileSize, 0, 54, 40, w, h };
+	const int at[] = { 2, 6, 10, 14, 18, 22 };
+	for (int i = 0; i < 6; ++i) for (int b = 0; b < 4; ++b) hdr[at[i] + b] = (u8)(fields[i] >> (8 * b));
+	hdr[26] = 1; hdr[28] = 24;	// planes, bits per pixel
+	for (int b = 0; b < 4; ++b) hdr[34 + b] = (u8)(dataSize >> (8 * b));
+	fwrite(hdr, 1, 54, f);
+	std::vector<u8> row(padded, 0);
+	for (u32 y = 0; y < h; ++y)
+	{
+		const u32* src = (const u32*)((const u8*)pixels + (h - 1 - y) * pitch);	// BMP rows go bottom up
+		for (u32 x = 0; x < w; ++x)
+		{
+			const u32 c = src[x];	// A8R8G8B8 word
+			row[x * 3 + 0] = (u8)c;
+			row[x * 3 + 1] = (u8)(c >> 8);
+			row[x * 3 + 2] = (u8)(c >> 16);
+		}
+		fwrite(&row[0], 1, padded, f);
+	}
+	fclose(f);
+	printf("[gfx] capture: saved %s\n", path);
+}
 
 // A correct call to libgcm's segment callback (see the top of the file).
 static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 count)
@@ -216,6 +259,12 @@ static void FrameBegin()
 	CmdReserve(7 * 1024);
 	SetRenderTarget();
 	DrawFrameStart();
+	const unsigned frame = s_frames + 1;
+	if (frame == kCaptureFrame || (s_captureRepeat && frame > kCaptureFrame && (frame - kCaptureFrame) % 1800 == 0))
+	{
+		s_capture = true;
+		printf("[cap] frame %u: every draw follows, then the picture is saved\n", frame);
+	}
 }
 
 bool Init(D3DPRESENT_PARAMETERS* pp)
@@ -299,6 +348,11 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		s_cur = 0;
 		gcmResetFlipStatus();
 		s_ready = true;
+		{
+			char path[600];
+			snprintf(path, sizeof(path), "%s/rsx_capture.txt", Ps3Fs::AppDir());
+			s_captureRepeat = Ps3Fs::Exists(path);
+		}
 		if (!DrawInit())
 			GpuLog("draw set-up failed: frames will be cleared but not drawn");
 		printf("[gfx] RSX ready: %ux%u (stage 1: clears only, no drawing yet)\n", s_width, s_height);
@@ -332,6 +386,22 @@ void Present(IDirect3DDevice9*)
 		rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);	// the frame fence
 		// Flip at the next vsync. No gcmSetWaitFlip: the CPU checks the flip before the
 		// next frame (FlipGate), so nothing is queued behind a held flip.
+		if (s_capture)
+		{
+			s_capture = false;
+			if (WaitIdle("capture"))
+			{
+				char path[600];
+				snprintf(path, sizeof(path), "%s/thug-frame.bmp", Ps3Fs::AppDir());
+				SaveBmp(path, s_color[s_cur], s_width, s_height, s_pitch);
+				if (const char* usb = Ps3UsbRoot())
+				{
+					snprintf(path, sizeof(path), "%s/thug-frame.bmp", usb);
+					SaveBmp(path, s_color[s_cur], s_width, s_height, s_pitch);
+				}
+			}
+			Ps3Platform::FlushLog();
+		}
 		gcmSetFlip(s_ctx, s_cur);
 		rsxFlushBuffer(s_ctx);
 		s_flipPending = true;
