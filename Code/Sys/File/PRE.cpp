@@ -564,10 +564,23 @@ void PreFile::Reset()
 
 
 
+#ifdef __PLAT_PS3__
+static int s_ps3CrumbReads = 0;	// the level select crash: trace the next reads of a traced file
+#endif
+
 uint32 PreFile::Read(void *addr, uint32 count)
 {
 	
 	Dbg_AssertPtr(mp_activeFile);
+#ifdef __PLAT_PS3__
+	if (s_ps3CrumbReads > 0)
+	{
+		--s_ps3CrumbReads;
+		Ps3Platform::Trace("[pre] read %u bytes to %p: file %p, compressed %d, data %p, packed %p, position %d of %d; PRE buffer %p",
+			(unsigned)count, addr, (void*)mp_activeFile, mp_activeFile->compressedDataSize, (void*)mp_activeFile->pData,
+			(void*)mp_activeFile->pCompressedData, mp_activeFile->m_position, mp_activeFile->m_filesize, (void*)mp_buffer);
+	}
+#endif
 
 	int seek_offs = mp_activeFile->m_position;
 	unsigned int limit = mp_activeFile->m_filesize - seek_offs;
@@ -1244,6 +1257,7 @@ PreFile::FileHandle *PreMgr::pre_fopen(const char *name, const char *access, boo
 	PreFile::FileHandle *pHandle = sp_mgr->getContainedFile(name);
 #ifdef __PLAT_PS3__
 	if (ps3Crumbs) Ps3Platform::Trace("[pre] %s: %s", name, pHandle ? "found, opening" : "not in a PRE file");
+	if (ps3Crumbs && pHandle) s_ps3CrumbReads = 3;
 #endif
 	if (pHandle)
 	{
