@@ -62,6 +62,8 @@ void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
 #include <sys/systime.h>
+#include <gel/scripting/script.h>
+#include <gfx/DX9/NX/nx_init.h>
 #endif
 #ifdef __PLAT_PS3__
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
@@ -429,6 +431,20 @@ void		Manager::MainLoop( void )
 				s_ps3LastFrameTime = now;
 			}
 			g_ps3TraceTasks = s_ps3Frame <= 2;
+			// On a 16:9 picture, start in the game's own widescreen mode (the Xbox version
+			// did this when the dashboard was set to widescreen): a 16:9 projection and a
+			// wider view, instead of the 4:3 picture stretched across the screen. The
+			// screen mode can still be changed in the game's options.
+			if (s_ps3Frame == 2)
+			{
+				const float w = (float)NxXbox::EngineGlobals.backbuffer_width, h = (float)NxXbox::EngineGlobals.backbuffer_height;
+				const uint32 widescreen = Script::GenerateCRC("screen_setup_widescreen");
+				if (h > 0.0f && w / h > 1.5f && Script::ScriptExists(widescreen))
+				{
+					printf("[gfx] %.0fx%.0f picture: widescreen mode\n", w, h);
+					Script::RunScript(widescreen);
+				}
+			}
 			if (s_ps3Frame <= 5 || s_ps3Frame == 10 || s_ps3Frame == 30 || (s_ps3Frame <= 600 ? s_ps3Frame % 60 == 0 : s_ps3Frame % 600 == 0))
 			{
 				char text[48];
