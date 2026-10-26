@@ -308,7 +308,9 @@ static bool FlipGateTriple()
 {
 	if (s_firstFrame) { gcmResetFlipStatus(); s_firstFrame = false; return true; }
 	const s32 allowed = (s32)s_buffers - 2;	// the newest flip may still be waiting for its vsync
-	for (int t = 0; t < 60 && FlipsOutstanding() > allowed; ++t) usleep(250);	// up to one vsync
+	// Up to two vsyncs: one vsync (16.7 ms) is the most a flip should take, and the old limit
+	// of 60 x 250 us (15 ms) gave up just before it, dropping a frame now and then in play.
+	for (int t = 0; t < 140 && FlipsOutstanding() > allowed; ++t) usleep(250);
 	if (FlipsOutstanding() <= allowed) { s_forcedRun = 0; s_heldFrames = 0; return true; }
 	if (s_heldFrames < 60)
 	{
@@ -329,7 +331,7 @@ static bool FlipGate()
 	if (s_buffers > 2) return FlipGateTriple();
 	if (s_firstFrame) { gcmResetFlipStatus(); s_firstFrame = false; return true; }
 	if (!s_flipPending) return true;
-	for (int t = 0; t < 60 && gcmGetFlipStatus() != 0; ++t) usleep(250);	// up to one vsync
+	for (int t = 0; t < 140 && gcmGetFlipStatus() != 0; ++t) usleep(250);	// up to two vsyncs (see FlipGateTriple)
 	if (gcmGetFlipStatus() == 0) s_forcedRun = 0;
 	if (gcmGetFlipStatus() != 0 && s_heldFrames < 60)
 	{
