@@ -65,6 +65,10 @@ static void Read(void* outAddr, size_t size, size_t count, uint8_t*& pFP, bool i
 	}
 }
 
+#ifdef __PLAT_PS3__
+unsigned g_ps3SphereMeshes, g_ps3SphereGrown;	// bounding spheres checked / grown (reported per scene by p_nx.cpp)
+float g_ps3SphereWorst;
+#endif
 bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMysteryMeat* p_meat, const char* debug_name)
 {
 	Dbg_Assert(mp_geom);
@@ -274,6 +278,37 @@ bool CXboxSector::Load_Internal(void*& p_stream, bool is_file, NxXbox::VertexMys
 		);
 
 		PS3_SCENE_TRACE("[scene]   mesh %u done", m);
+#ifdef __PLAT_PS3__
+		// Objects blinked out at the screen edges, and drawing without the frustum test cured
+		// it: check the file's bounding sphere against the mesh's own vertices, and grow it to
+		// cover them where it doesn't (skinned meshes are in bone space, so left alone).
+		if (!p_vertex_weights)
+		{
+			float worst = 0.0f;
+			for (unsigned int lod_level = 0; lod_level < num_lod_index_levels; ++lod_level)
+				for (int i = 0; i < num_indices[lod_level]; ++i)
+				{
+					const unsigned idx = p_indices[lod_level][i];
+					if ((int)idx >= num_vertices) continue;
+					const float dx = p_vertex_positions[idx * 3] - cen[X], dy = p_vertex_positions[idx * 3 + 1] - cen[Y],
+						dz = p_vertex_positions[idx * 3 + 2] - cen[Z];
+					const float d2 = dx * dx + dy * dy + dz * dz;
+					if (d2 > worst) worst = d2;
+				}
+			worst = sqrtf(worst);
+			++g_ps3SphereMeshes;
+			if (worst > rad * 1.001f + 0.01f)
+			{
+				++g_ps3SphereGrown;
+				const float ratio = rad > 0.0f ? worst / rad : 1e9f;
+				if (ratio > g_ps3SphereWorst) g_ps3SphereWorst = ratio;
+				if (g_ps3SphereGrown <= 5)
+					Ps3Platform::Trace("[cull] %s mesh %u: sphere radius %.1f at (%.1f, %.1f, %.1f), but its vertices reach %.1f",
+						debug_name ? debug_name : "?", m, rad, cen[X], cen[Y], cen[Z], worst);
+				rad = worst;
+			}
+		}
+#endif
 		// Set the bounding data (sphere and box) for the mesh.
 		p_mesh->SetBoundingData(cen, rad, inf, sup);
 

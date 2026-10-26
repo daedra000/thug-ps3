@@ -897,6 +897,14 @@ CScene *CEngine::s_plat_load_scene( const char *p_name, CTexDict *p_tex_dict, bo
 	
 	File::Close( p_file );
 #ifdef __PLAT_PS3__
+	{
+		extern unsigned g_ps3SphereMeshes, g_ps3SphereGrown;
+		extern float g_ps3SphereWorst;
+		printf("[cull] %s: %u mesh bounding spheres checked, %u too small and grown (worst %.2fx)\n",
+			p_name, g_ps3SphereMeshes, g_ps3SphereGrown, g_ps3SphereWorst);
+		g_ps3SphereMeshes = g_ps3SphereGrown = 0;
+		g_ps3SphereWorst = 0.0f;
+	}
 	if (g_ps3SceneTrace > 0) Ps3Platform::Trace("[scene] %s: done, %d hierarchy objects", p_name, num_hierarchy_objects);
 	if (g_ps3SceneTrace > 0) --g_ps3SceneTrace;
 #endif
