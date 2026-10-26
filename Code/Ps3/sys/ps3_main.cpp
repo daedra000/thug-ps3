@@ -345,7 +345,6 @@ void Init(int argc, char** argv)
 	// stale pointer into memory given back kills the thread where PC would read old data
 	// (reVC-PS3 hit this). Keep the heap mapped; it is reused all the same, and it also saves
 	// the sbrk calls for the per-upload staging buffers.
-	mallopt(M_TRIM_THRESHOLD, 0x7fffffff);
 
 	// Unbuffered from the first line: nothing is lost if the next instruction crashes.
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -356,9 +355,24 @@ void Init(int argc, char** argv)
 	if (argc > 0 && argv && argv[0]) BootMark(argv[0]);
 	if (argc > 0)
 		Ps3Fs::SetAppPath(argv[0]);
-	OpenLog();
+	// Test switches for the level select crash (empty files in USRDIR).
+	{
+		char path[600];
+		snprintf(path, sizeof(path), "%s/no_mallopt.txt", Ps3Fs::AppDir());
+		if (Ps3Fs::Exists(path))
+			BootMark("no_mallopt.txt: newlib heap trimming left on");
+		else
+			mallopt(M_TRIM_THRESHOLD, 0x7fffffff);
+	}	OpenLog();
 	printf("MAIN STARTED\n");
-	InstallCrashHandler();
+	{
+		char path[600];
+		snprintf(path, sizeof(path), "%s/no_crash_handler.txt", Ps3Fs::AppDir());
+		if (Ps3Fs::Exists(path))
+			printf("[crash handler] no_crash_handler.txt: not installed (liblv2dbg not loaded)\n");
+		else
+			InstallCrashHandler();
+	}
 	printf("THUG PS3 (%s build), running from %s\n", PS3_HEADLESS ? "headless" : "normal", Ps3Fs::AppDir());
 	ReadDiagnosticSwitches();
 	if (NoThreads()) printf("[diag] nothreads.txt: no threads of our own; the game's CreateThread calls are refused\n");

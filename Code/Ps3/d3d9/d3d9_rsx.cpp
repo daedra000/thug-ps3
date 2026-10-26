@@ -560,8 +560,18 @@ void Shutdown()
 static sys_lwmutex_t s_deviceLock;
 static volatile bool s_deviceLockReady;
 
+static int s_deviceLockOff = -1;	// test switch: USRDIR/no_device_lock.txt
+
 void DeviceLock()
 {
+	if (s_deviceLockOff < 0)
+	{
+		char path[600];
+		snprintf(path, sizeof(path), "%s/no_device_lock.txt", Ps3Fs::AppDir());
+		s_deviceLockOff = Ps3Fs::Exists(path) ? 1 : 0;
+		if (s_deviceLockOff) printf("[gfx] no_device_lock.txt: the renderer runs without its lock\n");
+	}
+	if (s_deviceLockOff) return;
 	if (!s_deviceLockReady)
 	{
 		// First use is on the game thread at start-up, before the loading-bar timer runs.
@@ -578,6 +588,7 @@ void DeviceLock()
 
 void DeviceUnlock()
 {
+	if (s_deviceLockOff) return;
 	sysLwMutexUnlock(&s_deviceLock);
 }
 

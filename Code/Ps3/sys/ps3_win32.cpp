@@ -550,7 +550,14 @@ HANDLE CreateFileA(LPCSTR name, DWORD access, DWORD, LPSECURITY_ATTRIBUTES, DWOR
 
 	// A write-only file that will be (re)written whole (the only such CreateFile user is
 	// the memory card code, for saves): write it beside the real one, then swap in on close.
-	const bool replace = write && !(access & GENERIC_READ) &&
+	static int s_noAtomic = -1;	// test switch: USRDIR/no_atomic_saves.txt
+	if (s_noAtomic < 0)
+	{
+		char sw[600];
+		snprintf(sw, sizeof(sw), "%s/no_atomic_saves.txt", Ps3Fs::AppDir());
+		s_noAtomic = Ps3Fs::Exists(sw) ? 1 : 0;
+	}
+	const bool replace = !s_noAtomic && write && !(access & GENERIC_READ) &&
 		(disposition == OPEN_ALWAYS || disposition == CREATE_ALWAYS || disposition == CREATE_NEW);
 	char openPath[1100];
 	if (replace)
