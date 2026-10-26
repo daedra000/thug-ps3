@@ -388,6 +388,12 @@ void		Manager::MainLoop( void )
 				//++dword_69B6F0;
 				++s_mainLoopCounter;
 				//NxXbox::g_disableRendering = true;
+#ifdef __PLAT_PS3__
+				// Running behind the 60 Hz game clock: skip drawing this frame (at most 4 in a
+				// row) so the game logic catches up. Without this the game ran one logic step
+				// per drawn frame, so it went into slow motion whenever drawing took too long.
+				NxXbox::g_disableRendering = true;
+#endif
 			}
 		}
 		perf.QuadPart += __PAIR64__(v3, v4);

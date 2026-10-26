@@ -253,6 +253,13 @@ static void plat_post_render_DrawPrimitiveUP()
 // Done!
 void CEngine::s_plat_post_render( void )
 {
+#ifdef __PLAT_PS3__
+	// A frame skipped to catch up with the game clock (Mainloop.cpp): nothing to show.
+	if (NxXbox::g_disableRendering)
+	{
+		return;
+	}
+#endif
 	// No rendering should take place whilst the loading screen is visible.
 	if( !NxXbox::EngineGlobals.loadingscreen_visible )
 	{
@@ -498,7 +505,9 @@ void CEngine::s_plat_render_world( void )
 							DWORD stage_zero_mipfilter = 0;
 							// LWSS: Convert to DX9 Samplers
 							D3DDevice_GetSamplerState(0, D3DSAMP_MINFILTER, &stage_zero_minfilter);
-							D3DDevice_GetSamplerState(0, D3DSAMP_MIPFILTER, &stage_zero_minfilter);
+							// (kisak read this into stage_zero_minfilter, so the world was left with no
+							// mipmaps and the mip filter as its min filter: point sampling, gritty textures)
+							D3DDevice_GetSamplerState(0, D3DSAMP_MIPFILTER, &stage_zero_mipfilter);
 							D3DDevice_SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 							D3DDevice_SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 							//D3DDevice_GetTextureStageState(0, D3DTSS_MINFILTER, &stage_zero_minfilter);
