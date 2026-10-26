@@ -52,6 +52,17 @@ namespace Ps3Gfx
 	void ShaderReleased(IDirect3DPixelShader9* ps);
 
 	UINT VideoMemoryFree();
+
+	// The backend's lock (recursive). The D3D objects take it around their Lock calls, so the
+	// backend never releases a main-memory copy that is being handed out or written.
+	void DeviceLock();
+	void DeviceUnlock();
+	// The RSX backend frees an uploaded texture's or static vertex buffer's main-memory copy
+	// once it stops changing (m_dataReleased). These bring it back when the game locks the
+	// resource again: read back from GPU memory (contents false: D3DLOCK_DISCARD, zeroed).
+	// False only when there was no memory for it.
+	bool RestoreTextureData(IDirect3DTexture9* tex);
+	bool RestoreVertexBufferData(IDirect3DVertexBuffer9* vb, bool contents);
 }
 
 #endif // PS3_GFX_BACKEND_H

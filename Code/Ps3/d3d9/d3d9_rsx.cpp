@@ -20,6 +20,22 @@
 //   before starting a frame: while the system holds it the frame is skipped, and after
 //   about a second a frame is queued anyway (at most 20 in a row).
 // - A frame-fence label is written after each frame's commands.
+//
+// Display and depth buffers (the approach of the reVC PS3 port's ps3mem.cpp and the
+// PSL1GHT rsxtest_tile sample):
+// - Three display buffers by default. The CPU starts a frame once at most one flip is still
+//   waiting for its vsync (counted by a flip handler), so a frame that misses a vsync no
+//   longer holds the next one up. USRDIR/rsx_double_buffer.txt keeps two buffers and the
+//   old flip-status gate exactly as it was.
+// - Colour and depth buffers in tile regions: the memory controller spreads their rows over
+//   the memory banks, the depth buffer is compressed (Z32_SEPSTENCIL) and has ZCULL, which
+//   drops hidden fragments in blocks before they are shaded. Tiling is invisible to the CPU,
+//   the texture unit and the display, so nothing else changes but the pitch, which comes from
+//   the tiled pitch table (gcmGetTiledPitchSize). Tile regions start on 64 KB boundaries
+//   and cover whole 64 KB units of 32-row multiples; the display buffers' 1 MB alignment
+//   covers the first. ZCULL covers the depth buffer rounded up to 64 x 64 pixel blocks.
+//   USRDIR/rsx_notiles.txt turns all of it off (linear buffers, pitch width * 4, as before);
+//   USRDIR/rsx_no_zcull.txt keeps the tiles and compression but not ZCULL.
 
 #include <ps3_platform.h>
 
@@ -45,7 +61,7 @@ extern "C" const char* Ps3UsbRoot();	// ps3_diag.cpp: first USB drive, or NULL
 namespace Ps3Gfx
 {
 
-enum { kBuffers = 2 };
+enum { kMaxBuffers = 3 };
 static const u32 kCommandBufferSize = 256 * 1024;
 static const u32 kIoSize = 1024 * 1024;	// main memory mapped for the RSX: the command buffer only
 
@@ -53,11 +69,21 @@ gcmContextData* s_ctx;
 static void* s_ioBuffer;
 static bool s_ready;
 static u32 s_width = 1280, s_height = 720, s_pitch;
-static u32* s_color[kBuffers];
-static u32 s_colorOffset[kBuffers];
+static u32 s_buffers = kMaxBuffers;	// display buffers in use: 3, or 2 with rsx_double_buffer.txt
+static u32* s_color[kMaxBuffers];
+static u32 s_colorOffset[kMaxBuffers];
 static u32* s_depth;
 static u32 s_depthOffset, s_depthPitch;
 static u32 s_cur;
+// Tile regions: 0..2 the display buffers, 3 the depth buffer. ZCULL region 0 is the depth buffer.
+enum { kDepthTile = kMaxBuffers };
+static bool s_tiled;		// the display and depth buffers are in tile regions
+static bool s_zcomp;		// the depth buffer's tile region is compressed
+static bool s_zcull;		// ZCULL is bound to the depth buffer
+// Triple buffering: flips queued by Present, flips done (the flip handler counts them), and
+// flips given up on while the system held the display (see FlipGate).
+static u32 s_flipsQueued, s_flipsWaived;
+static volatile u32 s_flipsDone;
 static unsigned s_frames, s_draws;
 static unsigned s_segmentChanges;
 static u32 s_label = 1;
@@ -119,6 +145,14 @@ static void SaveBmp(const char* path, const u32* pixels, u32 w, u32 h, u32 pitch
 	printf("[gfx] capture: saved %s\n", path);
 }
 
+// The test switches: an empty file of that name in USRDIR.
+static bool FlagFile(const char* name)
+{
+	char path[600];
+	snprintf(path, sizeof(path), "%s/%s", Ps3Fs::AppDir(), name);
+	return Ps3Fs::Exists(path);
+}
+
 // A correct call to libgcm's segment callback (see the top of the file).
 static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 count)
 {
@@ -167,6 +201,11 @@ void CmdReserve(u32 words)
 u32 FramesDone()
 {
 	return *(vu32*)gcmGetLabelAddress(kFrameLabel);
+}
+
+bool ZcullActive()
+{
+	return s_zcull;
 }
 
 void GpuLog(const char* fmt, ...)
@@ -225,7 +264,7 @@ static void SetRenderTarget()
 	sf.depthLocation = GCM_LOCATION_RSX;
 	sf.depthOffset   = s_depthOffset;
 	sf.depthPitch    = s_depthPitch;
-	sf.type          = GCM_SURFACE_TYPE_LINEAR;
+	sf.type          = GCM_SURFACE_TYPE_LINEAR;	// also for tiled buffers: tiling is the memory controller's
 	sf.antiAlias     = GCM_SURFACE_CENTER_1;
 	sf.width         = s_width;
 	sf.height        = s_height;
@@ -240,8 +279,54 @@ static void SetRenderTarget()
 // (an XMB screenshot, say), the frame is skipped instead of waited for. After about a
 // second a frame is queued anyway: the screenshot only lets go once the game flips
 // again, and waiting for it froze the console for good (Grid Siege v2.6.5, v3.10.3).
+//
+// With three buffers the frame's buffer was last shown three flips ago, so it is free once
+// all but the newest queued flip have happened: the flip before last put another buffer on
+// screen, and flips happen in order. The flip handler counts them (as in the reVC port and
+// the PSL1GHT tiling sample); the hold and force rules are the same as with two buffers.
+static void FlipHandler(const u32 head)
+{
+	(void)head;
+	s_flipsDone = s_flipsDone + 1;
+}
+
+// Flips queued and not yet done, less those given up on while the display was held.
+static s32 FlipsOutstanding()
+{
+	s32 n = (s32)(s_flipsQueued - s_flipsDone - s_flipsWaived);
+	if (n < 0)
+	{
+		// Flips given up on have happened since (the system let the display go): stop
+		// discounting them, or later flips would be missed.
+		s_flipsWaived += (u32)n;
+		n = 0;
+	}
+	return n;
+}
+
+static bool FlipGateTriple()
+{
+	if (s_firstFrame) { gcmResetFlipStatus(); s_firstFrame = false; return true; }
+	const s32 allowed = (s32)s_buffers - 2;	// the newest flip may still be waiting for its vsync
+	for (int t = 0; t < 60 && FlipsOutstanding() > allowed; ++t) usleep(250);	// up to one vsync
+	if (FlipsOutstanding() <= allowed) { s_forcedRun = 0; s_heldFrames = 0; return true; }
+	if (s_heldFrames < 60)
+	{
+		if (++s_heldFrames == 30) GpuLog("frame %u: the system is holding the display", s_frames);
+		usleep(4000);	// the system has the display: give it the CPU too
+		return false;
+	}
+	if (s_forcedRun >= 20) { usleep(4000); return false; }	// the command buffer must not fill up
+	++s_forced;
+	++s_forcedRun;
+	s_flipsWaived += (u32)(FlipsOutstanding() - allowed);	// drawn into anyway, as with two buffers
+	s_heldFrames = 0;
+	return true;
+}
+
 static bool FlipGate()
 {
+	if (s_buffers > 2) return FlipGateTriple();
 	if (s_firstFrame) { gcmResetFlipStatus(); s_firstFrame = false; return true; }
 	if (!s_flipPending) return true;
 	for (int t = 0; t < 60 && gcmGetFlipStatus() != 0; ++t) usleep(250);	// up to one vsync
@@ -328,7 +413,20 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		}
 		s_width = res.width;
 		s_height = res.height;
+		const bool noTiles = FlagFile("rsx_notiles.txt");
+		const bool noZcull = FlagFile("rsx_no_zcull.txt");
+		const bool doubleBuffer = FlagFile("rsx_double_buffer.txt");
+		s_buffers = doubleBuffer ? 2 : kMaxBuffers;
+		// A tiled surface's pitch must come from the tiled pitch table (5120 bytes at 720p,
+		// 8192 at 1080p); the display takes it too.
+		s_tiled = !noTiles;
 		s_pitch = s_width * 4;
+		if (s_tiled)
+		{
+			const u32 p = gcmGetTiledPitchSize(s_width * 4);
+			if (p >= s_width * 4) s_pitch = p;
+			else { s_tiled = false; printf("[gfx] no tiled pitch for %u bytes: linear buffers\n", s_width * 4); }
+		}
 
 		// Idle the RSX before reconfiguring the video output.
 		CmdReserve(32);
@@ -356,26 +454,82 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		}
 		gcmSetFlipMode(GCM_FLIP_VSYNC);
 
-		for (int i = 0; i < kBuffers; ++i)
+		// A tile region covers whole 32-row groups and whole 64 KB units.
+		const u32 tileRows = (s_height + GCM_TILE_LOCAL_ALIGN_HEIGHT - 1) & ~(u32)(GCM_TILE_LOCAL_ALIGN_HEIGHT - 1);
+		const u32 colorBytes = s_tiled ? ((s_pitch * tileRows + GCM_TILE_ALIGN_SIZE - 1) & ~(u32)(GCM_TILE_ALIGN_SIZE - 1)) : s_pitch * s_height;
+		u32 tilesBound = 0;
+		for (u32 i = 0; i < s_buffers; ++i)
 		{
-			s_color[i] = (u32*)rsxMemalign(1024 * 1024, s_pitch * s_height);	// 1 MB: see the top of the file
+			s_color[i] = (u32*)rsxMemalign(1024 * 1024, colorBytes);	// 1 MB: see the top of the file (and 64 KB for a tile region)
+			if (!s_color[i] && s_buffers > 2 && i == 2)
+			{
+				// No room for a third buffer: two, with the old flip gate.
+				printf("[gfx] out of video memory for a third display buffer: double buffering\n");
+				s_buffers = 2;
+				break;
+			}
 			if (!s_color[i])
 			{
 				printf("[gfx] out of video memory for the display\n");
 				return false;
 			}
-			memset(s_color[i], 0, s_pitch * s_height);
+			memset(s_color[i], 0, colorBytes);
 			rsxAddressToOffset(s_color[i], &s_colorOffset[i]);
 			gcmSetDisplayBuffer(i, s_colorOffset[i], s_pitch, s_width, s_height);
+			if (s_tiled)
+			{
+				// A buffer whose region couldn't be set up stays linear: with the same pitch it
+				// is drawn and shown the same, only slower.
+				s32 r = gcmSetTileInfo(i, GCM_LOCATION_RSX, s_colorOffset[i], colorBytes, s_pitch, GCM_COMPMODE_DISABLED, 0, 0);
+				if (r == 0) r = gcmBindTile(i);
+				if (r == 0) tilesBound |= 1u << i;
+				else printf("[gfx] tile region %u for display buffer %u failed (%d): linear\n", i, i, (int)r);
+			}
 		}
-		s_depthPitch = s_width * 4;
-		s_depth = (u32*)rsxMemalign(1024 * 1024, s_depthPitch * s_height);
+		s_depthPitch = s_pitch;	// the same pitch table entry (4 bytes a pixel either way)
+		const u32 depthBytes = colorBytes;
+		s_depth = (u32*)rsxMemalign(1024 * 1024, depthBytes);
 		if (!s_depth)
 		{
 			printf("[gfx] out of video memory for the depth buffer\n");
 			return false;
 		}
 		rsxAddressToOffset(s_depth, &s_depthOffset);
+		if (s_tiled)
+		{
+			// Compressed depth (separate stencil), bank 2 as in the samples; if the compressed
+			// region is refused, a plain tiled one.
+			s32 r = gcmSetTileInfo(kDepthTile, GCM_LOCATION_RSX, s_depthOffset, depthBytes, s_depthPitch, GCM_COMPMODE_Z32_SEPSTENCIL, 0, 2);
+			if (r == 0) r = gcmBindTile(kDepthTile);
+			s_zcomp = r == 0;
+			if (r != 0)
+			{
+				printf("[gfx] compressed tile region for the depth buffer failed (%d): uncompressed\n", (int)r);
+				r = gcmSetTileInfo(kDepthTile, GCM_LOCATION_RSX, s_depthOffset, depthBytes, s_depthPitch, GCM_COMPMODE_DISABLED, 0, 2);
+				if (r == 0) r = gcmBindTile(kDepthTile);
+			}
+			if (r == 0) tilesBound |= 1u << kDepthTile;
+			else printf("[gfx] tile region for the depth buffer failed (%d): linear\n", (int)r);
+			// ZCULL over the depth buffer in 64 x 64 blocks; its memory holds 3 M pixels.
+			const u32 zw = (s_width + GCM_ZCULL_ALIGN_WIDTH - 1) & ~(u32)(GCM_ZCULL_ALIGN_WIDTH - 1);
+			const u32 zh = (s_height + GCM_ZCULL_ALIGN_HEIGHT - 1) & ~(u32)(GCM_ZCULL_ALIGN_HEIGHT - 1);
+			if (!noZcull && (tilesBound & (1u << kDepthTile)) && (s_depthOffset & (GCM_ZCULL_ALIGN_OFFSET - 1)) == 0 &&
+				zw * zh <= GCM_ZCULL_RAM_SIZE_MAX)
+			{
+				gcmSetZcull(0, s_depthOffset, zw, zh, 0, GCM_ZCULL_Z24S8, GCM_SURFACE_CENTER_1, GCM_ZCULL_LESS, GCM_ZCULL_LONES,
+					GCM_SCULL_SFUNC_LESS, 1, 0xff);
+				s_zcull = true;
+			}
+		}
+		s_tiled = tilesBound != 0;
+		const u32 colorMask = (1u << s_buffers) - 1;
+		printf("[gfx] display: %u buffers (%s), %ux%u, pitch %u, %s; depth %s%s, ZCULL %s; "
+			"switches: rsx_double_buffer.txt %s, rsx_notiles.txt %s, rsx_no_zcull.txt %s\n",
+			s_buffers, s_buffers > 2 ? "triple, flip handler gate" : "double, flip status gate", s_width, s_height, s_pitch,
+			(tilesBound & colorMask) == colorMask ? "tiled" : (tilesBound & colorMask) ? "partly tiled" : "linear",
+			(tilesBound & (1u << kDepthTile)) ? "tiled" : "linear", s_zcomp ? " and compressed" : "", s_zcull ? "on" : "off",
+			doubleBuffer ? "present" : "absent", noTiles ? "present" : "absent", noZcull ? "present" : "absent");
+		if (s_buffers > 2) gcmSetFlipHandler(FlipHandler);
 
 		*(vu32*)gcmGetLabelAddress(kFrameLabel) = 0;	// the frame fence starts clear
 		s_cur = 0;
@@ -481,7 +635,8 @@ void Present(IDirect3DDevice9*)
 		gcmSetFlip(s_ctx, s_cur);
 		rsxFlushBuffer(s_ctx);
 		s_flipPending = true;
-		s_cur = (s_cur + 1) % kBuffers;
+		++s_flipsQueued;
+		s_cur = (s_cur + 1) % s_buffers;
 	}
 	if (s_frames <= 3 || (s_frames % 600) == 0)
 		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held)",
@@ -529,6 +684,7 @@ void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags
 		if (x1 <= x0 || y1 <= y0) continue;
 		CmdReserve(32);
 		if (s_skipFrame) break;	// no room left: CmdReserve dropped the frame
+		if (mask & GCM_CLEAR_Z) ZcullDepthClear(x0, y0, x1, y1);
 		rsxSetScissor(s_ctx, (u16)x0, (u16)y0, (u16)(x1 - x0), (u16)(y1 - y0));
 		rsxClearSurface(s_ctx, mask);
 	}

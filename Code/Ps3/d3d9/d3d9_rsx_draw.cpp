@@ -1,8 +1,10 @@
 // THUG PS3: RSX resources, programs, render state and draws for the D3D9 layer.
 //
 // - Resources: the D3D9 objects keep a main-memory copy of every texture, vertex and
-//   index buffer (d3d9_device.cpp). The RSX gets its own copy in RSX local memory, made
-//   when a draw first needs it and again after the game changes it. Buffers changed
+//   index buffer (d3d9_device.cpp); textures and static vertex buffers that stop changing
+//   give theirs up (see "Main-memory copies of uploaded resources"). The RSX gets its own
+//   copy in RSX local memory, made when a draw first needs it and again after the game
+//   changes it. Buffers changed
 //   while the RSX may still be reading them, and the *UP draws' data, go through a
 //   per-frame ring (three frames deep; the frame fence makes the slot three frames back
 //   free). A buffer rewritten while the RSX may still read it is renamed into the ring for
@@ -31,6 +33,9 @@
 //   rsx_flip_cull.txt        swap which triangle winding is culled (back to the old mapping)
 //   rsx_no_draw.txt          clear and flip only, draw nothing
 //   rsx_depth_clamp.txt      clamp depth instead of clipping at the near and far planes
+//   rsx_keep_texture_data.txt  keep textures' main-memory copies after upload
+//   rsx_keep_buffer_data.txt   keep static vertex buffers' main-memory copies after upload
+//   (and in d3d9_rsx.cpp: rsx_notiles.txt, rsx_no_zcull.txt, rsx_double_buffer.txt)
 
 #include <ps3_platform.h>
 
@@ -39,6 +44,7 @@
 #include <ps3_gfx_backend.h>
 #include <ps3_fs.h>
 #include "d3d9_rsx_internal.h"
+#include "d3d9_swizzle.h"
 #include "../rsx/rsx_asm.h"
 #include "../rsx/rsx_shadergen.h"
 #include "../rsx/rsx_pipeline.h"
@@ -83,7 +89,7 @@ static struct Stats
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned long long ringBytes;
 } s_stats;
-static char s_statsLine[640];
+static char s_statsLine[896];
 
 static bool FlagFile(const char* name)
 {
@@ -371,7 +377,14 @@ struct RsxTexture
 	// fonts): taken back once the RSX is done with them, instead of a new block and a
 	// deferred free on every update.
 	struct Spare { u8* mem; u32 offset, bytes, usedPlusOne; } spare[2];
+	// How the last upload laid the levels out in mem, for reading them back (RestoreTextureData).
+	u8 layout;			// kLayoutLinear, kLayoutSwizzled or kLayoutCompressed
+	u8 bpp;				// bytes a texel (a 4x4 block for DXT)
+	u32 levels;			// levels uploaded, packed one after another
+	u32 linearPitch;	// row pitch of linear levels
+	u32 total;			// bytes uploaded
 };
+enum { kLayoutLinear, kLayoutSwizzled, kLayoutCompressed };
 
 static const RsxTexture* s_bound[4];
 static DWORD s_boundSampler[4][4];
@@ -401,28 +414,6 @@ static u32 Remap(u32 a, u32 r, u32 g, u32 b, u32 typeA = GCM_TEXTURE_REMAP_TYPE_
 static u32 IdentityRemap()
 {
 	return Remap(GCM_TEXTURE_REMAP_COLOR_A, GCM_TEXTURE_REMAP_COLOR_R, GCM_TEXTURE_REMAP_COLOR_G, GCM_TEXTURE_REMAP_COLOR_B);
-}
-
-// NV40 swizzle of a w x h image: x and y bits interleaved from the bottom (x first)
-// while both dimensions have bits left, then the larger dimension's remaining bits.
-// xt holds w entries, yt h entries.
-static void SwizzleTables(u32 w, u32 h, u32* xt, u32* yt)
-{
-	memset(xt, 0, w * sizeof(u32));
-	memset(yt, 0, h * sizeof(u32));
-	int xbit[16], ybit[16], c = 0;
-	for (int i = 0; i < 16; ++i)
-	{
-		xbit[i] = ybit[i] = -1;
-		if ((1u << i) < w) xbit[i] = c++;
-		if ((1u << i) < h) ybit[i] = c++;
-	}
-	for (u32 x = 0; x < w; ++x)
-		for (int i = 0; i < 16; ++i)
-			if (xbit[i] >= 0 && (x >> i) & 1) xt[x] |= 1u << xbit[i];
-	for (u32 y = 0; y < h; ++y)
-		for (int i = 0; i < 16; ++i)
-			if (ybit[i] >= 0 && (y >> i) & 1) yt[y] |= 1u << ybit[i];
 }
 
 struct FormatInfo { u32 gcm, remap, bpp; bool compressed, ok; };
@@ -499,6 +490,115 @@ static void RetireTextureBlock(RsxTexture* r, u32 total)
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Main-memory copies of uploaded resources
+// ---------------------------------------------------------------------------
+// A texture or static vertex buffer the game has stopped changing exists twice, in main RAM
+// (the D3D object's m_data) and in RSX memory. Once the RSX copy has gone unchanged for
+// kReleaseAfterFrames frames, the main-memory copy is freed. If the game locks the resource
+// again after that, the D3D object asks for its copy back (RestoreTextureData,
+// RestoreVertexBufferData, with the device lock held): it is read back from RSX memory (and
+// de-swizzled), once; from then on the resource keeps its copy (m_keepData). Not released:
+// render targets, dynamic resources, anything locked at the time, textures whose upload left
+// levels out (non power-of-two textures upload their first level only) or whose format isn't
+// uploaded, and index buffers (draws scan their indices for the range of a changing vertex
+// buffer; without them the whole buffer would go through the ring).
+// Switches: rsx_keep_texture_data.txt and rsx_keep_buffer_data.txt keep every copy.
+enum { kReleaseAfterFrames = 30 };
+static bool s_keepTextureData, s_keepBufferData;
+static struct ResidencyStats
+{
+	unsigned texReleased, texRestored, vbReleased, vbRestored;
+	unsigned long long texReleasedBytes, vbReleasedBytes;	// main RAM given back so far, less what came back
+} s_residency;
+
+// Frames since a resource's RSX copy was last written (stamp is frame + 1; 0: never).
+static u32 FramesSince(u32 plusOne)
+{
+	return plusOne ? s_frameSeq + 1 - plusOne : 0;
+}
+
+static void ReleaseTextureData(IDirect3DTexture9* t, RsxTexture* r)
+{
+	if (s_keepTextureData || t->m_keepData || t->m_lockDepth || t->m_dirty || (t->m_usage & D3DUSAGE_DYNAMIC)) return;
+	if (!r->valid || !r->mem || r->levels != t->m_levels || r->quickUploads) return;
+	if (FramesSince(r->uploadedPlusOne) < kReleaseAfterFrames) return;
+	free(t->m_data);
+	t->m_data = NULL;
+	t->m_dataReleased = true;
+	::g_ps3TextureCount = ::g_ps3TextureCount - 1;
+	::g_ps3TextureRamBytes = ::g_ps3TextureRamBytes - t->m_size;
+	++s_residency.texReleased;
+	s_residency.texReleasedBytes += t->m_size;
+}
+
+// Unpacks the RSX copy's levels (laid out as RsxTexture records) into data, the D3D layout.
+static bool ReadBackTexture(const IDirect3DTexture9* t, const RsxTexture* r, u8* data)
+{
+	// One sequential read of RSX memory (the CPU reads it slowly, scattered reads slower still).
+	u8* staging = (u8*)malloc(r->total ? r->total : 1);
+	if (!staging) return false;
+	memcpy(staging, r->mem, r->total);
+	u32 at = 0;
+	bool ok = true;
+	for (u32 l = 0; l < r->levels && ok; ++l)
+	{
+		const u32 lw = t->LevelWidth(l), lh = t->LevelHeight(l);
+		u8* dst = data + t->m_offsets[l];
+		const u32 dstPitch = t->LevelPitch(l);
+		const u8* src = staging + at;
+		u32 size;
+		if (r->layout == kLayoutCompressed)
+		{
+			const u32 rowBytes = ((lw + 3) / 4) * r->bpp, rows = (lh + 3) / 4;
+			size = rowBytes * rows;
+			for (u32 y = 0; y < rows; ++y) memcpy(dst + y * dstPitch, src + y * rowBytes, rowBytes);
+		}
+		else if (r->layout == kLayoutSwizzled)
+		{
+			size = lw * lh * r->bpp;
+			u32* xt = (u32*)malloc((lw + lh) * sizeof(u32));
+			if (!xt) { ok = false; break; }
+			u32* yt = xt + lw;
+			Ps3Swizzle::Tables(lw, lh, xt, yt);
+			ok = Ps3Swizzle::Deswizzle(dst, dstPitch, src, lw, lh, r->bpp, xt, yt);
+			free(xt);
+		}
+		else
+		{
+			size = r->linearPitch * lh;
+			for (u32 y = 0; y < lh; ++y) memcpy(dst + y * dstPitch, src + y * r->linearPitch, lw * r->bpp);
+		}
+		at += size;
+		if (at > r->total) ok = false;
+	}
+	free(staging);
+	return ok;
+}
+
+bool RestoreTextureData(IDirect3DTexture9* t)
+{
+	DeviceGuard guard;
+	if (t->m_data) { t->m_dataReleased = false; return true; }
+	u8* data = (u8*)memalign(128, t->m_size ? t->m_size : 128);
+	if (!data) { LogLimited("texrestoreoom", 3, "out of memory for %u bytes to read a %ux%u texture back into", t->m_size, t->m_width, t->m_height); return false; }
+	memset(data, 0, t->m_size);
+	const RsxTexture* r = (const RsxTexture*)t->m_backend;
+	if (!r || !r->valid || !r->mem || r->renderTarget || r->levels != t->m_levels || !ReadBackTexture(t, r, data))
+		LogLimited("texrestorefail", 3, "a released %ux%u texture couldn't be read back from RSX memory: it starts blank", t->m_width, t->m_height);
+	else
+		LogLimited("texrestore", 10, "a %ux%u texture (format %d) was locked again after its main-memory copy was released: read back from RSX memory (%u KB), kept from now on",
+			t->m_width, t->m_height, (int)t->m_format, t->m_size / 1024);
+	t->m_data = data;
+	t->m_dataReleased = false;
+	t->m_keepData = true;
+	::g_ps3TextureCount = ::g_ps3TextureCount + 1;
+	::g_ps3TextureRamBytes = ::g_ps3TextureRamBytes + t->m_size;
+	++s_residency.texRestored;
+	s_residency.texReleasedBytes -= t->m_size;
+	return true;
+}
+
 // Makes the RSX copy of a texture current. Returns NULL if it can't be drawn.
 static RsxTexture* Texture(IDirect3DTexture9* t)
 {
@@ -510,7 +610,11 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		LogLimited("rtlock", 1, "a render-target texture was locked and written by the CPU: not shown");
 		t->m_dirty = false;
 	}
-	if (r && r->valid && (!t->m_dirty || r->renderTarget)) return r;
+	if (r && r->valid && (!t->m_dirty || r->renderTarget))
+	{
+		if (t->m_data && !r->renderTarget) ReleaseTextureData(t, r);
+		return r;
+	}
 	if (!r)
 	{
 		r = NewRecord<RsxTexture>();
@@ -598,21 +702,10 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 			u32* xt = (u32*)malloc((lw + lh) * sizeof(u32));
 			if (!xt) { free(staging); return NULL; }
 			u32* yt = xt + lw;
-			SwizzleTables(lw, lh, xt, yt);
-			// Typed copies for the common sizes: a memcpy call per texel made big uploads slow.
-			for (u32 y = 0; y < lh; ++y)
-			{
-				const u8* row = src + y * srcPitch;
-				const u32 yo = yt[y];
-				if (fi.bpp == 4)
-					for (u32 x = 0; x < lw; ++x) ((u32*)dst)[xt[x] | yo] = ((const u32*)row)[x];
-				else if (fi.bpp == 2)
-					for (u32 x = 0; x < lw; ++x) ((u16*)dst)[xt[x] | yo] = ((const u16*)row)[x];
-				else if (fi.bpp == 1)
-					for (u32 x = 0; x < lw; ++x) dst[xt[x] | yo] = row[x];
-				else
-					for (u32 x = 0; x < lw; ++x) memcpy(dst + (xt[x] | yo) * fi.bpp, row + x * fi.bpp, fi.bpp);
-			}
+			Ps3Swizzle::Tables(lw, lh, xt, yt);
+			// Typed copies in 8 x 8 blocks (d3d9_swizzle.h): a memcpy call per texel made big
+			// uploads slow, and row order scattered the stores across the whole level.
+			Ps3Swizzle::Swizzle(dst, src, srcPitch, lw, lh, fi.bpp, xt, yt);
 			free(xt);
 		}
 		else
@@ -643,6 +736,11 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	r->desc.offset = r->offset;
 	r->valid = true;
 	r->uploadedPlusOne = s_frameSeq + 1;
+	r->layout = (u8)(fi.compressed ? kLayoutCompressed : swizzle ? kLayoutSwizzled : kLayoutLinear);
+	r->bpp = (u8)fi.bpp;
+	r->levels = levels;
+	r->linearPitch = linearPitch;
+	r->total = total;
 	t->m_dirty = false;
 	++s_stats.uploads;
 	s_stats.uploadKB += total / 1024;
@@ -758,6 +856,7 @@ struct RsxBuffer
 	u8* ring;
 	u32 ringLo, ringHi;
 	bool stale;			// the newest data is only in this frame's ring copy
+	u32 changedPlusOne;	// frame of the last change the CPU made (uploaded or renamed), +1
 };
 
 // A fresh ring copy of the buffer for this frame, nothing copied into it yet.
@@ -814,6 +913,14 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 	}
 	const u32 now = s_frameSeq;
 	const bool idle = !GpuMayUse(b->persistentUsed);	// the RSX is done with the persistent copy
+	if (!data && (!b->mem || dirty || b->stale))
+	{
+		// A released main-memory copy (ReleaseVertexBufferData) is only ever let go of while the
+		// RSX copy is complete and current, and comes back before the game can change it.
+		LogLimited("bufnodata", 3, "a %u-byte buffer has no main-memory copy to upload from: draw skipped", size);
+		return false;
+	}
+	if (dirty || !b->mem) b->changedPlusOne = now + 1;
 	if (needHi > size) needHi = size;
 	if (needLo > needHi) needLo = needHi;
 
@@ -891,6 +998,48 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 		*offset = b->offset;
 		b->persistentUsed = now + 1;	// only uses of the persistent copy keep it busy
 	}
+	return true;
+}
+
+// A static vertex buffer's main-memory copy (see "Main-memory copies of uploaded resources"),
+// after a draw that used the persistent RSX copy.
+static void ReleaseVertexBufferData(IDirect3DVertexBuffer9* vb)
+{
+	const RsxBuffer* b = (const RsxBuffer*)vb->m_backend;
+	if (s_keepBufferData || !vb->m_data || !b || !b->mem || b->stale || b->size < vb->m_size) return;
+	if (vb->m_keepData || vb->m_lockDepth || vb->m_dirty || (vb->m_usage & D3DUSAGE_DYNAMIC)) return;
+	if (FramesSince(b->changedPlusOne) < kReleaseAfterFrames) return;
+	free(vb->m_data);
+	vb->m_data = NULL;
+	vb->m_dataReleased = true;
+	++s_residency.vbReleased;
+	s_residency.vbReleasedBytes += vb->m_size;
+}
+
+bool RestoreVertexBufferData(IDirect3DVertexBuffer9* vb, bool contents)
+{
+	DeviceGuard guard;
+	if (vb->m_data) { vb->m_dataReleased = false; return true; }
+	u8* data = (u8*)memalign(128, vb->m_size ? vb->m_size : 128);
+	if (!data) { LogLimited("vbrestoreoom", 3, "out of memory for %u bytes to read a vertex buffer back into", vb->m_size); return false; }
+	const RsxBuffer* b = (const RsxBuffer*)vb->m_backend;
+	if (!contents)
+		memset(data, 0, vb->m_size);	// D3DLOCK_DISCARD: the old contents are not wanted
+	else if (b && b->mem && !b->stale && b->size >= vb->m_size)
+	{
+		memcpy(data, b->mem, vb->m_size);	// RSX memory, read by the CPU: slow, but once per buffer
+		LogLimited("vbrestore", 10, "a static %u-byte vertex buffer was locked again after its main-memory copy was released: read back from RSX memory, kept from now on", vb->m_size);
+	}
+	else
+	{
+		memset(data, 0, vb->m_size);
+		LogLimited("vbrestorefail", 3, "a released %u-byte vertex buffer couldn't be read back from RSX memory: it starts blank", vb->m_size);
+	}
+	vb->m_data = data;
+	vb->m_dataReleased = false;
+	vb->m_keepData = true;
+	++s_residency.vbRestored;
+	s_residency.vbReleasedBytes -= vb->m_size;
 	return true;
 }
 
@@ -1229,9 +1378,48 @@ struct GpuState
 	u32 offsetEnable;
 	float offsetFactor, offsetUnits;
 	u32 shade;
+	u32 zcull;		// ZCULL on for this draw (see below)
 };
 static GpuState s_state;
 static bool s_stateValid;
+
+// ZCULL keeps, per block of the display's depth buffer, the farthest depth there, and throws
+// out fragments behind it, which is right for LESS, LEQUAL and EQUAL tests (fragments behind
+// everything fail those anyway). So it is on only for those, and only while the display's
+// depth buffer is bound (the region is that buffer's). A draw that writes depth farther than
+// what is there (GREATER, GEQUAL, NOTEQUAL or ALWAYS with writes on), or a depth clear of
+// part of the buffer, leaves ZCULL's values behind the buffer's: they are rebuilt
+// (invalidated) before the next draw that uses ZCULL. A clear of the whole buffer resets them.
+static bool s_zcullStale;
+static u32 s_displayDepthOffset;	// the display's depth buffer (DrawInit)
+static SurfaceDesc s_target;	// the bound target (ApplyTarget)
+static bool s_targetValid;
+
+static bool OnDisplayDepth()
+{
+	return s_targetValid && s_target.hasDepth && s_target.depthOffset == s_displayDepthOffset;
+}
+
+static bool FarDepthWrite(DWORD func)
+{
+	return func == D3DCMP_GREATER || func == D3DCMP_GREATEREQUAL || func == D3DCMP_NOTEQUAL || func == D3DCMP_ALWAYS;
+}
+
+void ZcullDepthClear(s32 x0, s32 y0, s32 x1, s32 y1)
+{
+	if (!ZcullActive() || !OnDisplayDepth()) return;
+	SurfaceDesc disp;
+	memset(&disp, 0, sizeof(disp));
+	DisplaySurface(&disp);
+	if (x0 <= 0 && y0 <= 0 && x1 >= (s32)disp.width && y1 >= (s32)disp.height)
+	{
+		// The whole buffer: the clear resets ZCULL too, if it is on while clearing.
+		rsxSetZCullEnable(s_ctx, GCM_TRUE, GCM_FALSE);
+		s_zcullStale = false;
+	}
+	else
+		s_zcullStale = true;
+}
 
 struct ViewState { D3DVIEWPORT9 vp; RECT scissor; u32 scissorOn; };
 static ViewState s_view;
@@ -1299,6 +1487,20 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 	s.offsetFactor = slope;
 	s.offsetUnits = bias * 16777215.0f;
 	s.shade = rs[D3DRS_SHADEMODE] == D3DSHADE_FLAT ? GCM_SHADE_MODEL_FLAT : GCM_SHADE_MODEL_SMOOTH;
+	const bool zcull = ZcullActive();
+	if (zcull)
+	{
+		const bool onDisplay = OnDisplayDepth();
+		const DWORD f = s.depthFunc;
+		s.zcull = s.depthTest && onDisplay && (f == D3DCMP_LESS || f == D3DCMP_LESSEQUAL || f == D3DCMP_EQUAL);
+		if (s.zcull && s_zcullStale)
+		{
+			CmdReserve(8);
+			rsxSetZCullInvalidate(s_ctx);
+			s_zcullStale = false;
+		}
+		if (s.depthWrite && onDisplay && FarDepthWrite(f)) s_zcullStale = true;	// this draw (ZCULL off)
+	}
 
 	if (s_stateValid && !memcmp(&s, &s_state, sizeof(s))) return;
 	// Only the blocks that changed are sent; everything after a frame start, a new render
@@ -1362,6 +1564,11 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 		memcmp(&s.offsetUnits, &o.offsetUnits, sizeof(float))))
 		rsxSetPolygonOffset(s_ctx, s.offsetFactor, s.offsetUnits);
 	if (all || s.shade != o.shade) rsxSetShadeModel(s_ctx, s.shade);
+	if (zcull && (all || s.zcull != o.zcull))
+	{
+		if (all) rsxSetZCullControl(s_ctx, GCM_ZCULL_LESS, GCM_ZCULL_LONES);
+		rsxSetZCullEnable(s_ctx, s.zcull ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
+	}
 	s_state = s;
 	s_stateValid = true;
 }
@@ -1511,7 +1718,7 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 	const u8* v0 = NULL;
 	if (call.vertexData) v0 = (const u8*)call.vertexData + (call.indexed ? call.minIndex * stride : 0);
 	else if (dev->m_streams[0])
-		v0 = dev->m_streams[0]->m_data + dev->m_streamOffset[0] + (call.indexed ? call.baseVertex * stride : call.startVertex * stride);
+		v0 = dev->m_streams[0]->m_data ? dev->m_streams[0]->m_data + dev->m_streamOffset[0] + (call.indexed ? call.baseVertex * stride : call.startVertex * stride) : NULL;	// NULL: released (see ReleaseVertexBufferData)
 	if (v0)
 	{
 		float p[4] = { 0, 0, 0, 0 };
@@ -1724,6 +1931,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 		}
 		u32 off;
 		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, vLo, vHi, &off)) return false;
+		if (vb->m_data) ReleaseVertexBufferData(vb);
 		vbase = off + dev->m_streamOffset[0];
 		if (call.indexed)
 		{
@@ -1785,9 +1993,6 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 // ---------------------------------------------------------------------------
 // Surfaces the game creates on their own (CreateRenderTarget, CreateDepthStencilSurface).
 struct RsxSurface { u8* mem; u32 offset, pitch; u32 usedPlusOne; };
-
-static SurfaceDesc s_target;
-static bool s_targetValid;
 
 // RSX memory behind a D3D surface: a render-target texture's level 0, or a standalone surface.
 static bool SurfaceMemory(IDirect3DSurface9* surf, u32* offset, u32* pitch)
@@ -1931,6 +2136,10 @@ bool DrawInit()
 	if (s_forceLinear) GpuLog("rsx_linear_textures.txt: textures stay linear");
 	if (s_flipCull) GpuLog("rsx_flip_cull.txt: the old cull mapping");
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
+	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
+	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
+	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
+		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
 
 	s_ring = (u8*)LocalAlloc(kRingSize * kRingFrames, 1024 * 1024, &s_ringOffset);
 	if (!s_ring || !MakeWhite())
@@ -1950,6 +2159,12 @@ bool DrawInit()
 	                           GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE);
 	rsxSetColorMaskMrt(s_ctx, 0);
 	s_attribMask = 0xFFFFFFFF;
+	{
+		SurfaceDesc disp;
+		memset(&disp, 0, sizeof(disp));
+		DisplaySurface(&disp);
+		s_displayDepthOffset = disp.depthOffset;
+	}
 	s_drawReady = true;
 	GpuLog("draw path ready: %u KB frame ring x %d in RSX memory", kRingSize / 1024, kRingFrames);
 	return true;
@@ -1987,11 +2202,13 @@ const char* DrawStats()
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
 		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u RSX frees waiting; "
-		"%u textures, %u KB of them in main RAM",
+		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
 		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, (unsigned)s_deferredCount,
-		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024));
+		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
+		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
+		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
 	memset(&s_stats, 0, sizeof(s_stats));
 	s_stats.programs = programs;

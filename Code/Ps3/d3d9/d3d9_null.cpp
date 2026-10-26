@@ -54,6 +54,12 @@ void ShaderReleased(IDirect3DPixelShader9*) {}
 
 UINT VideoMemoryFree() { return 200 * 1024 * 1024; }
 
+// Nothing is uploaded, so no main-memory copy is ever released and nothing needs locking.
+void DeviceLock() {}
+void DeviceUnlock() {}
+bool RestoreTextureData(IDirect3DTexture9* tex) { tex->m_dataReleased = false; return tex->m_data != NULL; }
+bool RestoreVertexBufferData(IDirect3DVertexBuffer9* vb, bool) { vb->m_dataReleased = false; return vb->m_data != NULL; }
+
 } // namespace Ps3Gfx
 
 #endif // PS3_HEADLESS

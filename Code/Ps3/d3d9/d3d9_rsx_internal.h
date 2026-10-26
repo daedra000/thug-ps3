@@ -43,6 +43,11 @@ struct DeviceGuard
 	void DisplaySurface(SurfaceDesc* out);			// this frame's back buffer and the depth buffer
 	bool ApplyTarget(IDirect3DDevice9* dev, bool* hasDepth);	// binds the device's render target; false: can't draw there
 	void InvalidateDrawState();						// d3d9_rsx.cpp changed state behind the draw module's back
+	// ZCULL on the display's depth buffer (d3d9_rsx.cpp sets it up; off with rsx_notiles.txt or
+	// rsx_no_zcull.txt). The draw module turns it on and off per draw and is told before each
+	// depth clear of the bound target's [x0, x1) x [y0, y1).
+	bool ZcullActive();
+	void ZcullDepthClear(s32 x0, s32 y0, s32 x1, s32 y1);
 }
 
 #endif // PS3_D3D9_RSX_INTERNAL_H

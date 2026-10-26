@@ -1,5 +1,8 @@
 // THUG PS3: D3D9 objects (see d3d9.h). All state and resource data live here in
-// main memory; Ps3Gfx (the backend) mirrors what it needs onto the RSX.
+// main memory; Ps3Gfx (the backend) mirrors what it needs onto the RSX. The RSX backend may
+// free the main-memory copy of a texture or static vertex buffer once it has uploaded it and
+// it stops changing; locking the resource again brings the copy back (read back from RSX
+// memory, see d3d9_rsx_draw.cpp).
 
 #include <d3d9.h>
 #include <d3dx9.h>
@@ -161,8 +164,8 @@ HRESULT IDirect3DSurface9::GetContainer(REFIID, void** pp)
 // Textures
 // ---------------------------------------------------------------------------
 // Main-memory copies held by textures (each also has its own copy in RSX memory), for the
-// [gfx] frame lines in the log: how much freeing the copy after upload would save. Only
-// copies that exist are counted, so a render target without one adds nothing.
+// [gfx] frame lines in the log. Only copies that exist are counted: a render target without
+// one, or a texture whose copy the backend released after upload, adds nothing.
 volatile unsigned g_ps3TextureCount;
 volatile unsigned long long g_ps3TextureRamBytes;
 
@@ -184,7 +187,8 @@ static bool TextureBits(IDirect3DTexture9* t)
 
 IDirect3DTexture9::IDirect3DTexture9(UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool)
 	: IDirect3DBaseTexture9(D3DRTYPE_TEXTURE), m_width(w), m_height(h), m_levels(0), m_usage(usage),
-	  m_format(fmt), m_pool(pool), m_data(NULL), m_size(0), m_dirty(true), m_backend(NULL)
+	  m_format(fmt), m_pool(pool), m_data(NULL), m_size(0), m_dirty(true), m_backend(NULL),
+	  m_lockDepth(0), m_dataReleased(false), m_keepData(false)
 {
 	if (w == 0) w = m_width = 1;
 	if (h == 0) h = m_height = 1;
@@ -258,7 +262,14 @@ HRESULT IDirect3DTexture9::GetSurfaceLevel(UINT level, IDirect3DSurface9** pp)
 HRESULT IDirect3DTexture9::LockRect(UINT level, D3DLOCKED_RECT* r, const RECT* rect, DWORD)
 {
 	if (level >= m_levels) return D3DERR_INVALIDCALL;
-	if (!TextureBits(this))
+	// Under the backend's lock: it may release the copy of a texture it has uploaded (and
+	// reads it back here if so), but never while a lock is open.
+	Ps3Gfx::DeviceLock();
+	bool ok = m_dataReleased ? Ps3Gfx::RestoreTextureData(this) : true;
+	if (ok) ok = TextureBits(this);	// render targets get theirs on their first lock
+	if (ok) ++m_lockDepth;
+	Ps3Gfx::DeviceUnlock();
+	if (!ok)
 	{
 		r->pBits = NULL;
 		r->Pitch = 0;
@@ -280,7 +291,10 @@ HRESULT IDirect3DTexture9::LockRect(UINT level, D3DLOCKED_RECT* r, const RECT* r
 
 HRESULT IDirect3DTexture9::UnlockRect(UINT)
 {
+	Ps3Gfx::DeviceLock();
+	if (m_lockDepth) --m_lockDepth;
 	m_dirty = true;
+	Ps3Gfx::DeviceUnlock();
 	Ps3Gfx::TextureChanged(this);
 	return S_OK;
 }
@@ -290,7 +304,7 @@ HRESULT IDirect3DTexture9::UnlockRect(UINT)
 // ---------------------------------------------------------------------------
 IDirect3DVertexBuffer9::IDirect3DVertexBuffer9(UINT size, DWORD usage, DWORD fvf, D3DPOOL pool)
 	: IDirect3DResource9(D3DRTYPE_VERTEXBUFFER), m_size(size), m_usage(usage), m_fvf(fvf), m_pool(pool),
-	  m_dirty(true), m_backend(NULL)
+	  m_dirty(true), m_backend(NULL), m_lockDepth(0), m_dataReleased(false), m_keepData(false)
 {
 	// A NULL m_data here (out of memory) is caught by the Create* call.
 	m_data = (BYTE*)memalign(128, size ? size : 128);
@@ -304,8 +318,19 @@ IDirect3DVertexBuffer9::~IDirect3DVertexBuffer9()
 	free(m_data);
 }
 
+// Static buffers (no D3DUSAGE_DYNAMIC) lock under the backend's lock, which may have released
+// their main-memory copy after uploading it (read back here if so) but never while a lock is
+// open. Dynamic buffers keep their copy and skip the lock (they are locked many times a frame).
 HRESULT IDirect3DVertexBuffer9::Lock(UINT offset, UINT size, void** pp, DWORD flags)
 {
+	if (!(m_usage & D3DUSAGE_DYNAMIC))
+	{
+		Ps3Gfx::DeviceLock();
+		const bool ok = !m_dataReleased || Ps3Gfx::RestoreVertexBufferData(this, (flags & D3DLOCK_DISCARD) == 0);
+		if (ok) ++m_lockDepth;
+		Ps3Gfx::DeviceUnlock();
+		if (!ok) { *pp = NULL; return E_OUTOFMEMORY; }
+	}
 	m_changes.Locked(offset, size, flags);
 	*pp = m_data + offset;
 	return S_OK;
@@ -313,7 +338,15 @@ HRESULT IDirect3DVertexBuffer9::Lock(UINT offset, UINT size, void** pp, DWORD fl
 
 HRESULT IDirect3DVertexBuffer9::Unlock()
 {
-	m_changes.Unlocked(m_size, m_dirty);
+	if (!(m_usage & D3DUSAGE_DYNAMIC))
+	{
+		Ps3Gfx::DeviceLock();
+		if (m_lockDepth) --m_lockDepth;
+		m_changes.Unlocked(m_size, m_dirty);
+		Ps3Gfx::DeviceUnlock();
+	}
+	else
+		m_changes.Unlocked(m_size, m_dirty);
 	Ps3Gfx::VertexBufferChanged(this, 0, m_size);
 	return S_OK;
 }

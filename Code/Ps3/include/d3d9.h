@@ -478,7 +478,8 @@ public:
 	UINT LevelHeight(UINT level) const;
 	UINT LevelPitch(UINT level) const;
 	UINT LevelSize(UINT level) const;
-	// NULL while the texture has no main-memory copy (render targets get one only if locked).
+	// NULL while the texture has no main-memory copy (render targets get one only if locked;
+	// the RSX backend releases an uploaded texture's copy and LockRect brings it back).
 	BYTE* LevelBits(UINT level) const { return m_data ? m_data + m_offsets[level] : NULL; }
 
 	UINT m_width, m_height, m_levels;
@@ -491,6 +492,10 @@ public:
 	IDirect3DSurface9* m_surfaces[16];
 	bool m_dirty;
 	void* m_backend;	// RSX copy (created/updated lazily on bind)
+	// The main-memory copy's life (Ps3Gfx::RestoreTextureData; changed with the device lock held):
+	UINT m_lockDepth;		// LockRect calls not yet unlocked: the copy is in use
+	bool m_dataReleased;	// the backend freed m_data after uploading it; LockRect reads it back
+	bool m_keepData;		// locked again after a release: the copy stays from now on
 };
 
 class IDirect3DCubeTexture9 : public IDirect3DBaseTexture9
@@ -533,10 +538,14 @@ public:
 	HRESULT Unlock();
 	HRESULT GetDesc(D3DVERTEXBUFFER_DESC* d);
 	UINT m_size; DWORD m_usage; DWORD m_fvf; D3DPOOL m_pool;
-	BYTE* m_data;
+	BYTE* m_data;			// NULL while released by the backend (static buffers; Lock brings it back)
 	bool m_dirty;
 	Ps3BufferChanges m_changes;
 	void* m_backend;
+	// As for textures (Ps3Gfx::RestoreVertexBufferData), for buffers without D3DUSAGE_DYNAMIC.
+	UINT m_lockDepth;
+	bool m_dataReleased;
+	bool m_keepData;
 };
 
 class IDirect3DIndexBuffer9 : public IDirect3DResource9
