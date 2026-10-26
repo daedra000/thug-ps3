@@ -38,6 +38,15 @@ namespace IMA
 			// decoding those as ADPCM gave static.
 			bool pcm16 = false;
 
+			// Xbox ADPCM (WAVE format 0x69, the sounds in the .pre packs such as the wheels):
+			// IMA ADPCM in blocks of block_align bytes, each starting with a 4-byte header
+			// (first sample, step index) and then two samples per byte, low nibble first.
+			// 0: a plain nibble stream.
+			size_t block_align = 0;
+			const unsigned char *block = nullptr;	// current block
+			unsigned block_sample = 0;				// samples output from it
+			signed short DecodeNibble(unsigned char nibble);
+
 		public:
 			// Constructor
 			IMA() {}
@@ -47,7 +56,7 @@ namespace IMA
 			}
 
 			// IMA functions
-			void SetPointer(const unsigned char *data, size_t size, bool isPcm16 = false);
+			void SetPointer(const unsigned char *data, size_t size, bool isPcm16 = false, size_t blockAlign = 0);
 			void Rewind();
 
 			bool AtEnd();

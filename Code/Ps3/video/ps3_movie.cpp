@@ -148,6 +148,40 @@ namespace
 		ReleaseMutex(NxXbox::EngineGlobals.g_asyncRenderMutex);
 	}
 
+	// The device states DrawFrame changes, put back afterwards. The engine keeps its own
+	// copies of these (NxXbox::set_render_state and friends) and only sends a change, so
+	// leaving e.g. alpha blending off broke every transparent texture after a movie.
+	struct StateBackup
+	{
+		static const D3DRENDERSTATETYPE kRs[6];
+		static const D3DTEXTURESTAGESTATETYPE kTss0[4];
+		static const D3DSAMPLERSTATETYPE kSs0[5];
+		DWORD rs[6], tss0[4], tss1[2], ss0[5];
+
+		void Save()
+		{
+			for (int i = 0; i < 6; ++i) D3DDevice_GetRenderState(kRs[i], &rs[i]);
+			for (int i = 0; i < 4; ++i) D3DDevice_GetTextureStageState(0, kTss0[i], &tss0[i]);
+			D3DDevice_GetTextureStageState(1, D3DTSS_COLOROP, &tss1[0]);
+			D3DDevice_GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1[1]);
+			for (int i = 0; i < 5; ++i) D3DDevice_GetSamplerState(0, kSs0[i], &ss0[i]);
+		}
+
+		void Restore() const
+		{
+			for (int i = 0; i < 6; ++i) D3DDevice_SetRenderState(kRs[i], rs[i]);
+			for (int i = 0; i < 4; ++i) D3DDevice_SetTextureStageState(0, kTss0[i], tss0[i]);
+			D3DDevice_SetTextureStageState(1, D3DTSS_COLOROP, tss1[0]);
+			D3DDevice_SetTextureStageState(1, D3DTSS_ALPHAOP, tss1[1]);
+			for (int i = 0; i < 5; ++i) D3DDevice_SetSamplerState(0, kSs0[i], ss0[i]);
+		}
+	};
+	const D3DRENDERSTATETYPE StateBackup::kRs[6] = { D3DRS_LIGHTING, D3DRS_ZENABLE, D3DRS_ZWRITEENABLE,
+		D3DRS_ALPHABLENDENABLE, D3DRS_ALPHATESTENABLE, D3DRS_CULLMODE };
+	const D3DTEXTURESTAGESTATETYPE StateBackup::kTss0[4] = { D3DTSS_COLOROP, D3DTSS_ALPHAOP, D3DTSS_COLORARG1, D3DTSS_ALPHAARG1 };
+	const D3DSAMPLERSTATETYPE StateBackup::kSs0[5] = { D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER,
+		D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV };
+
 	// Start or X, newly pressed (the press that started the movie must be let go first).
 	// Read straight from the pad library: the pads are otherwise only polled by the main
 	// loop's message pump (SDL_PollEvent), which doesn't run during a movie.
@@ -213,6 +247,8 @@ void Play(const char* pName)
 		}
 	}
 	InitTables();
+	StateBackup states;
+	states.Save();
 	SDL_Init(SDL_INIT_GAMECONTROLLER);	// no-op once the game has started the pads
 
 	// Sound: at the louder of the music and effects volumes, like the Xbox player.
@@ -258,6 +294,7 @@ void Play(const char* pName)
 		}
 	}
 
+	states.Restore();
 	if (sound)
 		Pcm::PCMAudio_StopMovieAudio();
 	tex[0]->Release();

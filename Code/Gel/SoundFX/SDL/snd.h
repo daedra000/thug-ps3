@@ -70,10 +70,10 @@ namespace Snd
 				SetPointer(_data, _size, _frequency);
 			}
 
-			void SetPointer(unsigned char *_data, size_t _size, unsigned long _frequency, bool _pcm16 = false)
+			void SetPointer(unsigned char *_data, size_t _size, unsigned long _frequency, bool _pcm16 = false, size_t _blockAlign = 0)
 			{
-				// Setup IMA stream (or plain 16-bit PCM)
-				ima.SetPointer(_data, _size, _pcm16);
+				// Setup IMA stream (or plain 16-bit PCM, or Xbox ADPCM blocks)
+				ima.SetPointer(_data, _size, _pcm16, _blockAlign);
 
 				// Setup sound stream
 				coord = 0;
