@@ -138,7 +138,9 @@ Manager::Manager ( void )
 	// Create the keyboard queue.
 //	XInputDebugInitKeyboardQueue( &xdkp );
 
-    Dbg_Assert(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) >= 0); // the INIT_VIDEO is needed....
+    // The call is outside the assert: asserts compile away in this build, and with them the
+    // pad library's start-up (on the PS3 no controller ever worked).
+    { int sdl_ = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO); Dbg_Assert(sdl_ >= 0); (void)sdl_; } // the INIT_VIDEO is needed....
 
     for (int i = 0; i < SDL_NumJoysticks(); i++)
     {

@@ -120,6 +120,16 @@ void Device::process( void )
     switch( m_state )
     {
     case vIDLE:
+#ifdef __PLAT_PS3__
+		// A pad switched on (or reporting in) after start-up: keep trying, about twice a second.
+		static unsigned s_wait[8];
+		if (( ++s_wait[m_data.m_port & 7] & 31 ) == 0 )
+		{
+			Acquire();
+			if( m_state == vACQUIRED )
+				printf( "[pad] controller on port %d connected\n", m_data.m_port );
+		}
+#endif
         break;
 
     case vBUSY:

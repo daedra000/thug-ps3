@@ -42,6 +42,7 @@ int SDL_Init(Uint32 flags)
 		memset(&s_info, 0, sizeof(s_info));
 		s_init = true;
 		ioPadGetInfo(&s_info);
+		printf("[pad] pad library started: %u of %u pads connected\n", (unsigned)s_info.connected, (unsigned)s_info.max);
 	}
 	return 0;
 }
