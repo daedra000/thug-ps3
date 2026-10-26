@@ -23,6 +23,7 @@
 //   rsx_linear_textures.txt  never swizzle textures (and so no mipmaps)
 //   rsx_flip_cull.txt        swap which triangle winding is culled
 //   rsx_no_draw.txt          clear and flip only, draw nothing
+//   rsx_depth_clamp.txt      clamp depth instead of clipping at the near and far planes
 
 #include <ps3_platform.h>
 
@@ -1334,7 +1335,13 @@ bool DrawInit()
 		return false;
 	}
 	CmdReserve(64);
-	rsxSetZMinMaxControl(s_ctx, GCM_FALSE, GCM_TRUE, GCM_FALSE);
+	// Clip triangles at the near and far planes, as D3D does. Depth clamping instead (what
+	// the PSL1GHT samples set) doesn't clip at the near plane, and big triangles with corners
+	// behind the camera (the ground around the skater, the sky) weren't drawn at all.
+	// rsx_depth_clamp.txt brings the old setting back for comparison.
+	const bool clamp = FlagFile("rsx_depth_clamp.txt");
+	if (clamp) GpuLog("rsx_depth_clamp.txt: depth clamp on, no near/far clipping");
+	rsxSetZMinMaxControl(s_ctx, clamp ? GCM_FALSE : GCM_TRUE, clamp ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
 	rsxSetUserClipPlaneControl(s_ctx, GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE,
 	                           GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE, GCM_USER_CLIP_PLANE_DISABLE);
 	rsxSetColorMaskMrt(s_ctx, 0);
