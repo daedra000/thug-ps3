@@ -182,6 +182,10 @@ bool ScriptLoadFont(Script::CScriptStructure *pParams, Script::CScript *pScript)
 			{
 				rgba |= (p_entry->GetInteger(j) & 255) << (j*8);
 			}
+#ifdef __PLAT_PS3__
+			// Big-endian: r is the word's low byte but the struct's first byte.
+			rgba = ( ( rgba & 0xff000000 ) >> 24 ) | ( ( rgba & 0xff0000 ) >> 8 ) | ( ( rgba & 0xff00 ) << 8 ) | ( ( rgba & 0xff ) << 24 );
+#endif
 			p_rgba_tab[i] = *((Image::RGBA *) &rgba);
 		}
 	}

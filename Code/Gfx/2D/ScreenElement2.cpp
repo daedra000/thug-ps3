@@ -1280,7 +1280,9 @@ bool CScreenElement::resolve_rgba(Script::CStruct *pProps, const uint32 RefName,
 		{
 			rgba |= (p_color->GetInteger(i) & 255) << (i*8);
 		}
-#ifdef __PLAT_NGC__
+#if defined( __PLAT_NGC__ ) || defined( __PLAT_PS3__ )
+		// Big-endian: the word above holds r in its low byte, which is the struct's last byte
+		// here (on PS3 an alpha of 0 came out as red, so hidden HUD pieces showed).
 		rgba = ( ( rgba & 0xff000000 ) >> 24 ) | ( ( rgba & 0xff0000 ) >> 8 ) | ( ( rgba & 0xff00 ) << 8 ) | ( ( rgba & 0xff ) << 24 );
 #endif		// __PLAT_NGC__
 		*pRGBA = *((Image::RGBA *) &rgba);
