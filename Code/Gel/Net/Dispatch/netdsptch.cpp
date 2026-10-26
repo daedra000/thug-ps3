@@ -293,6 +293,11 @@ int	Dispatcher::DispatchMessage( MsgHandlerContext *context )
 	
 
 	Dbg_Assert( context );
+#ifdef __PLAT_PS3__
+	PS3_NET_TRACE("%s: got %d (%s), %d bytes\n", context->m_App ? context->m_App->GetName() : "?", (int)context->m_MsgId,
+		context->m_App && context->m_App->GetManager() ? context->m_App->GetManager()->GetMessageName(context->m_MsgId) : "?",
+		(int)context->m_MsgLength);
+#endif
 
     // If this is a message we want to handle, call the handler
 	for( handler = sh.FirstItem( m_handler_list[context->m_MsgId] );

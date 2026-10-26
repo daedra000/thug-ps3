@@ -184,8 +184,14 @@ void	Client::SendEnqueuedMessages( Conn* conn )
 	// Should we send this frame?
 	if( ShouldSendThisFrame( conn ) == false )
 	{
+#ifdef __PLAT_PS3__
+		if (MessagesToSend( conn )) PS3_NET_TRACE("%s: messages waiting, but not sending this frame\n", GetName());
+#endif
 		return;
 	}
+#ifdef __PLAT_PS3__
+	if (MessagesToSend( conn )) PS3_NET_TRACE("%s: sending (bandwidth exceeded %d)\n", GetName(), (int)BandwidthExceeded( conn ));
+#endif
 
 	buffer_full = false;
     while( !buffer_full && MessagesToSend( conn ) && !BandwidthExceeded( conn ))

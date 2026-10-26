@@ -45,6 +45,9 @@
 #endif	// __PLAT_NGPS__
 
 #ifdef __PLAT_PS3__
+#include <stdio.h>
+// PS3 diagnostics: a [net] log line, at most 40 times per call site.
+#define PS3_NET_TRACE(...) do { static int ps3_n_; if (ps3_n_ < 40) { ++ps3_n_; printf("[net] " __VA_ARGS__); } } while (0)
 // PS3: BSD sockets from PSL1GHT stand in for Winsock.
 #include <net/net.h>
 #include <sys/socket.h>

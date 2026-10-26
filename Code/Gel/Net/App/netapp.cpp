@@ -128,7 +128,11 @@ bool	App::init( void )
 			return false;
 		}
 #else
+#ifdef __PLAT_PS3__
+		int argp = 1;	// non-zero enables non-blocking mode (an int: setsockopt reads 4 bytes, and a big-endian long's first 4 are 0)
+#else
 		unsigned long argp = 1L;	// non-zero enables non-blocking mode
+#endif
 
 		if( ioctlsocket( m_socket, FIONBIO, &argp ) == SOCKET_ERROR )
 		{
@@ -953,6 +957,9 @@ void	App::ProcessData( void )
 	Conn *conn, *next_conn;
 	Lst::Search< Conn > sh;
 	int result;
+#ifdef __PLAT_PS3__
+	PS3_NET_TRACE("%s: ProcessData (frame %d)\n", GetName(), (int)m_FrameCounter);
+#endif
 
 	for( conn = FirstConnection( &sh ); conn;
 			conn = next_conn )
@@ -964,8 +971,12 @@ void	App::ProcessData( void )
 		{   
 			int num_bytes;
 			
-			num_bytes = (int) conn->m_alias_connection->m_write_ptr - 
-							(int) conn->m_alias_connection->m_write_buffer;
+			num_bytes = (int) ( conn->m_alias_connection->m_write_ptr - 
+							conn->m_alias_connection->m_write_buffer );
+#ifdef __PLAT_PS3__
+			if (num_bytes > 0)
+				PS3_NET_TRACE("%s: %d bytes from the local peer\n", GetName(), num_bytes);
+#endif
 			memcpy( conn->m_read_ptr, conn->m_alias_connection->m_write_buffer, num_bytes );
 			conn->m_alias_connection->m_write_ptr = conn->m_alias_connection->m_write_buffer;
 			conn->m_read_ptr += num_bytes;
@@ -1624,6 +1635,10 @@ void App::EnqueueMessage( int handle, MsgDesc* desc )
 
 #ifdef __PLAT_NGPS__
 	WaitSema( m_send_semaphore_id );
+#endif
+#ifdef __PLAT_PS3__
+	PS3_NET_TRACE("%s: enqueue %d (%s), %d bytes, queue %d, conn %d\n", GetName(), (int)desc->m_Id,
+		m_net_man ? m_net_man->GetMessageName(desc->m_Id) : "?", (int)desc->m_Length, (int)desc->m_Queue, handle);
 #endif
 	Mem::Manager::sHandle().PushContext(Mem::Manager::sHandle().NetworkHeap());
 	// Make sure the message + headers isn't larger than a packet or else it will never be sent
