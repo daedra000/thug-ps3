@@ -1,6 +1,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 // p_NxSprite.cpp
 
+#include <core/endian.h>	// colours: RGBA bytes read as the PC (little-endian) word
 #include 	"gfx/DX9/p_NxSprite.h"
 #include 	"gfx/DX9/p_NxTexture.h"
 
@@ -83,7 +84,7 @@ void CXboxSprite::plat_update_engine()
 	mp_plat_sprite->m_yhot		= (( m_anchor_y + 1.0f ) * 0.5f) * ( m_height );
 
 	mp_plat_sprite->m_rot		= m_rotation;
-	mp_plat_sprite->m_rgba		= *((uint32 *) &m_rgba);
+	mp_plat_sprite->m_rgba		= Endian::ReadLe32( &m_rgba );
 }
 
 

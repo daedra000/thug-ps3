@@ -383,7 +383,9 @@ void sSprite::Draw(void)
 	float v36 = abs_scale_x * (float)(unsigned __int16)this->m_width + x0;
 	float v9 = abs_scale_y * (float)(unsigned __int16)this->m_height + y0;
 
-	DWORD	current_color	= this->m_rgba & 0xFF00FF00 | BYTE2(this->m_rgba) | ((unsigned __int8)this->m_rgba << 16);
+	// m_rgba is the PC's word (A B G R, high to low): swap R and B for D3D's ARGB. Shifts, not
+	// IDA's BYTE2 (a memory-order byte: the wrong one on the big-endian PS3).
+	DWORD	current_color	= ( this->m_rgba & 0xFF00FF00 ) | (( this->m_rgba >> 16 ) & 0xFF ) | (( this->m_rgba & 0xFF ) << 16 );
 
 	// lwss add
 	if (!(current_color & 0xFF000000))

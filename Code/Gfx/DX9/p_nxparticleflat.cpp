@@ -1,3 +1,4 @@
+#include <core/endian.h>	// colours: RGBA bytes read as the PC (little-endian) word
 #include <core/defines.h>
 #include <gfx/DX9/nx/render.h>
 #include "gfx/DX9/p_nxparticleflat.h"
@@ -524,7 +525,7 @@ void CXboxParticleFlat::plat_render( void )
 				p_push[0]	= *((DWORD*)&tmp[X] );
 				p_push[1]	= *((DWORD*)&tmp[Y] );
 				p_push[2]	= *((DWORD*)&tmp[Z] );
-				p_push[3]	= *((DWORD*)&color );
+				p_push[3]	= Endian::ReadLe32( &color );
 				p_push[4]	= 0x00000000UL;
 				p_push[5]	= 0x00000000UL;
 	
@@ -532,7 +533,7 @@ void CXboxParticleFlat::plat_render( void )
 				p_push[6]	= *((DWORD*)&tmp[X] );
 				p_push[7]	= *((DWORD*)&tmp[Y] );
 				p_push[8]	= *((DWORD*)&tmp[Z] );
-				p_push[9]	= *((DWORD*)&color );
+				p_push[9]	= Endian::ReadLe32( &color );
 				p_push[10]	= 0x3F800000UL;
 				p_push[11]	= 0x00000000UL;
 
@@ -540,7 +541,7 @@ void CXboxParticleFlat::plat_render( void )
 				p_push[12]	= *((DWORD*)&tmp[X] );
 				p_push[13]	= *((DWORD*)&tmp[Y] );
 				p_push[14]	= *((DWORD*)&tmp[Z] );
-				p_push[15]	= *((DWORD*)&color );
+				p_push[15]	= Endian::ReadLe32( &color );
 				p_push[16]	= 0x3F800000UL;
 				p_push[17]	= 0x3F800000UL;
 			
@@ -548,7 +549,7 @@ void CXboxParticleFlat::plat_render( void )
 				p_push[18]	= *((DWORD*)&tmp[X] );
 				p_push[19]	= *((DWORD*)&tmp[Y] );
 				p_push[20]	= *((DWORD*)&tmp[Z] );
-				p_push[21]	= *((DWORD*)&color );
+				p_push[21]	= Endian::ReadLe32( &color );
 				p_push[22]	= 0x00000000UL;
 				p_push[23]	= 0x3F800000UL;
 

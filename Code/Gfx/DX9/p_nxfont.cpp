@@ -1,6 +1,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 // p_NxFont.cpp
 
+#include <core/endian.h>	// colours: RGBA bytes read as the PC (little-endian) word
 #include 	"gfx/DX9/p_nxfont.h"
 #include 	"sys/config/config.h"
 
@@ -85,7 +86,7 @@ void CXboxFont::plat_set_spacings(int charSpacing, int spaceSpacing)
 void CXboxFont::plat_set_rgba_table(Image::RGBA *pTab)
 {
 	for (int i = 0; i < 16; i++)
-		mp_plat_font->mRGBATab[i] = *((uint32 *) &pTab[i]);
+		mp_plat_font->mRGBATab[i] = Endian::ReadLe32( &pTab[i] );
 }
 
 /******************************************************************/
@@ -246,7 +247,7 @@ void CXboxText::plat_update_engine()
 	mp_plat_text->m_ypos	= m_ypos;
 	mp_plat_text->m_xscale	= m_xscale;
 	mp_plat_text->m_yscale	= m_yscale;
-	mp_plat_text->m_rgba	= *((uint32 *) &m_rgba);
+	mp_plat_text->m_rgba	= Endian::ReadLe32( &m_rgba );
 	mp_plat_text->m_color_override = m_color_override;
 }
 

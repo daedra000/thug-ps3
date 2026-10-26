@@ -1,3 +1,4 @@
+#include <core/endian.h>	// colours: RGBA bytes read as the PC (little-endian) word
 #include <core/defines.h>
 #include "gfx/DX9/nx/render.h"
 
@@ -301,49 +302,49 @@ void CXboxParticleGlow::plat_render( void )
 					p_push[0]	= *((DWORD*)&pos[X] );
 					p_push[1]	= *((DWORD*)&pos[Y] );
 					p_push[2]	= *((DWORD*)&pos[Z] );
-					p_push[3]	= *((DWORD*)&color[0] );
+					p_push[3]	= Endian::ReadLe32( &color[0] );
 
 					p_push[4]	= *((DWORD*)&tmp0[X] );
 					p_push[5]	= *((DWORD*)&tmp0[Y] );
 					p_push[6]	= *((DWORD*)&tmp0[Z] );
-					p_push[7]	= *((DWORD*)&color[1] );
+					p_push[7]	= Endian::ReadLe32( &color[1] );
 					
 					p_push[8]	= *((DWORD*)&tmp1[X] );
 					p_push[9]	= *((DWORD*)&tmp1[Y] );
 					p_push[10]	= *((DWORD*)&tmp1[Z] );
-					p_push[11]	= *((DWORD*)&color[1] );
+					p_push[11]	= Endian::ReadLe32( &color[1] );
 				
 					// Triangle one.
 					p_push[12]	= *((DWORD*)&tmp0[X] );
 					p_push[13]	= *((DWORD*)&tmp0[Y] );
 					p_push[14]	= *((DWORD*)&tmp0[Z] );
-					p_push[15]	= *((DWORD*)&color[1] );
+					p_push[15]	= Endian::ReadLe32( &color[1] );
 					
 					p_push[16]	= *((DWORD*)&tmp1[X] );
 					p_push[17]	= *((DWORD*)&tmp1[Y] );
 					p_push[18]	= *((DWORD*)&tmp1[Z] );
-					p_push[19]	= *((DWORD*)&color[1] );
+					p_push[19]	= Endian::ReadLe32( &color[1] );
 
 					p_push[20]	= *((DWORD*)&tmp2[X] );
 					p_push[21]	= *((DWORD*)&tmp2[Y] );
 					p_push[22]	= *((DWORD*)&tmp2[Z] );
-					p_push[23]	= *((DWORD*)&color[2] );
+					p_push[23]	= Endian::ReadLe32( &color[2] );
 					
 					// Triangle two.
 					p_push[24]	= *((DWORD*)&tmp1[X] );
 					p_push[25]	= *((DWORD*)&tmp1[Y] );
 					p_push[26]	= *((DWORD*)&tmp1[Z] );
-					p_push[27]	= *((DWORD*)&color[1] );
+					p_push[27]	= Endian::ReadLe32( &color[1] );
 					
 					p_push[28]	= *((DWORD*)&tmp2[X] );
 					p_push[29]	= *((DWORD*)&tmp2[Y] );
 					p_push[30]	= *((DWORD*)&tmp2[Z] );
-					p_push[31]	= *((DWORD*)&color[2] );
+					p_push[31]	= Endian::ReadLe32( &color[2] );
 
 					p_push[32]	= *((DWORD*)&tmp3[X] );
 					p_push[33]	= *((DWORD*)&tmp3[Y] );
 					p_push[34]	= *((DWORD*)&tmp3[Z] );
-					p_push[35]	= *((DWORD*)&color[2] );
+					p_push[35]	= Endian::ReadLe32( &color[2] );
 					p_push		+= 36;
 					
 					tmp0 = tmp1;

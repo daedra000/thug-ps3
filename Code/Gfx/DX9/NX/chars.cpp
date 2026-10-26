@@ -444,13 +444,13 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 	int i_ = 256;
 	do
 	{
-		unsigned int v30 = *(_DWORD*)v28 & 0xFF00FF00 | ((unsigned __int8)*(_DWORD*)v28 << 16) | (unsigned __int8)BYTE2(*(_DWORD*)v28);
-		uint8_t v31;
-		if (HIBYTE(v30) < 0x80u)
-			v31 = 2 * HIBYTE(v30);
-		else
-			v31 = -1;
-		*(_DWORD*)v28 = *(_DWORD*)v28 & 0xFF00 | (((unsigned __int8)*(_DWORD*)v28 << 16) | (unsigned __int8)BYTE2(*(_DWORD*)v28)) & 0xFFFFFF | (v31 << 24);
+		// Each entry is the PC's word A B G R (high to low): swap R and B into D3D's ARGB and
+		// double the PS2-style alpha (0x80 = opaque). Written with shifts: IDA's BYTE2/HIBYTE
+		// pick bytes by memory order, which are the wrong bytes on the big-endian PS3.
+		const uint32 entry = *(_DWORD*)v28;
+		const uint32 alpha = entry >> 24;
+		const uint32 v31 = alpha < 0x80u ? 2 * alpha : 0xFFu;
+		*(_DWORD*)v28 = ( v31 << 24 ) | (( entry & 0xFF ) << 16 ) | ( entry & 0xFF00 ) | (( entry >> 16 ) & 0xFF );
 		v28 += 4;
 		--i_;
 	} while (i_);

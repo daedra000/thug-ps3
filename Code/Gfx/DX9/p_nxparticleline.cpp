@@ -1,3 +1,4 @@
+#include <core/endian.h>	// colours: RGBA bytes read as the PC (little-endian) word
 #include <core/defines.h>
 #include "gfx/DX9/nx/render.h"
 
@@ -261,13 +262,13 @@ void CXboxParticleLine::plat_render( void )
 				p_push[0]	= *((DWORD*)&pos0[X] );
 				p_push[1]	= *((DWORD*)&pos0[Y] );
 				p_push[2]	= *((DWORD*)&pos0[Z] );
-				p_push[3]	= *((DWORD*)&color[0] );
+				p_push[3]	= Endian::ReadLe32( &color[0] );
 				p_push		+= 4;
 
 				p_push[0]	= *((DWORD*)&pos1[X] );
 				p_push[1]	= *((DWORD*)&pos1[Y] );
 				p_push[2]	= *((DWORD*)&pos1[Z] );
-				p_push[3]	= *((DWORD*)&color[1] );
+				p_push[3]	= Endian::ReadLe32( &color[1] );
 				p_push		+= 4;
 
 				dwords_written	+= dwords_per_particle;
