@@ -36,6 +36,10 @@
 #include <core/StringHashTable.h>
 #include <sys/File/PRE.h>
 #include <sys/file/filesys.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#include <string.h>
+#endif
 #include <sys/file/AsyncFilesys.h>
 #include <sys/config/config.h>
 
@@ -1233,7 +1237,14 @@ PreFile::FileHandle *PreMgr::pre_fopen(const char *name, const char *access, boo
 {
 	Dbg_MsgAssert(name,( "trying to open file NULL"));	
 
+#ifdef __PLAT_PS3__
+	const bool ps3Crumbs = name && strcasestr(name, "levelselect") != NULL;	// the level select crash
+	if (ps3Crumbs) Ps3Platform::Trace("[pre] open %s: looking in the PRE files", name);
+#endif
 	PreFile::FileHandle *pHandle = sp_mgr->getContainedFile(name);
+#ifdef __PLAT_PS3__
+	if (ps3Crumbs) Ps3Platform::Trace("[pre] %s: %s", name, pHandle ? "found, opening" : "not in a PRE file");
+#endif
 	if (pHandle)
 	{
 		sp_mgr->mp_activePre->Open(async);

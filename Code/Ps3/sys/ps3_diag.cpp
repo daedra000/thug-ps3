@@ -323,7 +323,9 @@ void MemoryReport(const char* why)
 	// Written in pieces straight to the log (no stdio); the line buffer is on the stack.
 	char line[512];
 	unsigned freeKB = 0, totalKB = 0;
+	RawWrite("[mem] (report: system memory)\n");	// breadcrumbs: the level select crash
 	MemoryInfo(&freeKB, &totalKB);
+	RawWrite("[mem] (report: newlib arena)\n");
 	struct mallinfo mi = mallinfo();
 	snprintf(line, sizeof(line), "[mem] %s: system %u KB free of %u KB; newlib %ld KB in use in %ld blocks (peak %ld KB), "
 		"heap %u KB from the system with %u KB of it free; video memory free (RSX backend's figure) %u KB\n",
