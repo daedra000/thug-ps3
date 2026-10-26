@@ -115,7 +115,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get -y install g++-multilib
       - name: x86 -m32 (ILP32, like the PC build), ASan + UBSan
         continue-on-error: true  # new; make it blocking once it has passed a few runs
-        run: tools/endian-test/run.sh asan32
+        # 32-bit ASan can't map its shadow memory under the runner's 16-bit mmap randomisation
+        # for 32-bit processes; lower it as for 64-bit. On a failure the end of the output goes
+        # into an annotation, so it can be read without the raw log.
+        run: |
+          sudo sysctl -w vm.mmap_rnd_bits=28 || true
+          sudo sysctl -w vm.mmap_rnd_compat_bits=8 || true
+          set -o pipefail
+          if ! tools/endian-test/run.sh asan32 2>&1 | tee asan32.log; then
+            printf '::error title=asan32::%s\n' "$(tail -n 30 asan32.log | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            exit 1
+          fi
 
   loader-tests-be:
     name: Endian helpers + Bink decoders (big-endian powerpc64, qemu)
