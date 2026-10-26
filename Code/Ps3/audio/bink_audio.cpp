@@ -305,14 +305,21 @@ bool BinkAudio::DecodeNextVideoFrame()
 	const uint32_t pos = m_frameOffsets[m_nextFrame];
 	const uint32_t size = m_frameOffsets[m_nextFrame + 1] - pos;
 	++m_nextFrame;
-	m_packet.resize(size);
+	// A frame too short to hold a packet size has no audio.
+	if (size < 4) return true;
+	// A frame starts with track 0's audio packet (its size, then the packet). The other
+	// tracks and the video data follow it and are never read, so a movie's audio doesn't
+	// pull its video frames off the disk a second time.
+	uint8_t head[4];
 	m_in->clear();
 	m_in->seekg(pos);
-	if (!m_in->read((char*)&m_packet[0], size)) return false;
-	if (size < 4) return true;
-	const uint32_t audioSize = Le32(&m_packet[0]);
+	if (!m_in->read((char*)head, 4)) return false;
+	const uint32_t audioSize = Le32(head);
 	if (audioSize > size - 4) return false;
-	if (audioSize >= 4) DecodePacket(&m_packet[4], audioSize);
+	if (audioSize < 4) return true;
+	m_packet.resize(audioSize);
+	if (!m_in->read((char*)&m_packet[0], audioSize)) return false;
+	DecodePacket(&m_packet[0], audioSize);
 	return true;
 }
 

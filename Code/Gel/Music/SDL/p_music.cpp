@@ -17,6 +17,10 @@
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
 #include <bink_audio.h>
+#include "stream_ring.h"
+#include <sys/mutex.h>
+#include <sys/cond.h>
+#include <sys/thread.h>
 #endif
 #include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
@@ -65,7 +69,9 @@ namespace Pcm
 	class Streamer
 	{
 		private:
+#ifndef __PLAT_PS3__
 			std::vector<char> buffer;
+#endif
 
 			bool paused = true;
 			bool playing = true;
@@ -76,7 +82,47 @@ namespace Pcm
 			virtual ~Streamer() = default;
 
 			virtual void Rewind() = 0;
+#ifdef __PLAT_PS3__
+			// The PS3 decodes on the streaming thread (below), ahead of the mixer, into ring.
+			// Decode writes up to `frames` frames of ring.Channels() floats each and returns how
+			// many it wrote; fewer means the end of the stream. Rewind goes back to the start.
+			// Both are only called by the thread filling the ring.
+			StreamRing ring;
+			virtual size_t Decode(float *out, size_t frames) = 0;
+
+			// Decodes one piece into the ring if it has room for one (or a rewind was asked
+			// for). Returns true if it did anything.
+			bool Fill()
+			{
+				if (!ring.Valid())
+					return false;
+				bool did = false;
+				if (ring.RestartPending())
+				{
+					Rewind();
+					ring.Restart();
+					did = true;
+				}
+				if (ring.AtEnd() || ring.FreeFrames() < kFillMin)
+					return did;
+				uint32_t n = 0;
+				float *at = ring.WriteSpace(StreamRing::kChunk, &n);
+				if (n == 0)
+					return did;
+				size_t got = Decode(at, n);
+				ring.Commit((uint32_t)got);
+				if (got < n)
+					ring.SetEnd();
+				return true;
+			}
+
+			// Ring size in frames: about 0.37 s at 44.1 kHz, so a slow disk read on the
+			// streaming thread doesn't starve the mixer. The thread decodes into it again once
+			// kFillMin frames are free.
+			enum { kRingFrames = 16384, kFillMin = 1024 };
+#else
 			virtual size_t Stream(char *p, size_t bytes) = 0;
+#endif
 
 			size_t Mix(char *out, size_t bytes)
 			{
@@ -84,6 +130,19 @@ namespace Pcm
 				if (!playing || paused)
 					return 0;
 
+#ifdef __PLAT_PS3__
+				// Only reads what the streaming thread has decoded: never waits for it.
+				if (!ring.Valid())
+				{
+					playing = false;	// nothing to play
+					return 0;
+				}
+				bool ended = false;
+				size_t frames = ring.MixInto((float *)out, bytes / (sizeof(float) * 5), volume, &ended);
+				if (ended)
+					playing = false;
+				return frames * (sizeof(float) * 5);
+#else
 				// Read in buffer
 				if (buffer.size() < bytes)
 					buffer.resize(bytes);
@@ -102,6 +161,7 @@ namespace Pcm
 				}
 
 				return read;
+#endif
 			}
 
 			void Play()
@@ -116,7 +176,11 @@ namespace Pcm
 
 			void Stop()
 			{
+#ifdef __PLAT_PS3__
+				ring.RequestRestart();	// the decoder belongs to the streaming thread
+#else
 				Rewind();
+#endif
 				paused = true;
 				playing = true;
 			}
@@ -143,9 +207,6 @@ namespace Pcm
 			// The PC data's music and streams are audio-only Bink files, which miniaudio
 			// can't decode (Code/Ps3/audio/bink_audio.cpp does).
 			BinkAudio *bink = nullptr;
-			std::vector<float> bink_buffer;
-			double bink_pos = 0.0;		// resampling: position between bink_buffer frames 0 and 1
-			bool bink_end = false;
 
 			// A stream held in memory (one entry of streams/pcm/pcm.wad), instead of a file.
 			std::istringstream mem;
@@ -169,63 +230,9 @@ namespace Pcm
 					from_mem = false;
 					return true;
 				}
-				bink_buffer.clear();
-				bink_pos = 0.0;
-				bink_end = false;
+				if (!ring.Init(bink->Channels(), bink->SampleRate(), kRingFrames))
+					printf("[music] no memory for a stream buffer\n");
 				return true;
-			}
-
-			// Output: 5 channels (FL FR C BL BR) at 48 kHz, like the miniaudio path. Stereo goes
-			// to the front pair; mono to every channel, as miniaudio does.
-			size_t StreamBink(float *out, size_t frames)
-			{
-				const int ch = bink->Channels();
-				const double step = bink->SampleRate() / 48000.0;
-				size_t done = 0;
-				while (done < frames)
-				{
-					// Need frames floor(pos) and floor(pos)+1 buffered.
-					size_t have = bink_buffer.size() / ch;
-					if ((size_t)bink_pos + 1 >= have)
-					{
-						if (bink_end)
-						{
-							if ((size_t)bink_pos >= have)
-								break;
-						}
-						else
-						{
-							// Keep the frame we're on, decode more after it.
-							size_t keep = (size_t)bink_pos;
-							bink_buffer.erase(bink_buffer.begin(), bink_buffer.begin() + keep * ch);
-							bink_pos -= keep;
-							size_t old = bink_buffer.size();
-							bink_buffer.resize(old + 2048 * ch);
-							size_t got = bink->Read(&bink_buffer[old], 2048);
-							bink_buffer.resize(old + got * ch);
-							if (got < 2048)
-								bink_end = true;
-							continue;
-						}
-					}
-					size_t i0 = (size_t)bink_pos;
-					size_t i1 = i0 + 1 < bink_buffer.size() / ch ? i0 + 1 : i0;
-					float t = (float)(bink_pos - i0);
-					float l = bink_buffer[i0 * ch] * (1.0f - t) + bink_buffer[i1 * ch] * t;
-					float r = ch > 1 ? bink_buffer[i0 * ch + 1] * (1.0f - t) + bink_buffer[i1 * ch + 1] * t : l;
-					if (ch > 1)
-					{
-						out[0] = l; out[1] = r; out[2] = 0.0f; out[3] = 0.0f; out[4] = 0.0f;
-					}
-					else
-					{
-						out[0] = out[1] = out[2] = out[3] = out[4] = l;
-					}
-					out += 5;
-					++done;
-					bink_pos += step;
-				}
-				return done;
 			}
 #endif
 
@@ -238,12 +245,21 @@ namespace Pcm
 			}
 
 			bool IsOpen() const { return file.is_open() || from_mem; }
+
+			// unbuffered: for a movie's sound track, whose frames are mostly video. The decoder
+			// reads only each frame's audio packet, and a buffered stream would read on into
+			// the video data around it.
+			MusicDecoder(stdfs::path path, bool unbuffered = false)
+			{
+				if (unbuffered)
+					file.rdbuf()->pubsetbuf(nullptr, 0);
+				file.open(path, std::ios::binary);
 #else
 			bool IsOpen() const { return file.is_open(); }
-#endif
 
 			MusicDecoder(stdfs::path path) : file(path, std::ios::binary)
 			{
+#endif
 				if (!file.is_open())
 					return;
 #ifdef __PLAT_PS3__
@@ -284,6 +300,10 @@ namespace Pcm
 					&config,
 					&decoder
 				);
+#ifdef __PLAT_PS3__
+				if (decoder_ok && !ring.Init(5, 48000, kRingFrames))
+					printf("[music] no memory for a stream buffer\n");
+#endif
 			}
 
 			~MusicDecoder()
@@ -311,9 +331,6 @@ namespace Pcm
 				if (bink != nullptr)
 				{
 					bink->Rewind();
-					bink_buffer.clear();
-					bink_pos = 0.0;
-					bink_end = false;
 					return;
 				}
 #endif
@@ -323,14 +340,24 @@ namespace Pcm
 				ma_decoder_seek_to_pcm_frame(&decoder, 0);
 			}
 
+#ifdef __PLAT_PS3__
+			size_t Decode(float *out, size_t frames) override
+			{
+				if (!IsOpen())
+					return 0;
+				if (bink != nullptr)
+					return bink->Read(out, frames);
+				if (!decoder_ok)
+					return 0;
+				ma_uint64 frames_read = 0;
+				ma_decoder_read_pcm_frames(&decoder, out, frames, &frames_read);
+				return (size_t)frames_read;
+			}
+#else
 			size_t Stream(char *p, size_t bytes) override
 			{
 				if (!IsOpen())
 					return 0;
-#ifdef __PLAT_PS3__
-				if (bink != nullptr)
-					return StreamBink((float *)p, bytes / (sizeof(float) * 5)) * (sizeof(float) * 5);
-#endif
 				if (!decoder_ok)
 					return 0;
 
@@ -339,15 +366,135 @@ namespace Pcm
 				ma_decoder_read_pcm_frames(&decoder, p, bytes / (sizeof(float) * 5), &frames_read);
 				return (size_t)(frames_read * (sizeof(float) * 5));
 			}
+#endif
 	};
 
 	// Mixing streams
 	Streamer *music_stream = nullptr;
 	Streamer *stream_stream[NUM_STREAMS] = {};
 
+#ifdef __PLAT_PS3__
+	// The streaming thread: decodes every playing stream ahead into its ring, so the mixer
+	// (which runs under the mixer lock, at a higher priority) never waits on a disk read or
+	// a Bink decode.
+	//
+	// Ownership: the slots above are swapped under both the mixer lock (for the mixer) and
+	// s_workLock (for this thread). This thread takes a stream from its slot under
+	// s_workLock and marks it in s_working while it decodes; ReplaceStream waits until a
+	// stream it took out of its slot isn't s_working before deleting it, so this thread
+	// never touches a deleted stream.
+	enum { kSlots = 1 + NUM_STREAMS };
+	static sys_mutex_t s_workLock;
+	static sys_cond_t s_workWake;		// a stream was added: fill it now
+	static sys_cond_t s_workIdle;		// s_working changed and someone is waiting for that
+	static Streamer *s_working = nullptr;
+	static int s_workWaiters = 0;
+	static bool s_worker = false;		// the thread is running (otherwise the mixer decodes)
+
+	static Streamer *&Slot(int i)
+	{
+		return i == 0 ? music_stream : stream_stream[i - 1];
+	}
+
+#if !PS3_HEADLESS	// (no mixer thread, so no streaming thread either)
+	static void StreamThread(void *)
+	{
+		Ps3Platform::AttachThreadLog();
+		for (;;)
+		{
+			bool did = false;
+			for (int i = 0; i < kSlots; i++)
+			{
+				sysMutexLock(s_workLock, 0);
+				Streamer *stream = Slot(i);
+				s_working = stream;
+				sysMutexUnlock(s_workLock);
+				if (stream == nullptr)
+					continue;
+
+				if (stream->Fill())
+					did = true;
+
+				sysMutexLock(s_workLock, 0);
+				s_working = nullptr;
+				if (s_workWaiters > 0)
+					sysCondSignal(s_workIdle);
+				sysMutexUnlock(s_workLock);
+			}
+			if (!did)
+			{
+				// Every ring is full or ended: look again in 5 ms (a ring holds about 340 ms),
+				// or as soon as a new stream starts.
+				sysMutexLock(s_workLock, 0);
+				sysCondWait(s_workWake, 5000);
+				sysMutexUnlock(s_workLock);
+			}
+		}
+	}
+
+	static bool MakeLock(sys_mutex_t *lock, const char *name)
+	{
+		sys_mutex_attr_t attr;
+		memset(&attr, 0, sizeof(attr));
+		attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO_INHERIT;
+		attr.attr_recursive = SYS_MUTEX_ATTR_NOT_RECURSIVE;
+		attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
+		attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
+		strncpy(attr.name, name, sizeof(attr.name) - 1);
+		if (sysMutexCreate(lock, &attr) == 0)
+			return true;
+		attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+		return sysMutexCreate(lock, &attr) == 0;
+	}
+
+	static bool MakeCond(sys_cond_t *cond, sys_mutex_t lock, const char *name)
+	{
+		sys_cond_attr_t attr;
+		memset(&attr, 0, sizeof(attr));
+		attr.attr_pshared = SYS_COND_ATTR_PSHARED;
+		strncpy(attr.name, name, sizeof(attr.name) - 1);
+		return sysCondCreate(cond, lock, &attr) == 0;
+	}
+#endif
+
+	static void StartStreamThread()
+	{
+#if !PS3_HEADLESS
+		if (Ps3Platform::NoThreads())
+			return;
+		if (!MakeLock(&s_workLock, "audstrm") || !MakeCond(&s_workWake, s_workLock, "audwake") ||
+		    !MakeCond(&s_workIdle, s_workLock, "audidle"))
+		{
+			printf("[music] streaming thread: no lock, the mixer decodes\n");
+			return;
+		}
+		// Below the mixer (200), above the game thread (1000) and the sysutil thread (500).
+		// 256 KB like the mixer's: the Bink decoder keeps a 16 KB block on the stack, and
+		// miniaudio's decoders run here too.
+		sys_ppu_thread_t id;
+		if (sysThreadCreate(&id, StreamThread, NULL, 300, 256 * 1024, 0, (char*)"thugstream") != 0)
+		{
+			printf("[music] streaming thread failed to start, the mixer decodes\n");
+			return;
+		}
+		s_worker = true;
+#endif
+	}
+#endif
+
 	// Mixer
 	void PCMAudio_Mix(char *buffer, size_t size)
 	{
+#ifdef __PLAT_PS3__
+		// Without the streaming thread, decode here as before (under the mixer lock).
+		if (!s_worker)
+		{
+			for (int i = 0; i < kSlots; i++)
+				if (Slot(i) != nullptr)
+					Slot(i)->Fill();
+		}
+#endif
+
 		// Mix music
 		if (music_stream != nullptr)
 			music_stream->Mix(buffer, size);
@@ -408,9 +555,34 @@ namespace Pcm
 	static void ReplaceStream(Streamer *&slot, Streamer *replacement)
 	{
 		Audio::Lock();
+#ifdef __PLAT_PS3__
+		if (s_worker)
+			sysMutexLock(s_workLock, 0);
+#endif
 		Streamer *old = slot;
 		slot = replacement;
+#ifdef __PLAT_PS3__
+		if (s_worker)
+			sysMutexUnlock(s_workLock);
+#endif
 		Audio::Unlock();
+#ifdef __PLAT_PS3__
+		// The streaming thread may still be decoding the old stream (it took it before the
+		// swap): wait for it to put it down. A new stream gets its first decode right away.
+		if (s_worker)
+		{
+			sysMutexLock(s_workLock, 0);
+			if (replacement != nullptr)
+				sysCondSignal(s_workWake);
+			while (old != nullptr && s_working == old)
+			{
+				++s_workWaiters;
+				sysCondWait(s_workIdle, 20 * 1000);
+				--s_workWaiters;
+			}
+			sysMutexUnlock(s_workLock);
+		}
+#endif
 		delete old;
 	}
 
@@ -461,6 +633,9 @@ namespace Pcm
 		// Index music and streams
 #ifdef __PLAT_PS3__
 		Ps3Platform::Step("indexing music and streams");
+#endif
+#ifdef __PLAT_PS3__
+		StartStreamThread();
 #endif
 		music_paths = Index(File::DataPath() / "music");
 		stream_paths = Index(File::DataPath() / "streams");
@@ -903,7 +1078,7 @@ namespace Pcm
 #ifdef __PLAT_PS3__
 	bool PCMAudio_PlayMovieAudio(const char *path, float volume)
 	{
-		MusicDecoder *track = new MusicDecoder(stdfs::path(path));
+		MusicDecoder *track = new MusicDecoder(stdfs::path(path), true);
 		if (track->bink == nullptr)
 		{
 			delete track;

@@ -23,16 +23,24 @@ namespace Audio
 static sys_mutex_t s_lock;
 static bool s_started;
 
+// Priority inheritance: the game thread (priority 1000) takes this lock to start and stop
+// sounds, and the mixer thread (200) waits for it every block. Without inheritance, a thread
+// between the two could keep the game thread from releasing it while the mixer starves.
 static void CreateLock()
 {
 	sys_mutex_attr_t attr;
 	memset(&attr, 0, sizeof(attr));
-	attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+	attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO_INHERIT;
 	attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
 	attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
 	attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
 	strcpy(attr.name, "audmix");
-	sysMutexCreate(&s_lock, &attr);
+	if (sysMutexCreate(&s_lock, &attr) != 0)
+	{
+		printf("[audio] no priority-inheriting mutex, using a plain one\n");
+		attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+		sysMutexCreate(&s_lock, &attr);
+	}
 }
 
 void Lock()
@@ -62,7 +70,8 @@ void Shutdown(bool)
 #else
 
 // kAhead: blocks (256 samples, 5.3 ms each) kept queued ahead of playback, out of the port's
-// 16; enough to ride over a slow Bink frame read.
+// 16. The mixer no longer reads or decodes anything itself (Gel/Music/SDL/p_music.cpp's
+// streaming thread does), so this only has to cover scheduling delays.
 enum { kInChannels = 5, kOutChannels = 8, kAhead = 8 };
 
 static u32 s_port;
@@ -78,6 +87,11 @@ static float s_mix[AUDIO_BLOCK_SAMPLES * kInChannels];
 static float* Block(u32 index)
 {
 	return (float*)(u64)s_config.audioDataStart + (u64)index * AUDIO_BLOCK_SAMPLES * s_config.channelCount;
+}
+
+static void ClearBlock(u32 index)
+{
+	memset(Block(index), 0, AUDIO_BLOCK_SAMPLES * s_config.channelCount * sizeof(float));
 }
 
 static void Fill(float* out)
@@ -103,11 +117,16 @@ static void Fill(float* out)
 	}
 }
 
+// The port plays its ring of blocks round and round whether or not they were refilled, so a
+// block that has been played is cleared at once: if the mixer is late, the port plays silence
+// instead of the same audio again. If it is so late that the port has gone past the blocks it
+// had filled, every block is cleared before it starts again.
 static void MixThread(void*)
 {
 	Ps3Platform::AttachThreadLog();
 	u32 blocks = (u32)s_config.numBlocks;
 	u32 next = 1;
+	u32 last = 0;	// the block that was playing last time
 	sys_event_t ev;
 	while (!s_quit)
 	{
@@ -118,9 +137,20 @@ static void MixThread(void*)
 		u32 dist = (next + blocks - playing) % blocks;
 		if (dist == 0 || dist > kAhead + 1)
 		{
-			next = (playing + 1) % blocks;	// fell behind: restart just after the play position
+			// Fell behind: the port is past what was filled. Clear the whole ring (including
+			// the block playing now, which holds old audio) and restart just after the play
+			// position.
+			for (u32 i = 0; i < blocks; ++i)
+				ClearBlock(i);
+			next = (playing + 1) % blocks;
 			dist = 1;
 		}
+		else
+		{
+			for (u32 i = last; i != playing; i = (i + 1) % blocks)
+				ClearBlock(i);
+		}
+		last = playing;
 		while (dist <= kAhead)
 		{
 			Fill(Block(next));
