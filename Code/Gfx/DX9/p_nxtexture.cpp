@@ -7,6 +7,9 @@
 
 #include "NX/nx_init.h"
 #include <core/endian.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 namespace NxXbox
 {
@@ -466,6 +469,38 @@ static void Read(void* outAddr, size_t size, size_t count, uint8_t*& pFP, bool i
 		MemoryRead(outAddr, size, count, pFP);
 	}
 }
+
+#ifdef __PLAT_PS3__
+// Reads past n bytes. A texture or level that can't be loaded still has its data in the
+// stream, and the textures after it are read from wherever this one ends.
+static void SkipBytes(uint32 n, uint8_t*& pFP, bool is_file)
+{
+	if (!is_file)
+	{
+		pFP += n;
+		return;
+	}
+	char buf[256];
+	while (n)
+	{
+		uint32 c = n < sizeof(buf) ? n : (uint32)sizeof(buf);
+		Read(buf, c, 1, pFP, is_file);
+		n -= c;
+	}
+}
+
+// Reads past the rest of one texture's record: its palette, then each level's size and data.
+static void SkipTextureData(uint32 palette_size, uint32 levels, uint8_t*& pFP, bool is_file)
+{
+	SkipBytes(palette_size, pFP, is_file);
+	for (uint32 l = 0; l < levels; ++l)
+	{
+		uint32 level_size;
+		Read(&level_size, sizeof(uint32), 1, pFP, is_file); Endian::Fix(level_size);
+		SkipBytes(level_size, pFP, is_file);
+	}
+}
+#endif
 static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, Lst::HashTable<Nx::CTexture>* p_texture_table, bool okay_to_rebuild_texture_table, bool is_file)
 {
 	uint8_t* p_FH = (uint8_t*)p_stream;
@@ -521,7 +556,7 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		p_texture->PaletteDepth = (uint8)palette_depth;
 		p_texture->DXT = (uint8)dxt;
 
-		D3DFORMAT	texture_format;
+		D3DFORMAT	texture_format = D3DFMT_UNKNOWN;	// stays so for a format this loader doesn't know
 		if (p_texture->DXT > 0)
 		{
 			if ((p_texture->DXT == 1) || (p_texture->DXT == 2))
@@ -555,9 +590,34 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 			Dbg_Assert(0);
 		}
 
+#ifdef __PLAT_PS3__
+		// The asserts above are compiled out on PS3, so an unknown format would otherwise reach
+		// CreateTexture. Skip the texture, and its data, to keep the stream in step.
+		if (texture_format == D3DFMT_UNKNOWN)
+		{
+			Ps3Platform::Trace("[tex] texture 0x%08x: unknown format (dxt %u, %u-bit texels), skipped",
+				(unsigned)p_texture->Checksum, (unsigned)dxt, (unsigned)texel_depth);
+			SkipTextureData(palette_size, p_texture->Levels, p_FH, is_file);
+			delete p_texture;
+			continue;
+		}
+#endif
+
 		// LWSS: Change for DX9
 		//if( D3D_OK != D3DDevice_CreateTexture(	p_texture->BaseWidth, p_texture->BaseHeight, p_texture->Levels,	0, texture_format, 0, &p_texture->pD3DTexture ))
 		{ HRESULT hr_ = D3DDevice_CreateTexture(p_texture->BaseWidth, p_texture->BaseHeight, p_texture->Levels, 0, texture_format, D3DPOOL_MANAGED, &p_texture->pD3DTexture, 0); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }	// (the call outside the assert: asserts compile away)
+
+#ifdef __PLAT_PS3__
+		// Out of memory in the D3D shim (it has logged the size): nothing to lock below.
+		if (!p_texture->pD3DTexture)
+		{
+			Ps3Platform::Trace("[tex] texture 0x%08x (%ux%u): not created, skipped",
+				(unsigned)p_texture->Checksum, (unsigned)base_width, (unsigned)base_height);
+			SkipTextureData(palette_size, p_texture->Levels, p_FH, is_file);
+			delete p_texture;
+			continue;
+		}
+#endif
 
 		p_texture->texrawdata = NULL;
 
@@ -571,8 +631,23 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 		{
 			read_palette_data = true;
 			Dbg_MsgAssert(palette_size <= sizeof(palette_data), ("palette too big: %u", palette_size));
+#ifdef __PLAT_PS3__
+			// The assert above is compiled out: never read more than palette_data holds (8-bit
+			// texels only index 256 entries anyway), and read past the rest.
+			uint32 palette_read = palette_size;
+			if (palette_read > sizeof(palette_data))
+			{
+				Ps3Platform::Trace("[tex] texture 0x%08x: palette of %u bytes, only the first %u used",
+					(unsigned)p_texture->Checksum, (unsigned)palette_size, (unsigned)sizeof(palette_data));
+				palette_read = sizeof(palette_data);
+			}
+			Read(palette_data, palette_read, 1, p_FH, is_file);
+			SkipBytes(palette_size - palette_read, p_FH, is_file);
+			Endian::Fix32Array(palette_data, palette_read / 4);	// PS3: CLUT entries in host order, as written by DwordizeTexelData
+#else
 			Read(palette_data, palette_size, 1, p_FH, is_file);
 			Endian::Fix32Array(palette_data, palette_size / 4);	// PS3: CLUT entries in host order, as written by DwordizeTexelData
+#endif
 			Dbg_Assert(palette_size < 2048);
 		}
 		else
@@ -636,10 +711,25 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 			if (D3D_OK != p_texture->pD3DTexture->LockRect(mip_level, &locked_rect, NULL, 0))
 			{
 				Dbg_Assert(0);
+#ifdef __PLAT_PS3__
+				SkipBytes(texture_level_data_size, p_FH, is_file);	// keep the following reads in step
+#endif
 			}
 			else
 			{
 				char* p_src = (char*)malloc(texture_level_data_size);
+#ifdef __PLAT_PS3__
+				if (!p_src)
+				{
+					Ps3Platform::Trace("[gfx] out of memory: %u bytes for texture 0x%08x level %u, level skipped",
+						(unsigned)texture_level_data_size, (unsigned)p_texture->Checksum, (unsigned)mip_level);
+					SkipBytes(texture_level_data_size, p_FH, is_file);
+					p_texture->pD3DTexture->UnlockRect(mip_level);
+					if (mip_width  > 1) mip_width  >>= 1;
+					if (mip_height > 1) mip_height >>= 1;
+					continue;
+				}
+#endif
 				Read(p_src, texture_level_data_size, 1, p_FH, is_file);
 
 				if (p_texture->DXT > 0)
@@ -664,14 +754,37 @@ static Lst::HashTable<Nx::CTexture>* LoadTextureFile_Internal(void*& p_stream, L
 					uint32 dst_bpp       = (p_texture->TexelDepth == 16) ? 2 : 4;
 					uint32 dst_row_bytes = mip_width * dst_bpp;
 					char*  p_linear      = (char*)malloc(mip_width * mip_height * dst_bpp);
+#ifdef __PLAT_PS3__
+					if (!p_linear)
+					{
+						Ps3Platform::Trace("[gfx] out of memory: %u bytes for texture 0x%08x level %u, level skipped",
+							(unsigned)(mip_width * mip_height * dst_bpp), (unsigned)p_texture->Checksum, (unsigned)mip_level);
+						free(p_src);
+						p_texture->pD3DTexture->UnlockRect(mip_level);
+						if (mip_width  > 1) mip_width  >>= 1;
+						if (mip_height > 1) mip_height >>= 1;
+						continue;
+					}
+#endif
 
 					if (read_palette_data)
 					{
 						// 8-bit palettized: deswizzle the indices, then expand through the CLUT.
 						char* workspace = (char*)malloc(mip_width * mip_height);
-						NxXbox::Unswizzle(workspace, p_src, mip_width, mip_height, 1);
-						NxXbox::DwordizeTexelData((intptr_t)p_linear, (intptr_t)workspace, mip_width * mip_height, (intptr_t)palette_data);
-						free(workspace);
+#ifdef __PLAT_PS3__
+						if (!workspace)
+						{
+							Ps3Platform::Trace("[gfx] out of memory: %u bytes for texture 0x%08x level %u, level left blank",
+								(unsigned)(mip_width * mip_height), (unsigned)p_texture->Checksum, (unsigned)mip_level);
+							memset(p_linear, 0, mip_width * mip_height * dst_bpp);
+						}
+						else
+#endif
+						{
+							NxXbox::Unswizzle(workspace, p_src, mip_width, mip_height, 1);
+							NxXbox::DwordizeTexelData((intptr_t)p_linear, (intptr_t)workspace, mip_width * mip_height, (intptr_t)palette_data);
+							free(workspace);
+						}
 					}
 					else
 					{

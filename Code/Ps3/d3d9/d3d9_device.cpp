@@ -12,6 +12,26 @@
 
 static IDirect3DDevice9* g_device = NULL;
 
+// newlib's allocator returns NULL when the pool is used up. Each kind of object logs its
+// first failure (with the size asked for) so a later crash elsewhere can be traced back
+// here; after that the same failure would only flood the log.
+enum OomKind { OOM_SURFACE, OOM_TEXTURE, OOM_VERTEXBUFFER, OOM_INDEXBUFFER, OOM_SHADER, OOM_KINDS };
+
+static void LogOutOfMemory(OomKind kind, const char* what, unsigned long bytes)
+{
+	static bool logged[OOM_KINDS];
+	if (logged[kind]) return;
+	logged[kind] = true;
+	printf("[gfx] out of memory: %lu bytes for %s\n", bytes, what);
+}
+
+// Render and depth targets are drawn by the RSX into its own memory; the shim's main-memory
+// copy of their pixels is never read, so it is only allocated if something locks one.
+static bool IsGpuTarget(DWORD usage)
+{
+	return (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) != 0;
+}
+
 // ---------------------------------------------------------------------------
 // Format helpers
 // ---------------------------------------------------------------------------
@@ -71,8 +91,19 @@ IDirect3DSurface9::IDirect3DSurface9(UINT w, UINT h, D3DFORMAT fmt, DWORD usage,
 	: IDirect3DResource9(D3DRTYPE_SURFACE), m_width(w), m_height(h), m_format(fmt), m_usage(usage),
 	  m_owner(owner), m_level(level), m_bits(NULL), m_pitch(RowPitch(fmt, w)), m_backend(NULL)
 {
-	if (!owner)
+	// A NULL m_bits here (out of memory) is caught by the Create* call that made the surface.
+	if (!owner && !IsGpuTarget(usage))
 		m_bits = (BYTE*)calloc(1, m_pitch * Rows(fmt, h));
+}
+
+// Gives a stand-alone surface its main-memory pixels if it has none yet.
+static bool SurfaceBits(IDirect3DSurface9* s)
+{
+	if (s->m_bits) return true;
+	unsigned long bytes = (unsigned long)s->m_pitch * Rows(s->m_format, s->m_height);
+	s->m_bits = (BYTE*)calloc(1, bytes);
+	if (!s->m_bits) LogOutOfMemory(OOM_SURFACE, "a surface", bytes);
+	return s->m_bits != NULL;
 }
 
 IDirect3DSurface9::~IDirect3DSurface9()
@@ -97,6 +128,12 @@ HRESULT IDirect3DSurface9::LockRect(D3DLOCKED_RECT* r, const RECT* rect, DWORD f
 {
 	if (m_owner)
 		return m_owner->LockRect(m_level, r, rect, flags);
+	if (!SurfaceBits(this))
+	{
+		r->pBits = NULL;
+		r->Pitch = 0;
+		return E_OUTOFMEMORY;
+	}
 	BYTE* bits = m_bits;
 	if (rect)
 		bits += rect->top / (IsDxt(m_format) ? 4 : 1) * m_pitch
@@ -124,9 +161,26 @@ HRESULT IDirect3DSurface9::GetContainer(REFIID, void** pp)
 // Textures
 // ---------------------------------------------------------------------------
 // Main-memory copies held by textures (each also has its own copy in RSX memory), for the
-// [gfx] frame lines in the log: how much freeing the copy after upload would save.
+// [gfx] frame lines in the log: how much freeing the copy after upload would save. Only
+// copies that exist are counted, so a render target without one adds nothing.
 volatile unsigned g_ps3TextureCount;
 volatile unsigned long long g_ps3TextureRamBytes;
+
+// Allocates a texture's main-memory copy of all its levels, zeroed, if it has none yet.
+static bool TextureBits(IDirect3DTexture9* t)
+{
+	if (t->m_data) return true;
+	t->m_data = (BYTE*)memalign(128, t->m_size ? t->m_size : 128);
+	if (!t->m_data)
+	{
+		LogOutOfMemory(OOM_TEXTURE, "a texture", t->m_size);
+		return false;
+	}
+	memset(t->m_data, 0, t->m_size);
+	g_ps3TextureCount = g_ps3TextureCount + 1;
+	g_ps3TextureRamBytes = g_ps3TextureRamBytes + t->m_size;
+	return true;
+}
 
 IDirect3DTexture9::IDirect3DTexture9(UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool)
 	: IDirect3DBaseTexture9(D3DRTYPE_TEXTURE), m_width(w), m_height(h), m_levels(0), m_usage(usage),
@@ -148,11 +202,10 @@ IDirect3DTexture9::IDirect3DTexture9(UINT w, UINT h, UINT levels, DWORD usage, D
 		offset += (LevelSize(i) + 127) & ~127u;	// 128-byte aligned levels (RSX-friendly)
 	}
 	m_size = offset;
-	m_data = (BYTE*)memalign(128, m_size ? m_size : 128);
-	memset(m_data, 0, m_size);
 	memset(m_surfaces, 0, sizeof(m_surfaces));
-	g_ps3TextureCount = g_ps3TextureCount + 1;
-	g_ps3TextureRamBytes = g_ps3TextureRamBytes + m_size;
+	// A NULL m_data here (out of memory) is caught by CreateTexture.
+	if (!IsGpuTarget(usage))
+		TextureBits(this);
 }
 
 IDirect3DTexture9::~IDirect3DTexture9()
@@ -166,9 +219,12 @@ IDirect3DTexture9::~IDirect3DTexture9()
 			m_surfaces[i]->Release();
 		}
 	}
-	free(m_data);
-	g_ps3TextureCount = g_ps3TextureCount - 1;
-	g_ps3TextureRamBytes = g_ps3TextureRamBytes - m_size;
+	if (m_data)
+	{
+		free(m_data);
+		g_ps3TextureCount = g_ps3TextureCount - 1;
+		g_ps3TextureRamBytes = g_ps3TextureRamBytes - m_size;
+	}
 }
 
 UINT IDirect3DTexture9::LevelWidth(UINT level) const  { UINT w = m_width >> level; return w ? w : 1; }
@@ -202,6 +258,12 @@ HRESULT IDirect3DTexture9::GetSurfaceLevel(UINT level, IDirect3DSurface9** pp)
 HRESULT IDirect3DTexture9::LockRect(UINT level, D3DLOCKED_RECT* r, const RECT* rect, DWORD)
 {
 	if (level >= m_levels) return D3DERR_INVALIDCALL;
+	if (!TextureBits(this))
+	{
+		r->pBits = NULL;
+		r->Pitch = 0;
+		return E_OUTOFMEMORY;
+	}
 	BYTE* bits = LevelBits(level);
 	UINT pitch = LevelPitch(level);
 	if (rect)
@@ -230,8 +292,9 @@ IDirect3DVertexBuffer9::IDirect3DVertexBuffer9(UINT size, DWORD usage, DWORD fvf
 	: IDirect3DResource9(D3DRTYPE_VERTEXBUFFER), m_size(size), m_usage(usage), m_fvf(fvf), m_pool(pool),
 	  m_dirty(true), m_backend(NULL)
 {
+	// A NULL m_data here (out of memory) is caught by the Create* call.
 	m_data = (BYTE*)memalign(128, size ? size : 128);
-	memset(m_data, 0, size);
+	if (m_data) memset(m_data, 0, size);
 	m_changes.Reset(size);
 }
 
@@ -267,8 +330,9 @@ IDirect3DIndexBuffer9::IDirect3DIndexBuffer9(UINT size, DWORD usage, D3DFORMAT f
 	: IDirect3DResource9(D3DRTYPE_INDEXBUFFER), m_size(size), m_usage(usage), m_format(fmt), m_pool(pool),
 	  m_dirty(true), m_backend(NULL)
 {
+	// A NULL m_data here (out of memory) is caught by the Create* call.
 	m_data = (BYTE*)memalign(128, size ? size : 128);
-	memset(m_data, 0, size);
+	if (m_data) memset(m_data, 0, size);
 	m_changes.Reset(size);
 }
 
@@ -315,7 +379,7 @@ IDirect3DVertexShader9::IDirect3DVertexShader9(const DWORD* tokens)
 {
 	m_numTokens = tokens ? CountShaderTokens(tokens) : 0;
 	m_tokens = (DWORD*)malloc(m_numTokens * sizeof(DWORD) + 4);
-	if (tokens) memcpy(m_tokens, tokens, m_numTokens * sizeof(DWORD));
+	if (tokens && m_tokens) memcpy(m_tokens, tokens, m_numTokens * sizeof(DWORD));
 }
 
 IDirect3DVertexShader9::~IDirect3DVertexShader9()
@@ -329,7 +393,7 @@ IDirect3DPixelShader9::IDirect3DPixelShader9(const DWORD* tokens)
 {
 	m_numTokens = tokens ? CountShaderTokens(tokens) : 0;
 	m_tokens = (DWORD*)malloc(m_numTokens * sizeof(DWORD) + 4);
-	if (tokens) memcpy(m_tokens, tokens, m_numTokens * sizeof(DWORD));
+	if (tokens && m_tokens) memcpy(m_tokens, tokens, m_numTokens * sizeof(DWORD));
 }
 
 IDirect3DPixelShader9::~IDirect3DPixelShader9()
@@ -472,19 +536,42 @@ HRESULT IDirect3DDevice9::GetBackBuffer(UINT, UINT, D3DBACKBUFFER_TYPE, IDirect3
 
 HRESULT IDirect3DDevice9::CreateTexture(UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DTexture9** pp, HANDLE*)
 {
-	*pp = new IDirect3DTexture9(w, h, levels, usage, fmt, pool);
+	IDirect3DTexture9* t = new IDirect3DTexture9(w, h, levels, usage, fmt, pool);
+	if (!t->m_data && !IsGpuTarget(usage))
+	{
+		t->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
+	*pp = t;
 	return S_OK;
 }
 
 HRESULT IDirect3DDevice9::CreateVertexBuffer(UINT len, DWORD usage, DWORD fvf, D3DPOOL pool, IDirect3DVertexBuffer9** pp, HANDLE*)
 {
-	*pp = new IDirect3DVertexBuffer9(len, usage, fvf, pool);
+	IDirect3DVertexBuffer9* vb = new IDirect3DVertexBuffer9(len, usage, fvf, pool);
+	if (!vb->m_data)
+	{
+		LogOutOfMemory(OOM_VERTEXBUFFER, "a vertex buffer", len);
+		vb->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
+	*pp = vb;
 	return S_OK;
 }
 
 HRESULT IDirect3DDevice9::CreateIndexBuffer(UINT len, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DIndexBuffer9** pp, HANDLE*)
 {
-	*pp = new IDirect3DIndexBuffer9(len, usage, fmt, pool);
+	IDirect3DIndexBuffer9* ib = new IDirect3DIndexBuffer9(len, usage, fmt, pool);
+	if (!ib->m_data)
+	{
+		LogOutOfMemory(OOM_INDEXBUFFER, "an index buffer", len);
+		ib->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
+	*pp = ib;
 	return S_OK;
 }
 
@@ -502,7 +589,15 @@ HRESULT IDirect3DDevice9::CreateDepthStencilSurface(UINT w, UINT h, D3DFORMAT fm
 
 HRESULT IDirect3DDevice9::CreateOffscreenPlainSurface(UINT w, UINT h, D3DFORMAT fmt, D3DPOOL, IDirect3DSurface9** pp, HANDLE*)
 {
-	*pp = new IDirect3DSurface9(w, h, fmt, 0, NULL, 0);
+	IDirect3DSurface9* s = new IDirect3DSurface9(w, h, fmt, 0, NULL, 0);
+	if (!s->m_bits)
+	{
+		LogOutOfMemory(OOM_SURFACE, "a surface", (unsigned long)s->m_pitch * Rows(fmt, h));
+		s->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
+	*pp = s;
 	return S_OK;
 }
 
@@ -636,6 +731,13 @@ HRESULT IDirect3DDevice9::GetFVF(DWORD* fvf) { *fvf = m_fvf; return S_OK; }
 HRESULT IDirect3DDevice9::CreateVertexShader(const DWORD* tokens, IDirect3DVertexShader9** pp)
 {
 	IDirect3DVertexShader9* vs = new IDirect3DVertexShader9(tokens);
+	if (!vs->m_tokens)
+	{
+		LogOutOfMemory(OOM_SHADER, "a shader", (unsigned long)vs->m_numTokens * sizeof(DWORD) + 4);
+		vs->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
 	Ps3Gfx::ShaderCreated(vs);
 	*pp = vs;
 	return S_OK;
@@ -663,6 +765,13 @@ HRESULT IDirect3DDevice9::GetVertexShaderConstantF(UINT reg, float* data, UINT c
 HRESULT IDirect3DDevice9::CreatePixelShader(const DWORD* tokens, IDirect3DPixelShader9** pp)
 {
 	IDirect3DPixelShader9* ps = new IDirect3DPixelShader9(tokens);
+	if (!ps->m_tokens)
+	{
+		LogOutOfMemory(OOM_SHADER, "a shader", (unsigned long)ps->m_numTokens * sizeof(DWORD) + 4);
+		ps->Release();
+		*pp = NULL;
+		return E_OUTOFMEMORY;
+	}
 	Ps3Gfx::ShaderCreated(ps);
 	*pp = ps;
 	return S_OK;

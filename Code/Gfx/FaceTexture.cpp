@@ -14,6 +14,10 @@
 // for temporary texture
 #include <sys/file/filesys.h>
 
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
+
 namespace Gfx
 {
 
@@ -58,6 +62,20 @@ void CFaceTexture::LoadFace( const char* pFaceName, bool fullPathIncluded )
 	}
 
 	char* pData = (char*)File::LoadAlloc( extended_filename, &file_size );
+#ifdef __PLAT_PS3__
+	// The assert below is compiled out on PS3, and it came after the copy anyway: check
+	// first, and leave the face as it was rather than overrun m_rawData.
+	if ( !pData || file_size < 0 || file_size > vRAW_TEXTURE_SIZE )
+	{
+		Ps3Platform::Trace( "[face] %s: %s (%d bytes, buffer is %d), not loaded", extended_filename,
+			pData ? "wrong size" : "can't load", pData ? file_size : 0, (int)vRAW_TEXTURE_SIZE );
+		if ( pData )
+		{
+			Mem::Free( pData );
+		}
+		return;
+	}
+#endif
 	memcpy( m_rawData, pData, file_size );
 	Dbg_MsgAssert( file_size <= vRAW_TEXTURE_SIZE, ( "File too big (file is %d, buffer is %d)", file_size, vRAW_TEXTURE_SIZE ) );
 	Mem::Free( pData );

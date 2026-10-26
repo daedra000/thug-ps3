@@ -448,7 +448,7 @@ public:
 	DWORD m_usage;
 	IDirect3DTexture9* m_owner;	// not ref-counted (the texture owns its levels)
 	UINT m_level;
-	BYTE* m_bits;				// only for stand-alone surfaces (render/depth targets)
+	BYTE* m_bits;				// only for stand-alone surfaces; render/depth targets get it on first LockRect
 	UINT m_pitch;
 	void* m_backend;			// RSX surface state
 };
@@ -478,7 +478,8 @@ public:
 	UINT LevelHeight(UINT level) const;
 	UINT LevelPitch(UINT level) const;
 	UINT LevelSize(UINT level) const;
-	BYTE* LevelBits(UINT level) const { return m_data + m_offsets[level]; }
+	// NULL while the texture has no main-memory copy (render targets get one only if locked).
+	BYTE* LevelBits(UINT level) const { return m_data ? m_data + m_offsets[level] : NULL; }
 
 	UINT m_width, m_height, m_levels;
 	DWORD m_usage;

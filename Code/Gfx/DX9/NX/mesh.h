@@ -5,6 +5,9 @@
 #include <core\math\geometry.h>
 #include <gfx\nx.h>
 #include "material.h"
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 
 namespace NxXbox
 {
@@ -81,6 +84,14 @@ struct IndexBufferWrapper
 		this->d3dusage = arg_d3dusage;
 		this->d3dformat = arg_d3dformat;
 		this->rawdata = (uint16*)malloc(size);
+#ifdef __PLAT_PS3__
+		// newlib returns NULL once the pool is used up; say so here, where the size is known,
+		// and the Apply/ReInit paths below skip the copy instead of reading through NULL.
+		if (!this->rawdata && size)
+			Ps3Platform::Trace("[gfx] out of memory: %u bytes for mesh index data (%.63s)", (unsigned)size, this->debug_name);
+		if (!this->indexBuffer)
+			Ps3Platform::Trace("[gfx] mesh index buffer of %u bytes not created (%.63s)", (unsigned)size, this->debug_name);
+#endif
 		unk4 = NULL;
 		unk5 = NULL;
 
@@ -103,6 +114,10 @@ struct IndexBufferWrapper
 		if (!this->indexBuffer)
 		{
 			D3DDevice_CreateIndexBuffer(this->len, this->d3dusage | D3DUSAGE_WRITEONLY, this->d3dformat, D3DPOOL_DEFAULT, &this->indexBuffer, NULL);
+#ifdef __PLAT_PS3__
+			if (!this->indexBuffer || !this->rawdata)
+				return;
+#endif
 			
 			void* mem = NULL;
 			if (this->indexBuffer->Lock(0, 0, &mem, 0) >= 0)
@@ -120,6 +135,10 @@ struct IndexBufferWrapper
 	// Copies the Data from rawdata into the D3D Index Buffer
 	int ApplyData()
 	{
+#ifdef __PLAT_PS3__
+		if (!this->indexBuffer || !this->rawdata)
+			return 0;
+#endif
 		void* dst;
 		if (this->indexBuffer->Lock(0, 0, &dst, 0) >= 0)
 		{
@@ -230,6 +249,10 @@ struct VertexBufferWrapper
 		if ((flags & FLAG_NO_ALLOC_RAWDATABUFFER) == 0)
 		{
 			this->rawdata = (BYTE*)malloc(len);
+#ifdef __PLAT_PS3__
+			if (!this->rawdata && len)
+				Ps3Platform::Trace("[gfx] out of memory: %u bytes for mesh vertex data (%.63s)", (unsigned)len, this->debug_name);
+#endif
 		}
 		else
 		{
@@ -238,6 +261,10 @@ struct VertexBufferWrapper
 
 		this->vertexWrapperCreationFlags = flags;
 		this->streamOffset = 0;
+#ifdef __PLAT_PS3__
+		if ((flags & FLAG_NO_CREATE_VERTEX_BUFFER) == 0 && !this->vertexBuffer)
+			Ps3Platform::Trace("[gfx] mesh vertex buffer of %u bytes not created (%.63s)", (unsigned)len, this->debug_name);
+#endif
 		this->d3dlockFlags = -1;
 		this->lockedSize = 0;
 		this->lockOffset = 0;
@@ -269,6 +296,10 @@ struct VertexBufferWrapper
 
 		if ((this->vertexWrapperCreationFlags & FLAG_NO_ALLOC_RAWDATABUFFER) == 0)
 		{
+#ifdef __PLAT_PS3__
+			if (!this->vertexBuffer || !this->rawdata)
+				return;
+#endif
 			int offset = 0;
 			if ((this->vertexWrapperCreationFlags & FLAG_NO_CREATE_VERTEX_BUFFER) != 0)
 			{
@@ -364,6 +395,13 @@ struct VertexBufferWrapper
 		if ( (lockFlags & D3DLOCK_DISCARD) || (vertexWrapperCreationFlags & FLAG_NO_ALLOC_RAWDATABUFFER) )
 		{
 			Dbg_Assert((d3dusageFlags & D3DUSAGE_DYNAMIC) != 0); // lwss: dumbass, you can't use without dynamic
+#ifdef __PLAT_PS3__
+			if (!this->vertexBuffer)
+			{
+				*ppbData = NULL;
+				return E_OUTOFMEMORY;
+			}
+#endif
 
 			HRESULT err = this->vertexBuffer->Lock(lockOffset, sizeToLock, ppbData, lockFlags);
 			Dbg_Assert(err == D3D_OK);
@@ -371,6 +409,13 @@ struct VertexBufferWrapper
 		}
 		else
 		{
+#ifdef __PLAT_PS3__
+			if (!this->rawdata)
+			{
+				*ppbData = NULL;
+				return E_OUTOFMEMORY;
+			}
+#endif
 			return 0;
 		}
 	}
@@ -387,6 +432,14 @@ struct VertexBufferWrapper
 		}
 		if ((this->d3dlockFlags & D3DLOCK_READONLY) == 0)
 		{
+#ifdef __PLAT_PS3__
+			// No D3D buffer (out of memory) or no copy to send: nothing to apply.
+			if (!this->vertexBuffer || (!this->rawdata && (vertexWrapperCreationFlags & FLAG_NO_ALLOC_RAWDATABUFFER) == 0 && (this->d3dlockFlags & D3DLOCK_DISCARD) == 0))
+			{
+				this->d3dlockFlags = -1;
+				return;
+			}
+#endif
 			if ( (this->d3dlockFlags & D3DLOCK_DISCARD) || (vertexWrapperCreationFlags & FLAG_NO_ALLOC_RAWDATABUFFER) )
 			{
 				this->d3dlockFlags = -1;

@@ -266,6 +266,16 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 	if (!r) { r = new RsxTexture; memset(r, 0, sizeof(*r)); t->m_backend = r; }
 	if (IsRenderTarget(t)) return RenderTargetTexture(t, r);
 
+	// CreateTexture refuses a texture whose main-memory copy couldn't be allocated, so this
+	// shouldn't happen; but there would be nothing to upload, so draw it white.
+	if (!t->m_data)
+	{
+		LogLimited("texnodata", 1, "a %ux%u texture has no pixels to upload (drawn white)", t->m_width, t->m_height);
+		r->valid = false;
+		t->m_dirty = false;
+		return NULL;
+	}
+
 	FormatInfo fi = MapFormat(t->m_format);
 	if (!fi.ok)
 	{
@@ -1194,6 +1204,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 
 void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 {
+	DeviceGuard guard;
 	if (!s_drawReady || s_skipFrame) return;
 	if (s_capture && dev->m_renderTarget && dev->m_renderTarget != dev->m_backBuffer)
 		printf("[cap] (next draw goes to render target %ux%u format %d)\n", dev->m_renderTarget->m_width, dev->m_renderTarget->m_height, (int)dev->m_renderTarget->m_format);
@@ -1423,9 +1434,10 @@ static void FreeBuffer(void* backend)
 }
 
 void TextureChanged(IDirect3DTexture9*) {}	// uploaded on the next draw that uses it (m_dirty)
-void TextureReleased(IDirect3DTexture9* tex) { FreeTexture(tex->m_backend); tex->m_backend = NULL; }
+void TextureReleased(IDirect3DTexture9* tex) { DeviceGuard guard; FreeTexture(tex->m_backend); tex->m_backend = NULL; }
 void SurfaceReleased(IDirect3DSurface9* surf)
 {
+	DeviceGuard guard;
 	RsxSurface* rs = surf->m_owner ? NULL : (RsxSurface*)surf->m_backend;
 	if (rs)
 	{
@@ -1436,14 +1448,15 @@ void SurfaceReleased(IDirect3DSurface9* surf)
 	s_targetValid = false;
 }
 void VertexBufferChanged(IDirect3DVertexBuffer9*, UINT, UINT) {}
-void VertexBufferReleased(IDirect3DVertexBuffer9* vb) { FreeBuffer(vb->m_backend); vb->m_backend = NULL; }
+void VertexBufferReleased(IDirect3DVertexBuffer9* vb) { DeviceGuard guard; FreeBuffer(vb->m_backend); vb->m_backend = NULL; }
 void IndexBufferChanged(IDirect3DIndexBuffer9*, UINT, UINT) {}
-void IndexBufferReleased(IDirect3DIndexBuffer9* ib) { FreeBuffer(ib->m_backend); ib->m_backend = NULL; }
+void IndexBufferReleased(IDirect3DIndexBuffer9* ib) { DeviceGuard guard; FreeBuffer(ib->m_backend); ib->m_backend = NULL; }
 void ShaderCreated(IDirect3DVertexShader9*) {}
 void ShaderCreated(IDirect3DPixelShader9*) {}
 void ShaderReleased(IDirect3DVertexShader9*) {}
 void ShaderReleased(IDirect3DPixelShader9* ps)
 {
+	DeviceGuard guard;
 	// Drop its cached programs (the key holds the pointer, which may be reused).
 	for (int fog = 0; fog < 2; ++fog)
 	{

@@ -157,8 +157,9 @@ bool AssembleVertexProgram(const char* prg, std::vector<unsigned char>& out, std
 			dstcodeptr[n + 3] = SWAP32(vpi[i].data[3]);
 		}
 
-		b.resize(lastoff);
-		out.swap(b);
+		// Hand back an exactly sized copy: shrinking b with resize() keeps its 64 KB+ capacity,
+		// and every cached program would hold on to that for the rest of the session.
+		std::vector<unsigned char>(b.begin(), b.begin() + lastoff).swap(out);
 		return true;
 	}
 	catch (...)
@@ -304,8 +305,9 @@ bool AssembleFragmentProgram(const char* prg, std::vector<unsigned char>& out, s
 			dstcodeptr[n + 3] = endian_fp(SWAP32(fpi[i].data[3]));
 		}
 
-		b.resize(lastoff);
-		out.swap(b);
+		// Hand back an exactly sized copy: shrinking b with resize() keeps its 64 KB+ capacity,
+		// and every cached program would hold on to that for the rest of the session.
+		std::vector<unsigned char>(b.begin(), b.begin() + lastoff).swap(out);
 		return true;
 	}
 	catch (...)
