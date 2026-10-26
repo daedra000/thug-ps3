@@ -34,6 +34,10 @@ namespace IMA
 			signed char ima_index = 0;
 			signed long ima_step = 0;
 
+			// The PC data's sounds are plain 16-bit PCM (WAVE format 1), not IMA ADPCM:
+			// decoding those as ADPCM gave static.
+			bool pcm16 = false;
+
 		public:
 			// Constructor
 			IMA() {}
@@ -43,7 +47,7 @@ namespace IMA
 			}
 
 			// IMA functions
-			void SetPointer(const unsigned char *data, size_t size);
+			void SetPointer(const unsigned char *data, size_t size, bool isPcm16 = false);
 			void Rewind();
 
 			bool AtEnd();

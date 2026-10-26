@@ -3,8 +3,9 @@
 namespace IMA
 {
 	// IMA functions
-	void IMA::SetPointer(const unsigned char *data, size_t size)
+	void IMA::SetPointer(const unsigned char *data, size_t size, bool isPcm16)
 	{
+		pcm16 = isPcm16;
 		// Set data pointer
 		ima_data = data;
 		ima_size = size;
@@ -37,6 +38,19 @@ namespace IMA
 		// If we're at the end of the buffer, return 0
 		if (IMA::AtEnd())
 			return 0;
+
+		// 16-bit PCM: little-endian samples, read byte by byte (any host byte order)
+		if (pcm16)
+		{
+			if (ima_pointer + 1 >= ima_data + ima_size)
+			{
+				ima_pointer = ima_data + ima_size;
+				return 0;
+			}
+			signed short s = (signed short)(ima_pointer[0] | (ima_pointer[1] << 8));
+			ima_pointer += 2;
+			return s;
+		}
 
 		// Get current nibble
 		unsigned char nibble;

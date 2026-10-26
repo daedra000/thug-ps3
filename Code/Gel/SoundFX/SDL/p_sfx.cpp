@@ -242,7 +242,8 @@ namespace Sfx
 		// Setup sound
 		Snd::Sound *sound = &sounds[voice];
 
-		sound->SetPointer(pInfo->p_sound_data->data.get(), pInfo->p_sound_data->size, pInfo->p_sound_data->format.sample_rate);
+		sound->SetPointer(pInfo->p_sound_data->data.get(), pInfo->p_sound_data->size, pInfo->p_sound_data->format.sample_rate,
+			pInfo->p_sound_data->format.format == 1 && pInfo->p_sound_data->format.bits_per_sample == 16);
 		sound->Play();
 		sound->SetLooping(pInfo->p_sound_data->looping);
 

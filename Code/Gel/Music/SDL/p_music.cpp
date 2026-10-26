@@ -26,6 +26,9 @@
 #endif
 #include <functional>
 #include <fstream>
+#ifdef __PLAT_PS3__
+#include <sstream>
+#endif
 
 #ifndef __PLAT_PS3__
 #include <Shlwapi.h>
@@ -144,21 +147,26 @@ namespace Pcm
 			double bink_pos = 0.0;		// resampling: position between bink_buffer frames 0 and 1
 			bool bink_end = false;
 
-			bool OpenBink()
+			// A stream held in memory (one entry of streams/pcm/pcm.wad), instead of a file.
+			std::istringstream mem;
+			bool from_mem = false;
+
+			bool OpenBink(std::istream &in)
 			{
 				char magic[3] = {};
-				file.read(magic, 3);
-				file.clear();
-				file.seekg(0);
+				in.read(magic, 3);
+				in.clear();
+				in.seekg(0);
 				if (magic[0] != 'B' || magic[1] != 'I' || magic[2] != 'K')
 					return false;
 				bink = new BinkAudio();
-				if (!bink->Open(&file))
+				if (!bink->Open(&in))
 				{
 					printf("[music] unsupported Bink file\n");
 					delete bink;
 					bink = nullptr;
 					file.close();
+					from_mem = false;
 					return true;
 				}
 				bink_buffer.clear();
@@ -221,12 +229,25 @@ namespace Pcm
 			}
 #endif
 
+#ifdef __PLAT_PS3__
+			MusicDecoder(const std::string &bytes) : mem(bytes)
+			{
+				from_mem = true;
+				if (!OpenBink(mem))
+					from_mem = false;	// not Bink: nothing to play
+			}
+
+			bool IsOpen() const { return file.is_open() || from_mem; }
+#else
+			bool IsOpen() const { return file.is_open(); }
+#endif
+
 			MusicDecoder(stdfs::path path) : file(path, std::ios::binary)
 			{
 				if (!file.is_open())
 					return;
 #ifdef __PLAT_PS3__
-				if (OpenBink())
+				if (OpenBink(file))
 					return;
 #endif
 
@@ -274,7 +295,7 @@ namespace Pcm
 					return;
 				}
 #endif
-				if (!file.is_open() || !decoder_ok)
+				if (!IsOpen() || !decoder_ok)
 					return;
 				
 				// Close decoder
@@ -284,7 +305,7 @@ namespace Pcm
 		private:
 			void Rewind() override
 			{
-				if (!file.is_open())
+				if (!IsOpen())
 					return;
 #ifdef __PLAT_PS3__
 				if (bink != nullptr)
@@ -304,7 +325,7 @@ namespace Pcm
 
 			size_t Stream(char *p, size_t bytes) override
 			{
-				if (!file.is_open())
+				if (!IsOpen())
 					return 0;
 #ifdef __PLAT_PS3__
 				if (bink != nullptr)
@@ -343,6 +364,44 @@ namespace Pcm
 	/******************************************************************/
 	static std::unordered_map<uint32, stdfs::path> music_paths;
 	static std::unordered_map<uint32, stdfs::path> stream_paths;
+
+#ifdef __PLAT_PS3__
+	// The level's ambient streams are entries in streams/pcm/pcm.wad (each one an audio-only
+	// Bink file), indexed by streams/pcm/pcm.dat: a count, then checksum, offset, size per
+	// entry, little-endian (as the Xbox and Win32 code reads it).
+	struct WadEntry { uint32 offset, size; };
+	static std::unordered_map<uint32, WadEntry> wad_entries;
+
+	static void IndexWad()
+	{
+		std::ifstream dat(File::DataPath() / "streams" / "pcm" / "pcm.dat", std::ios::binary);
+		if (!dat.is_open())
+			return;
+		std::string bytes((std::istreambuf_iterator<char>(dat)), std::istreambuf_iterator<char>());
+		const unsigned char *b = (const unsigned char *)bytes.data();
+		auto le32 = [&](size_t at) { return (uint32)(b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | ((uint32)b[at + 3] << 24)); };
+		if (bytes.size() < 4)
+			return;
+		uint32 n = le32(0);
+		for (uint32 i = 0; i < n && 4 + i * 12 + 12 <= bytes.size(); ++i)
+			wad_entries[le32(4 + i * 12)] = WadEntry{ le32(8 + i * 12), le32(12 + i * 12) };
+		printf("[music] pcm.wad: %u ambient streams\n", (unsigned)wad_entries.size());
+	}
+
+	static bool ReadWadEntry(uint32 checksum, std::string &out)
+	{
+		auto it = wad_entries.find(checksum);
+		if (it == wad_entries.end())
+			return false;
+		std::ifstream wad(File::DataPath() / "streams" / "pcm" / "pcm.wad", std::ios::binary);
+		if (!wad.is_open())
+			return false;
+		out.resize(it->second.size);
+		wad.seekg(it->second.offset);
+		wad.read(&out[0], it->second.size);
+		return (size_t)wad.gcount() == it->second.size;
+	}
+#endif
 
 	// Opening a decoder reads the file (path lookups, the Bink frame index) and closing one
 	// frees it, so neither happens under the mixer's lock: only the pointer swap does.
@@ -407,6 +466,7 @@ namespace Pcm
 		stream_paths = Index(File::DataPath() / "streams");
 #ifdef __PLAT_PS3__
 		printf("[music] %u music files, %u streams\n", (unsigned)music_paths.size(), (unsigned)stream_paths.size());
+		IndexWad();
 #endif
 	}
 
@@ -884,11 +944,23 @@ namespace Pcm
 
 		// Find stream path from checksum
 		auto it = stream_paths.find(checksum);
+		Streamer *stream = nullptr;
 		if (it == stream_paths.end())
+		{
+#ifdef __PLAT_PS3__
+			std::string bytes;
+			if (!ReadWadEntry(checksum, bytes))
+				return false;
+			stream = new MusicDecoder(bytes);
+#else
 			return false;
-
-		// Play stream
-		Streamer *stream = new MusicDecoder(File::DataPath() / it->second);
+#endif
+		}
+		else
+		{
+			// Play stream
+			stream = new MusicDecoder(File::DataPath() / it->second);
+		}
 		if (!preload)
 			stream->Play();
 		ReplaceStream(stream_stream[whichStream], stream);
