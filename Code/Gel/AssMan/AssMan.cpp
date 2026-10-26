@@ -754,11 +754,28 @@ void CAssMan::UnloadAllTables( bool destroy_permanent )
 //	printf ( "Unloading all tables" );
 	
 	CAsset* p_asset;
+#ifdef __PLAT_PS3__
+	// The in-game skater's anims went missing at the first level change: say what this
+	// unloads (the first 30 anim ids; an id is the CRC of the file name, or a reference's
+	// set + anim checksum) and how many permanent assets it keeps.
+	int ps3_unloaded = 0, ps3_kept = 0, ps3_logged = 0;
+	printf("[anim] UnloadAllTables(%s)\n", destroy_permanent ? "all" : "non-permanent");
+#endif
 	 
 	p_asset = mp_assetlist_head->mp_next;
 	while (p_asset != mp_assetlist_head)
 	{
 		CAsset *p_next = p_asset->mp_next;	
+#ifdef __PLAT_PS3__
+		if ( destroy_permanent || !p_asset->m_permanent )
+		{
+			++ps3_unloaded;
+			if ( p_asset->GetType() == ASSET_ANIM && ps3_logged++ < 30 )
+				printf("[anim]   unloading anim asset 0x%08x (permanent %d)\n", p_asset->GetID(), (int)p_asset->m_permanent);
+		}
+		else
+			++ps3_kept;
+#endif
 		if ( destroy_permanent || !p_asset->m_permanent )
 		{
 			// First destroy any references to this asset
@@ -771,6 +788,9 @@ void CAssMan::UnloadAllTables( bool destroy_permanent )
 		}
 		p_asset = p_next;		
 	}
+#ifdef __PLAT_PS3__
+	printf("[anim] UnloadAllTables: %d assets unloaded, %d permanent kept\n", ps3_unloaded, ps3_kept);
+#endif
 
 }
 
@@ -808,6 +828,18 @@ bool CAssMan::GetDefaultPermanent() const
 
 bool CAssMan::LoadAnim(const char* pFileName, uint32 animName, uint32 referenceChecksum, bool async_load, bool use_pip)
 {
+#ifdef __PLAT_PS3__
+	// For the in-game T-pose: the first anims of each set, with their permanence, and
+	// whether the file was already loaded (then only a reference is added).
+	{
+		static uint32 s_lastSet;
+		static int s_inSet;
+		if ( referenceChecksum != s_lastSet ) { s_lastSet = referenceChecksum; s_inSet = 0; }
+		if ( s_inSet++ < 3 )
+			printf("[anim] LoadAnim %s as 0x%08x (set 0x%08x), permanent %d, pip %d, file already loaded %d\n", pFileName,
+				animName + referenceChecksum, referenceChecksum, (int)m_default_permanent, (int)use_pip, (int)AssetAllocated(pFileName));
+	}
+#endif
 	// If the asset was previously loaded, then we are just creating a reference to it
 	// so the m_permanent flag should be set based on m_default_permanent, and NOT INHERITED
 			
