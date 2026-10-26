@@ -353,7 +353,9 @@ std::string VertexProgram(const VsKey& k)
 // Fragment programs
 // ---------------------------------------------------------------------------
 // Temps: R0 current, R1 D3D's temp register, R2/R3 stage work, R4-R7 the stages'
-// texture samples (t0-t3), R8/R9 argument work, R10-R13 operand scratch.
+// texture samples (t0-t3), R8/R9 argument work, R10-R13 operand scratch. A stage op's
+// own scratch must be R10/R11, never R2/R3: the colour result waits in R2 while the
+// alpha half runs (scratch in R2 turned every MODULATE2X stage's colour into its alpha).
 // Internal constant c[31] = (1, 0, 0.5, 2).
 static const int kFcInternal = 31;
 static const char* kFpHeaderConsts = "#const c[31] = 1 0 0.5 2";
@@ -410,24 +412,24 @@ public:
 		case D3D::TOP_MODULATE: case D3D::TOP_PREMODULATE:
 			m_w.Op("MUL_SAT", d, A1, A2); break;
 		case D3D::TOP_MODULATE2X:
-			m_w.Op("MUL", "R2", A1, A2);
-			m_w.Op("ADD_SAT", d, "R2", "R2"); break;
+			m_w.Op("MUL", "R10", A1, A2);
+			m_w.Op("ADD_SAT", d, "R10", "R10"); break;
 		case D3D::TOP_MODULATE4X:
-			m_w.Op("MUL", "R2", A1, A2);
-			m_w.Op("MUL_SAT", d, "R2", C(kFcInternal, "wwww"));
+			m_w.Op("MUL", "R10", A1, A2);
+			m_w.Op("MUL_SAT", d, "R10", C(kFcInternal, "wwww"));
 			m_w.Op("ADD_SAT", d, dst, dst); break;
 		case D3D::TOP_ADD: m_w.Op("ADD_SAT", d, A1, A2); break;
 		case D3D::TOP_ADDSIGNED:
-			m_w.Op("ADD", "R2", A1, A2);
-			m_w.Op("ADD_SAT", d, "R2", "-" + half); break;
+			m_w.Op("ADD", "R10", A1, A2);
+			m_w.Op("ADD_SAT", d, "R10", "-" + half); break;
 		case D3D::TOP_ADDSIGNED2X:
-			m_w.Op("ADD", "R2", A1, A2);
-			m_w.Op("ADD", "R2", "R2", "-" + half);
-			m_w.Op("ADD_SAT", d, "R2", "R2"); break;
+			m_w.Op("ADD", "R10", A1, A2);
+			m_w.Op("ADD", "R10", "R10", "-" + half);
+			m_w.Op("ADD_SAT", d, "R10", "R10"); break;
 		case D3D::TOP_SUBTRACT: m_w.Op("ADD_SAT", d, A1, "-" + A2); break;
 		case D3D::TOP_ADDSMOOTH:
-			m_w.Op("MAD", "R2", "-" + A1, A2, A1);
-			m_w.Op("ADD_SAT", d, "R2", A2); break;
+			m_w.Op("MAD", "R10", "-" + A1, A2, A1);
+			m_w.Op("ADD_SAT", d, "R10", A2); break;
 		case D3D::TOP_BLENDDIFFUSEALPHA:
 			m_w.Op("LRP_SAT", d, "fragment.color.primary.wwww", A1, A2); break;
 		case D3D::TOP_BLENDTEXTUREALPHA:
@@ -437,23 +439,23 @@ public:
 		case D3D::TOP_BLENDCURRENTALPHA:
 			m_w.Op("LRP_SAT", d, Swizzle(Arg(s, D3D::TA_CURRENT, false), "wwww"), A1, A2); break;
 		case D3D::TOP_BLENDTEXTUREALPHAPM:
-			m_w.Op("ADD", "R3", "-" + Swizzle(Arg(s, D3D::TA_TEXTURE, false), "wwww"), one);
-			m_w.Op("MAD_SAT", d, A2, "R3", A1); break;
+			m_w.Op("ADD", "R11", "-" + Swizzle(Arg(s, D3D::TA_TEXTURE, false), "wwww"), one);
+			m_w.Op("MAD_SAT", d, A2, "R11", A1); break;
 		case D3D::TOP_MODULATEALPHA_ADDCOLOR:
 			m_w.Op("MAD_SAT", d, Swizzle(A1, "wwww"), A2, A1); break;
 		case D3D::TOP_MODULATECOLOR_ADDALPHA:
 			m_w.Op("MAD_SAT", d, A1, A2, Swizzle(A1, "wwww")); break;
 		case D3D::TOP_MODULATEINVALPHA_ADDCOLOR:
-			m_w.Op("ADD", "R3", "-" + Swizzle(A1, "wwww"), one);
-			m_w.Op("MAD_SAT", d, "R3", A2, A1); break;
+			m_w.Op("ADD", "R11", "-" + Swizzle(A1, "wwww"), one);
+			m_w.Op("MAD_SAT", d, "R11", A2, A1); break;
 		case D3D::TOP_MODULATEINVCOLOR_ADDALPHA:
-			m_w.Op("ADD", "R3", "-" + A1, one);
-			m_w.Op("MAD_SAT", d, "R3", A2, Swizzle(A1, "wwww")); break;
+			m_w.Op("ADD", "R11", "-" + A1, one);
+			m_w.Op("MAD_SAT", d, "R11", A2, Swizzle(A1, "wwww")); break;
 		case D3D::TOP_DOTPRODUCT3:
-			m_w.Op("MAD", "R2", A1, two, "-" + one);
-			m_w.Op("MAD", "R3", A2, two, "-" + one);
-			m_w.Op("DP3_SAT", "R2", "R2", "R3");
-			m_w.Op("MOV", d, "R2"); break;
+			m_w.Op("MAD", "R10", A1, two, "-" + one);
+			m_w.Op("MAD", "R11", A2, two, "-" + one);
+			m_w.Op("DP3_SAT", "R10", "R10", "R11");
+			m_w.Op("MOV", d, "R10"); break;
 		case D3D::TOP_MULTIPLYADD:
 			A0 = Arg(s, a0, alpha);
 			m_w.Op("MAD_SAT", d, A1, A2, A0); break;

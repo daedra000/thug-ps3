@@ -364,11 +364,15 @@ static void TestCombiners()
 	{
 		IDirect3DDevice9* dev = NewDevice();
 		const int op = ops[oi].op;
+		// Every other run uses the same op for alpha (the colour result must survive the
+		// alpha half: a scratch register clash once turned MODULATE2X colour into its alpha).
+		const bool alphaSame = (iter & 1) && op != D3DTOP_DOTPRODUCT3 && op != D3DTOP_MODULATEALPHA_ADDCOLOR;
 		dev->m_tss[0][D3DTSS_COLOROP] = op;
 		dev->m_tss[0][D3DTSS_COLORARG0] = D3DTA_SPECULAR;
 		dev->m_tss[0][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
 		dev->m_tss[0][D3DTSS_COLORARG2] = D3DTA_DIFFUSE;
-		dev->m_tss[0][D3DTSS_ALPHAOP] = D3DTOP_MODULATE;
+		dev->m_tss[0][D3DTSS_ALPHAOP] = alphaSame ? op : D3DTOP_MODULATE;
+		dev->m_tss[0][D3DTSS_ALPHAARG0] = D3DTA_SPECULAR;
 		dev->m_tss[0][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
 		dev->m_tss[0][D3DTSS_ALPHAARG2] = D3DTA_DIFFUSE;
 		dev->m_tss[1][D3DTSS_COLOROP] = D3DTOP_DISABLE;
@@ -385,8 +389,8 @@ static void TestCombiners()
 		Vec4 r = RunFragment(src, diff, spec, tex, consts, 2);
 
 		const Vec4 &a1 = tex[0], &a2 = diff, &a0 = spec;
-		float want[3];
-		for (int c = 0; c < 3; ++c)
+		float want[4];
+		for (int c = 0; c < 4; ++c)
 		{
 			float x = 0;
 			switch (op)
@@ -413,8 +417,8 @@ static void TestCombiners()
 		}
 		char what[64];
 		for (int c = 0; c < 3; ++c) { snprintf(what, sizeof(what), "%s %c", ops[oi].name, "rgb"[c]); Expect(what, r[c], want[c]); }
-		snprintf(what, sizeof(what), "%s alpha", ops[oi].name);
-		Expect(what, r[3], tex[0][3] * diff[3]);
+		snprintf(what, sizeof(what), "%s alpha%s", ops[oi].name, alphaSame ? " (same op)" : "");
+		Expect(what, r[3], alphaSame ? want[3] : tex[0][3] * diff[3]);
 	}
 
 	// Two stages, temp result, specular add and fog.
