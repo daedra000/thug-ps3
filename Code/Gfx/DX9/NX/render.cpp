@@ -2433,6 +2433,45 @@ float get_bounding_sphere_nearest_z( void )
 /* space.														  */
 /*                                                                */
 /******************************************************************/
+#ifdef __PLAT_PS3__
+// Objects blinked out at the screen edges, cured by drawing without this test: check each cull
+// against the side planes of the projection matrix the draws use (view-space sphere). A cull
+// those planes disagree with is logged (the first few in full, then a count now and then).
+static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame;
+static void ps3_check_cull( const XGVECTOR4& v, float radius )
+{
+	if( EngineGlobals.is_orthographic ) return;
+	++s_ps3Culls;
+	const XGMATRIX& P = EngineGlobals.projection_matrix;
+	// Row-vector convention (clip = v * P): column j is (P.m[0][j], P.m[1][j], P.m[2][j], P.m[3][j]).
+	float pl[4][4];
+	for( int i = 0; i < 4; ++i )
+	{
+		const int j = i >> 1;
+		const float sgn = ( i & 1 ) ? -1.0f : 1.0f;
+		for( int k = 0; k < 4; ++k ) pl[i][k] = P.m[k][3] + sgn * P.m[k][j];
+	}
+	for( int i = 0; i < 4; ++i )
+	{
+		const float len = sqrtf( pl[i][0] * pl[i][0] + pl[i][1] * pl[i][1] + pl[i][2] * pl[i][2] );
+		if( len <= 0.0f ) return;
+		const float d = ( pl[i][0] * v.x + pl[i][1] * v.y + pl[i][2] * v.z + pl[i][3] ) / len;
+		if( d < -radius ) return;	// the projection agrees: outside this plane
+	}
+	++s_ps3WrongCulls;
+	if( s_ps3WrongCulls <= 8 )
+		printf( "[cull] wrong cull: view (%.1f, %.1f, %.1f) r %.1f; angle %.2f, TX %.4f TY %.4f SX %.4f CX %.4f SY %.4f CY %.4f; proj %.4f %.4f %.4f %.4f\n",
+			v.x, v.y, v.z, radius, EngineGlobals.screen_angle, EngineGlobals.ViewFrustumTX, EngineGlobals.ViewFrustumTY,
+			EngineGlobals.ViewFrustumSX, EngineGlobals.ViewFrustumCX, EngineGlobals.ViewFrustumSY, EngineGlobals.ViewFrustumCY,
+			P.m[0][0], P.m[1][1], P.m[2][2], P.m[3][2] );
+	if( g_globalFrameCounter - s_ps3CullFrame >= 600 )
+	{
+		s_ps3CullFrame = g_globalFrameCounter;
+		printf( "[cull] %u culls, %u of them inside the projection's frustum\n", s_ps3Culls, s_ps3WrongCulls );
+	}
+}
+#endif
+
 bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 {
 	XGVECTOR4	test_out;
@@ -2462,15 +2501,14 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 
 	float sx_z	= EngineGlobals.ViewFrustumSX * test_out.z;
 	float cx_x	= EngineGlobals.ViewFrustumCX * test_out.x;
-	if(( radius < sx_z - cx_x ) || ( radius < sx_z + cx_x ))
-		return false;
-
 	float sy_z	= EngineGlobals.ViewFrustumSY * test_out.z;
 	float cy_y	= EngineGlobals.ViewFrustumCY * test_out.y;
-	if(( radius < sy_z + cy_y ) || ( radius < sy_z - cy_y ))
-		return false;
-
-	return true;
+	const bool culled = ( radius < sx_z - cx_x ) || ( radius < sx_z + cx_x ) || ( radius < sy_z + cy_y ) || ( radius < sy_z - cy_y );
+#ifdef __PLAT_PS3__
+	if( culled )
+		ps3_check_cull( test_out, radius );
+#endif
+	return !culled;
 }
 
 // LWSS Add
