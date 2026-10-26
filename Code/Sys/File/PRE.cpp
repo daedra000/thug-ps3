@@ -743,6 +743,15 @@ PreFile::FileHandle *PreMgr::getContainedFile(const char *pName)
 			mp_activePre = pPre;
 			mp_activeHandle = pHandle;
 			mp_activeData = pPre->GetContainedFileByHandle(pHandle);
+			// The non-PRE cache may hold a closed file's handle whose memory this entry now
+			// reuses: left set, reads of this file would go to the regular file system.
+			if (mp_activeNonPreHandle == pHandle)
+			{
+#				ifdef __PLAT_PS3__
+				Ps3Platform::Trace("[pre] %s: its handle %p was cached as a regular file's; cleared", cleaned_name, (void*)pHandle);
+#				endif
+				mp_activeNonPreHandle = NULL;
+			}
 #			ifdef __PLAT_NGPS__
 			scePrintf("+++ %s is in PRE\n", cleaned_name);
 #			endif
@@ -1167,6 +1176,12 @@ void PreMgr::UnloadPre(const char *pFilename, bool dont_assert)
 	}
 
 	mp_table->FlushItem(pFilename);
+	// Forget the lookup caches: a handle into this PRE is freed with it, and its memory can
+	// come back as a regular file's handle.
+	mp_activeHandle = NULL;
+	mp_activeData = NULL;
+	if (mp_activePre == pThePre) mp_activePre = NULL;
+	mp_activeNonPreHandle = NULL;
 	delete pThePre;
 }
 
@@ -1325,6 +1340,10 @@ int PreMgr::pre_fclose(PreFile::FileHandle *fptr, bool async)
 		return 0;
 	}
 	
+	// A regular file: its handle is freed by the caller, and the memory can come back as a
+	// PRE entry (a PRE loaded next), which the cache would then send to the file system.
+	if (sp_mgr->mp_activeNonPreHandle == fptr)
+		sp_mgr->mp_activeNonPreHandle = NULL;
 	s_lastExecuteSuccess = false;
 	return 0;
 }
