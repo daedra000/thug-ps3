@@ -16,6 +16,7 @@
 #include <Sys/File/filesys.h>
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+#include <ps3_fs.h>
 #include <bink_audio.h>
 #include "stream_ring.h"
 #include <sys/mutex.h>
@@ -462,6 +463,17 @@ namespace Pcm
 #if !PS3_HEADLESS
 		if (Ps3Platform::NoThreads())
 			return;
+		{
+			// Test switch: an empty USRDIR/no_stream_thread.txt keeps decoding on the mixer
+			// thread, as before the streaming thread.
+			char path[600];
+			snprintf(path, sizeof(path), "%s/no_stream_thread.txt", Ps3Fs::AppDir());
+			if (Ps3Fs::Exists(path))
+			{
+				printf("[music] no_stream_thread.txt: the mixer decodes\n");
+				return;
+			}
+		}
 		if (!MakeLock(&s_workLock, "audstrm") || !MakeCond(&s_workWake, s_workLock, "audwake") ||
 		    !MakeCond(&s_workIdle, s_workLock, "audidle"))
 		{

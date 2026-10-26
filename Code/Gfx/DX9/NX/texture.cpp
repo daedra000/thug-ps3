@@ -8,6 +8,9 @@
 #include "nx_init.h"
 #include "chars.h"
 #include "texture.h"
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#endif
 #include "render.h"
 
 namespace NxXbox
@@ -271,8 +274,22 @@ static char* strrstr(char* _Str, char* _SubStr) {
 /******************************************************************/
 // LWSS: should be done.
 int DwordizeTexelData(intptr_t texel_data_dword_array, intptr_t texel_data_char_array, int numBytesChar, intptr_t data);
+#ifdef __PLAT_PS3__
+// Breadcrumbs for the crash while loading the level select's textures (after skater
+// select): each stage of loading a LevelSelect texture, straight to the log (a crash ends
+// the process but keeps what was written).
+static bool s_ps3TexCrumbs( const char* p_filename )
+{
+	return p_filename && strcasestr( p_filename, "levelselect" ) != NULL;
+}
+#define PS3_TEX_CRUMB( ... ) do { if( s_ps3TexCrumbs( p_filename )) Ps3Platform::Trace( __VA_ARGS__ ); } while( 0 )
+#else
+#define PS3_TEX_CRUMB( ... ) do { } while( 0 )
+#endif
+
 sTexture *LoadTexture( const char *p_filename )
 {
+	PS3_TEX_CRUMB( "[tex] %s: open", p_filename );
 	struct sIMGHeader
 	{
 		uint32	version;
@@ -299,6 +316,7 @@ sTexture *LoadTexture( const char *p_filename )
 
 	// Read header.
 	sIMGHeader header;
+	PS3_TEX_CRUMB( "[tex] %s: opened, reading the header", p_filename );
 	File::Read( &header, sizeof( sIMGHeader ), 1, p_FH );
 	Endian::Fix( header.version ); Endian::Fix( header.checksum ); Endian::Fix( header.width ); Endian::Fix( header.height );
 	Endian::Fix( header.bit_depth ); Endian::Fix( header.clut_bit_depth ); Endian::Fix( header.original_width );
@@ -338,6 +356,9 @@ sTexture *LoadTexture( const char *p_filename )
 	}
 		
 	// Create the texture object.
+	PS3_TEX_CRUMB( "[tex] %s: %ux%u (original %ux%u), %u bpp, clut %u, palette %u bytes", p_filename,
+		(unsigned)header.width, (unsigned)header.height, (unsigned)header.original_width, (unsigned)header.original_height,
+		(unsigned)header.bit_depth, (unsigned)header.clut_bit_depth, (unsigned)header.palette_data_size );
 	sTexture *p_texture = new sTexture();
 
 	// lwss: no palette in dx9
@@ -435,11 +456,23 @@ sTexture *LoadTexture( const char *p_filename )
 	//}
 	
 	// Lock the texture so we can read data into it directly.
+	PS3_TEX_CRUMB( "[tex] %s: created %p, locking", p_filename, (void*)p_texture->pD3DTexture );
 	D3DLOCKED_RECT locked_rect;
-	if( D3D_OK != p_texture->pD3DTexture->LockRect( 0, &locked_rect, NULL, 0 ))
+	if( !p_texture->pD3DTexture || D3D_OK != p_texture->pD3DTexture->LockRect( 0, &locked_rect, NULL, 0 ))
 	{
 		Dbg_Assert( 0 );
+#ifdef __PLAT_PS3__
+		// (Asserts are compiled out: without this the copy below writes through NULL.)
+		printf( "[tex] %s: couldn't create or lock the texture: skipped\n", p_filename );
+		if( p_clut ) free( p_clut );
+		File::Close( p_FH );
+		if( p_texture->pD3DTexture ) p_texture->pD3DTexture->Release();
+		p_texture->pD3DTexture = NULL;
+		delete p_texture;
+		return NULL;
+#endif
 	}
+	PS3_TEX_CRUMB( "[tex] %s: locked, bits %p pitch %d", p_filename, locked_rect.pBits, (int)locked_rect.Pitch );
 
 	{
 		uint32 src_bpp = (unsigned int)header.bit_depth >> 3;	// 1 (P8) / 2 (16-bit) / 4 (32-bit)
@@ -501,6 +534,7 @@ sTexture *LoadTexture( const char *p_filename )
 		if( p_clut ) free( p_clut );
 	}
 
+	PS3_TEX_CRUMB( "[tex] %s: texels copied, closing", p_filename );
 	// Read texture bitmap data directly into texture. 
 	//int len = File::Read( locked_rect.pBits, num_bytes, 1, p_FH );
 	//Dbg_MsgAssert( len == num_bytes, ( "couldn't read texture data from texture file %s", p_filename ));
@@ -516,6 +550,7 @@ sTexture *LoadTexture( const char *p_filename )
 	p_texture->Levels		= 1;
 			
 	p_texture->pD3DTexture->UnlockRect(0);
+	PS3_TEX_CRUMB( "[tex] %s: done", p_filename );
 
 	//// LWSS Add: exporting of Textures 
 	//char buffer[MAX_PATH]{ 0 };

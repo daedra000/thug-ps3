@@ -229,6 +229,16 @@ static bool KnownMissing(const std::string& key, u64 now)
 
 static void NoteMissing(const std::string& key, u64 now, u64 generation)
 {
+	// Test switch: an empty USRDIR/fs_no_missing_cache.txt turns the cache of missing names off.
+	static int s_off = -1;
+	if (s_off < 0)
+	{
+		char path[600];
+		snprintf(path, sizeof(path), "%s/fs_no_missing_cache.txt", AppDir());
+		s_off = Exists(path) ? 1 : 0;
+		if (s_off) printf("[fs] fs_no_missing_cache.txt: missing names aren't cached\n");
+	}
+	if (s_off) return;
 	Lock();
 	if (s_generation == generation)
 	{

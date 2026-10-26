@@ -10,6 +10,10 @@
 									 
 #include <gfx/nx.h>
 #include <gfx/nxtexture.h>
+#ifdef __PLAT_PS3__
+#include <ps3_platform.h>
+#include <string.h>
+#endif
 
 namespace	Nx
 {
@@ -789,6 +793,10 @@ CTexture *			CTexDict::LoadTexture(const char *p_texture_name, bool sprite, bool
 	
 	
 	CTexture *p_texture = plat_load_texture(p_texture_name, sprite, alloc_vram);
+#ifdef __PLAT_PS3__
+	if (p_texture_name && strcasestr(p_texture_name, "levelselect"))
+		Ps3Platform::Trace("[tex] %s: loaded (%p), adding to the dictionary", p_texture_name, (void*)p_texture);
+#endif
 
 	if (p_texture)
 	{
