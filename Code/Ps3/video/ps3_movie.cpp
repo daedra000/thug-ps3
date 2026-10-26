@@ -16,8 +16,7 @@
 #include <gel/music/music.h>
 #include <gel/soundfx/soundfx.h>
 #include <Gel/Music/SDL/p_music.h>
-#include <sys/sioman.h>
-#include <sys/siodev.h>
+#include <SDL.h>
 
 #include <ps3_platform.h>
 #include <ps3_fs.h>
@@ -150,19 +149,17 @@ namespace
 	}
 
 	// Start or X, newly pressed (the press that started the movie must be let go first).
+	// Read straight from the pad library: the pads are otherwise only polled by the main
+	// loop's message pump (SDL_PollEvent), which doesn't run during a movie.
 	bool SkipPressed(bool& armed)
 	{
-		Spt::SingletonPtr<SIO::Manager> sio_manager;
-		sio_manager->ProcessDevices();
+		SDL_PollEvent(NULL);
 		bool held = false;
-		for (int d = 0; d < 4; ++d)
+		for (int port = 0; port < 4; ++port)
 		{
-			SIO::Device* dev = sio_manager->GetDeviceByIndex(d);
-			if (!dev) continue;
-			const unsigned char* p = dev->GetControlData();
-			if (!p) continue;
-			// PS2 pad layout, active low: byte 2 bit 3 Start, byte 3 bit 6 Cross.
-			if (!(p[2] & (1 << 3)) || !(p[3] & (1 << 6)))
+			SDL_GameController* pad = (SDL_GameController*)(uintptr_t)(port + 1);	// ps3_sdl_pad.cpp: handle = port + 1
+			if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START) ||
+				SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_A))
 				held = true;
 		}
 		if (!held)
@@ -212,6 +209,7 @@ void Play(const char* pName)
 		}
 	}
 	InitTables();
+	SDL_Init(SDL_INIT_GAMECONTROLLER);	// no-op once the game has started the pads
 
 	// Sound: at the louder of the music and effects volumes, like the Xbox player.
 	Spt::SingletonPtr<Sfx::CSfxManager> sfx_manager;
