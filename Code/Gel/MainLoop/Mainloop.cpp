@@ -373,6 +373,11 @@ void		Manager::MainLoop( void )
 			v7 = v4;
 			v8 = v3;
 		}
+#ifdef __PLAT_PS3__
+		// Draw unless this frame is skipped below. (g_disableRendering is otherwise only
+		// cleared once, before the loop, so the first skipped frame stopped all drawing.)
+		NxXbox::g_disableRendering = false;
+#endif
 		if (s_mainLoopCounter >= 4 && g_isWindowInFocus)
 		{
 			s_mainLoopCounter = 0;

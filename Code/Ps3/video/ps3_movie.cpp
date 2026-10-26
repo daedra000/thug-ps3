@@ -179,7 +179,11 @@ void Play(const char* pName)
 		if (*p == '\\' || *p == '/')
 			base = p + 1;
 	char path[512];
-	snprintf(path, sizeof(path), "%s/Data/movies/bik/%s.bik", Ps3Fs::AppDir(), base);
+	// The scripts ask for "atvi", the file is ATVI.bik: ResolvePath corrects the case.
+	char rel[256];
+	snprintf(rel, sizeof(rel), "Data/movies/bik/%s.bik", base);
+	if (!Ps3Fs::ResolvePath(rel, path, sizeof(path)))
+		snprintf(path, sizeof(path), "%s/%s", Ps3Fs::AppDir(), rel);
 
 	std::ifstream file(path, std::ios::binary);
 	if (!file.is_open())
