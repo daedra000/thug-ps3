@@ -259,8 +259,9 @@ static void FrameBegin()
 				*(vu32*)gcmGetLabelAddress(kFrameLabel), s_frameSeq);
 	}
 	// Change segments here, between frames, if the frame might not fit. libgcm's segments
-	// are 32 KB, so ask for under that (a bigger request can never be met).
-	CmdReserve(7 * 1024);
+	// are 32 KB, and a fresh one has 7167 words free, so ask for less than that: 7168
+	// could never be met, and forced a segment change at the start of every frame.
+	CmdReserve(6 * 1024);
 	SetRenderTarget();
 	DrawFrameStart();
 	const unsigned frame = s_frames + 1;

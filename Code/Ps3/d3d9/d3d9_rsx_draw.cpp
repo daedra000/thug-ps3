@@ -329,9 +329,20 @@ static RsxTexture* Texture(IDirect3DTexture9* t)
 		{
 			std::vector<u32> xt, yt;
 			SwizzleTables(lw, lh, xt, yt);
+			// Typed copies for the common sizes: a memcpy call per texel made big uploads slow.
 			for (u32 y = 0; y < lh; ++y)
-				for (u32 x = 0; x < lw; ++x)
-					memcpy(dst + (xt[x] | yt[y]) * fi.bpp, src + y * srcPitch + x * fi.bpp, fi.bpp);
+			{
+				const u8* row = src + y * srcPitch;
+				const u32 yo = yt[y];
+				if (fi.bpp == 4)
+					for (u32 x = 0; x < lw; ++x) ((u32*)dst)[xt[x] | yo] = ((const u32*)row)[x];
+				else if (fi.bpp == 2)
+					for (u32 x = 0; x < lw; ++x) ((u16*)dst)[xt[x] | yo] = ((const u16*)row)[x];
+				else if (fi.bpp == 1)
+					for (u32 x = 0; x < lw; ++x) dst[xt[x] | yo] = row[x];
+				else
+					for (u32 x = 0; x < lw; ++x) memcpy(dst + (xt[x] | yo) * fi.bpp, row + x * fi.bpp, fi.bpp);
+			}
 		}
 		else
 		{
