@@ -857,10 +857,22 @@ void CXboxGeom::plat_get_render_colors( Image::RGBA *p_colors )
 			// Copy over every vertex color in this mesh, swapping red and blue.
 			for( uint32 v = 0; v < p_mesh->m_num_vertices; ++v )
 			{
+#ifdef __PLAT_PS3__
+				// The vertex colour is a host-order ARGB word (bytes A,R,G,B on PS3, not the
+				// PC's B,G,R,A), so read it as a word.
+				{
+					const uint32 c = *(const uint32*)p_col;
+					p_colors->r = (uint8)( c >> 16 );
+					p_colors->g = (uint8)( c >> 8 );
+					p_colors->b = (uint8)c;
+					p_colors->a = (uint8)( c >> 24 );
+				}
+#else
 				p_colors->r = p_col->b;
 				p_colors->g = p_col->g;
 				p_colors->b = p_col->r;
 				p_colors->a = p_col->a;
+#endif
 
 				++p_colors;
 				p_col = (Image::RGBA*)((BYTE*)p_col + p_mesh->m_vertex_stride );
@@ -954,10 +966,14 @@ void CXboxGeom::plat_set_render_colors( Image::RGBA *p_colors )
 				// Copy over every vertex color in this mesh, swapping red and blue.
 				for( uint32 v = 0; v < p_mesh->m_num_vertices; ++v )
 				{
+#ifdef __PLAT_PS3__
+					*(uint32*)p_col = ((uint32)p_colors->a << 24) | ((uint32)p_colors->r << 16) | ((uint32)p_colors->g << 8) | p_colors->b;
+#else
 					p_col->b = p_colors->r;
 					p_col->g = p_colors->g;
 					p_col->r = p_colors->b;
 					p_col->a = p_colors->a;
+#endif
 
 					++p_colors;
 					p_col = (Image::RGBA*)((BYTE*)p_col + p_mesh->m_vertex_stride );
