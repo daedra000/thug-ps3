@@ -92,10 +92,23 @@ namespace Pcm
 			StreamRing ring;
 			virtual size_t Decode(float *out, size_t frames) = 0;
 
+			// A stream whose opening (file, Bink header, ring) is left to the thread filling
+			// it: OpenDeferred runs there before the first decode, and until it has, the mixer
+			// plays silence instead of ending the stream. Opening on the game thread took
+			// 100-160 ms per ambient stream, a hitch every time a level object started one.
+			volatile bool opening = false;
+			virtual void OpenDeferred() {}
+
 			// Decodes one piece into the ring if it has room for one (or a rewind was asked
 			// for). Returns true if it did anything.
 			bool Fill()
 			{
+				if (opening)
+				{
+					OpenDeferred();
+					__atomic_store_n(&opening, false, __ATOMIC_RELEASE);	// the ring is set up before this
+					return true;
+				}
 				if (!ring.Valid())
 					return false;
 				bool did = false;
@@ -134,6 +147,8 @@ namespace Pcm
 
 #ifdef __PLAT_PS3__
 				// Only reads what the streaming thread has decoded: never waits for it.
+				if (__atomic_load_n(&opening, __ATOMIC_ACQUIRE))
+					return 0;	// not opened yet: silence, still playing
 				if (!ring.Valid())
 				{
 					playing = false;	// nothing to play
@@ -301,13 +316,27 @@ namespace Pcm
 #endif
 
 #ifdef __PLAT_PS3__
-			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size)
+			// Opened later, on the streaming thread (OpenDeferred).
+			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size) : wadPath(wad), wadOffset(offset), wadSize(size)
 			{
-				if (!wadbuf.Open(std::string(wad), offset, size))	// resolved: the data's names are case-insensitive
+				opening = true;
+			}
+			stdfs::path wadPath;
+			uint32 wadOffset = 0, wadSize = 0;
+
+			void OpenDeferred() override
+			{
+				const u64 t0 = sysGetSystemTime();
+				if (!wadbuf.Open(std::string(wadPath), wadOffset, wadSize))	// resolved: the data's names are case-insensitive
 					return;
+				const u64 t1 = sysGetSystemTime();
 				from_mem = true;
 				if (!OpenBink(mem))
 					from_mem = false;	// not Bink: nothing to play
+				const u64 t2 = sysGetSystemTime();
+				if (t2 - t0 > 10000)
+					printf("[music] opening a pcm.wad stream took %u ms (file %u ms, Bink header %u ms), on the streaming thread\n",
+						(unsigned)((t2 - t0) / 1000), (unsigned)((t1 - t0) / 1000), (unsigned)((t2 - t1) / 1000));
 			}
 
 			bool IsOpen() const { return file.is_open() || from_mem; }

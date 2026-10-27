@@ -214,7 +214,17 @@ void CGeneralManager::FlushDeadObjects()
 		// Lock Assert is not needed for objects that have been flagged for deletion  	
 		pObject->SetLockAssertOff();
 		#endif
+#ifdef __PLAT_PS3__
+		// Hitches came from this task: say which objects were slow to delete.
+		const uint32 id = pObject->GetID(), type = pObject->GetType();
+		const unsigned long long t0 = __builtin_ppc_get_timebase();
+#endif
 		delete pObject;
+#ifdef __PLAT_PS3__
+		const unsigned us = (unsigned)((__builtin_ppc_get_timebase() - t0) * 1000 / 79800);
+		if (us > 10000)
+			printf("[obj] deleting object 0x%08x (type %u) took %u ms\n", (unsigned)id, (unsigned)type, us / 1000);
+#endif
 	}	
 }
 
