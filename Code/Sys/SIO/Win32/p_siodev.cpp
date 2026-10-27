@@ -82,6 +82,16 @@ int gLastPadPressed=0;
 **							   Private Functions							**
 *****************************************************************************/
 
+#ifdef __PLAT_PS3__
+// The DualShock 3 (through the port's SDL stand-in, ps3_sdl_pad.cpp). As on the PS2, actuator 0
+// (left_motor here) is the small high-frequency motor, on or off, and actuator 1 (right_motor)
+// the large one, 0-255. SDL's rumble takes the large (low-frequency) motor first.
+static void set_xbox_actuators( HANDLE handle, unsigned short left_motor, unsigned short right_motor )
+{
+	if( handle )
+		SDL_GameControllerRumble((SDL_GameController*)handle, right_motor, left_motor, 0 );
+}
+#else
 static void set_xbox_actuators( HANDLE handle, unsigned short left_motor, unsigned short right_motor )
 {
 	//// Want this to be static since otherwise it would potentially go out of scope and be written to.
@@ -105,6 +115,7 @@ static void set_xbox_actuators( HANDLE handle, unsigned short left_motor, unsign
 	//	next_index = 0;
 	//}
 }
+#endif
 
 
 
@@ -631,6 +642,20 @@ void Device::Unacquire ( void )
 /******************************************************************/
 void Device::ActivateActuator( int act_num, int percent )
 {
+#ifdef __PLAT_PS3__
+	if( m_data.m_actuators_disabled )
+		return;
+	if(( m_state == vACQUIRED ) && ( m_data.m_caps.TestMask( mACTUATORS )) && ( act_num >= 0 ) && ( act_num < m_data.m_num_actuators ))
+	{
+		if( percent < 0 ) percent = 0;
+		if( percent > 100 ) percent = 100;
+		m_data.m_actuator_direct[act_num] = (unsigned char)( percent * m_data.m_actuator_max[act_num] / 100 );
+		if( !m_data.m_paused_ref.InUse())
+			set_xbox_actuators( m_data.m_handle, (unsigned short)m_data.m_actuator_direct[0] * 256,
+								(unsigned short)m_data.m_actuator_direct[1] * 256 );
+	}
+	return;
+#endif
 	// Do nothing if the actuators are disabled.
 	//if( m_data.m_actuators_disabled )
 	//{
@@ -683,7 +708,9 @@ void Device::DisableActuators()
 			// Switch it off.
 			m_data.m_actuator_direct[i] = 0;
 		}	
-		//set_xbox_actuators( m_data.m_handle, 0, 0 );
+#ifdef __PLAT_PS3__
+		set_xbox_actuators( m_data.m_handle, 0, 0 );
+#endif
 	}	
 	
 	// Set the flag.
@@ -749,7 +776,9 @@ void Device::Pause( void )
 				// Then switch it off.
 				m_data.m_actuator_direct[i] = 0;
 			}	
-			//set_xbox_actuators( m_data.m_handle, 0, 0 );
+#ifdef __PLAT_PS3__
+			set_xbox_actuators( m_data.m_handle, 0, 0 );
+#endif
 		}	
 	}
 	m_data.m_paused_ref.Acquire();
@@ -779,9 +808,11 @@ void Device::UnPause( void )
 					// Restore the saved vibration strength.
 					m_data.m_actuator_direct[i] = m_data.m_actuator_old_direct[i];
 				}
-				//set_xbox_actuators( m_data.m_handle,
-				//					(unsigned short)m_data.m_actuator_direct[0] * 256,
-				//					(unsigned short)m_data.m_actuator_direct[1] * 256 );
+#ifdef __PLAT_PS3__
+				set_xbox_actuators( m_data.m_handle,
+									(unsigned short)m_data.m_actuator_direct[0] * 256,
+									(unsigned short)m_data.m_actuator_direct[1] * 256 );
+#endif
 			}	
 		}
 	}
@@ -804,7 +835,9 @@ void Device::StopAllVibrationIncludingSaved()
 			m_data.m_actuator_direct[i]		= 0;
 			m_data.m_actuator_old_direct[i]	= 0;
 		}	
-		//set_xbox_actuators( m_data.m_handle, 0, 0 );
+#ifdef __PLAT_PS3__
+		set_xbox_actuators( m_data.m_handle, 0, 0 );
+#endif
 	}	
 }
 

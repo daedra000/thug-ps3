@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <io/pad.h>
+#include <sys/systime.h>
 
 namespace
 {
@@ -209,6 +210,22 @@ int SDL_GameControllerRumble(SDL_GameController* c, uint16_t low, uint16_t high,
 	memset(&act, 0, sizeof(act));
 	act.small_motor = high ? 1 : 0;			// the DS3's small motor is on/off
 	act.large_motor = (u8)(low >> 8);
+	// The game may set the same strength every frame (a grind): only changes are sent, and
+	// an unchanged setting again after a second, in case the pad has dropped it.
+	static u8 s_small[kMaxPads], s_large[kMaxPads];
+	static u64 s_sent[kMaxPads];
+	const u64 now = sysGetSystemTime();
+	if (act.small_motor == s_small[p] && act.large_motor == s_large[p] && now - s_sent[p] < 1000000)
+		return 0;
+	s_small[p] = act.small_motor;
+	s_large[p] = act.large_motor;
+	s_sent[p] = now;
 	ioPadSetActDirect(p, &act);
+	static int s_logged;
+	if (s_logged < 5 && (act.small_motor || act.large_motor))
+	{
+		++s_logged;
+		printf("[pad] port %d vibration: small %u, large %u\n", p, act.small_motor, act.large_motor);
+	}
 	return 0;
 }
