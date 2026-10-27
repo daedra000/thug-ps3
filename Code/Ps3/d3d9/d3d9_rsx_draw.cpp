@@ -100,7 +100,16 @@ static struct Stats
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned long long ringBytes;
 } s_stats;
-static char s_statsLine[896];
+static char s_statsLine[1400];
+
+// Where a draw's CPU time goes (timebase ticks, 79800 a millisecond), summed over the frames
+// since the last report: the frames are CPU-bound (the RSX finishes within a millisecond of
+// the CPU queueing a frame), so this is what to cut.
+enum { kDpKeys, kDpVp, kDpBuffers, kDpState, kDpVsConst, kDpFp, kDpBind, kDpSubmit, kDpPhases };
+static const char* const kDpNames[kDpPhases] = { "textures+fp lookup", "vp lookup", "vertex/index data", "view+state", "vs constants", "fp load", "textures+attributes", "draw cmds" };
+static unsigned long long s_dp[kDpPhases], s_dpTotal;
+static unsigned s_dpFrames;
+#define DP_MARK(phase) do { const unsigned long long n_ = __builtin_ppc_get_timebase(); s_dp[phase] += n_ - dpLast; dpLast = n_; } while (0)
 
 static bool FlagFile(const char* name)
 {
@@ -1809,6 +1818,7 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 
 static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 {
+	unsigned long long dpLast = __builtin_ppc_get_timebase();
 	if (s_noDraw) return false;
 	bool hasDepth = false;
 	if (!ApplyTarget(dev, &hasDepth)) return false;
@@ -1897,11 +1907,13 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	for (int t = 0; t < 4; ++t) if (fp->texMask & (1 << t)) numTexOut = t + 1;
 	if (!dev->m_ps && key.fs.numStages > numTexOut) numTexOut = key.fs.numStages;
 
+	DP_MARK(kDpKeys);
 	// Vertex program.
 	VsKey vk;
 	FillVsKey(dev, l, numTexOut, vk);
 	VpEntry* vp = VertexProgramFor(vk);
 	if (!vp || !vp->prog) return Skip("vertex program unavailable");
+	DP_MARK(kDpVp);
 
 	// Vertex and index data on the RSX.
 	u32 vbase, stride, ioff = 0;
@@ -1973,6 +1985,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 			vbase += call.startVertex * stride;
 	}
 	if (stride > 255) return Skip("vertex stride over 255 bytes");
+	DP_MARK(kDpBuffers);
 
 	// State, programs, textures, then the draw.
 	if (s_resendState) { s_stateValid = false; s_viewValid = false; s_clipsSent = false; }
@@ -1980,14 +1993,18 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_rebindAttribs) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
+	DP_MARK(kDpState);
 	float vc[kVcCount][4];
 	FillVsConstants(dev, vc);
 	UseVertexProgram(vp, vc);
+	DP_MARK(kDpVsConst);
 	if (!UseFragmentProgram(fp, fc)) return false;
+	DP_MARK(kDpFp);
 	for (int t = 0; t < 4; ++t)
 		if (fp->texMask & (1 << t))
 			BindTexture(dev, t, tex[t] ? tex[t] : &s_white);
 	BindAttributes(l, vbase, stride);
+	DP_MARK(kDpBind);
 
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
@@ -2007,6 +2024,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 		rsxDrawVertexArray(s_ctx, type, 0, count);
 	++s_stats.drawn;
 	if (++s_drawsSinceKick >= kKickDraws) Kick();
+	DP_MARK(kDpSubmit);
 	return true;
 }
 
@@ -2017,7 +2035,9 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_capture && dev->m_renderTarget && dev->m_renderTarget != dev->m_backBuffer)
 		printf("[cap] (next draw goes to render target %ux%u format %d)\n", dev->m_renderTarget->m_width, dev->m_renderTarget->m_height, (int)dev->m_renderTarget->m_format);
 	++s_stats.draws;
+	const unsigned long long t0 = __builtin_ppc_get_timebase();
 	DoDraw(dev, call);
+	s_dpTotal += __builtin_ppc_get_timebase() - t0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2207,6 +2227,7 @@ void DrawFrameStart()
 {
 	if (!s_drawReady) return;
 	s_capDraw = 0;
+	++s_dpFrames;
 	s_ringBase = (s_frameSeq % kRingFrames) * kRingSize;
 	s_ringUsed = 0;
 	RunDeferredFrees();
@@ -2242,6 +2263,19 @@ const char* DrawStats()
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
+	{
+		// Draw CPU time per frame, and its parts.
+		size_t o = strlen(s_statsLine);
+		const unsigned f = s_dpFrames ? s_dpFrames : 1;
+		o += snprintf(s_statsLine + o, sizeof(s_statsLine) - o, "; draw calls %u.%02u ms a frame:",
+			(unsigned)(s_dpTotal / f / 79800), (unsigned)(s_dpTotal / f * 100 / 79800 % 100));
+		for (int i = 0; i < kDpPhases && o < sizeof(s_statsLine) - 48; ++i)
+			o += snprintf(s_statsLine + o, sizeof(s_statsLine) - o, " %s %u.%02u", kDpNames[i],
+				(unsigned)(s_dp[i] / f / 79800), (unsigned)(s_dp[i] / f * 100 / 79800 % 100));
+		memset(s_dp, 0, sizeof(s_dp));
+		s_dpTotal = 0;
+		s_dpFrames = 0;
+	}
 	unsigned programs = s_stats.programs, failures = s_stats.programFailures;
 	memset(&s_stats, 0, sizeof(s_stats));
 	s_stats.programs = programs;
