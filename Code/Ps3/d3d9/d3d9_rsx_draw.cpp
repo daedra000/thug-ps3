@@ -345,6 +345,7 @@ static u8* RingAlloc(u32 size, u32 align, u32* offset)
 // Vertex or index data was written into RSX memory: the next draw invalidates the vertex
 // cache first (a draw's own one-word invalidate is not the full sequence).
 static bool s_vertexWritten;
+static bool s_lazyVertexCache;	// rsx_lazy_vertex_cache.txt (see DoDraw)
 
 // Mid-frame flush: hands what is queued to the RSX instead of letting it idle until a
 // segment fills or Present. Every kKickDraws draws, after a new render target, and after a
@@ -1961,9 +1962,12 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
 	CmdReserve(64 + count / 256 * 2);
-	if (s_vertexWritten)
+	// The vertex cache is invalidated before every draw, as before a175dd3. Sending it only
+	// after vertex data was written made surfaces flash dark or pale from frame to frame (draws
+	// reusing what the cache held from an earlier draw: other vertex colours or positions).
+	// rsx_lazy_vertex_cache.txt goes back to invalidating only after writes, for testing.
+	if (s_vertexWritten || !s_lazyVertexCache)
 	{
-		// New vertex or index data in RSX memory since the last draw.
 		rsxInvalidateVertexCache(s_ctx);
 		s_vertexWritten = false;
 	}
@@ -2139,6 +2143,8 @@ bool DrawInit()
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
 	s_noFpSlots = FlagFile("rsx_no_fp_cache.txt");
+	s_lazyVertexCache = FlagFile("rsx_lazy_vertex_cache.txt");
+	if (s_lazyVertexCache) printf("[gfx] rsx_lazy_vertex_cache.txt: the vertex cache is invalidated only after vertex data is written\n");
 	if (s_noFpSlots) printf("[gfx] rsx_no_fp_cache.txt: every patched fragment program goes through the frame ring\n");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
