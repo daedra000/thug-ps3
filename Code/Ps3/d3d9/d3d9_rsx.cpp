@@ -92,33 +92,6 @@ static unsigned s_frames, s_draws;
 static unsigned s_segmentChanges;
 static u64 s_cmdWaitTicks;			// timebase ticks spent in segment changes (waiting for the RSX), since the last report
 static unsigned s_lastSegmentChanges;	// s_segmentChanges at the last report
-// RSX time per frame: a timestamp when a frame's first commands run and one after its last
-// (report slots kGpuStampBase + 2 * (frame % 4), + 1), read back once the frame fence passes it.
-enum { kGpuStampBase = 200, kGpuStampFrames = 4 };
-static u32 s_gpuStamped[kGpuStampFrames];	// frame number whose stamps are in each pair (0: none)
-static u32 s_gpuReadUpTo;				// frames up to this one have been read
-static u64 s_gpuNsSum, s_gpuNsWorst;
-static unsigned s_gpuFrames;
-static void ReadGpuStamps()
-{
-	const u32 done = FramesDone();
-	for (u32 f = s_gpuReadUpTo + 1; (s32)(done - f) >= 0; ++f)
-	{
-		const u32 slot = f % kGpuStampFrames;
-		if (s_gpuStamped[slot] == f)
-		{
-			const u64 t0 = gcmGetTimeStamp(kGpuStampBase + 2 * slot), t1 = gcmGetTimeStamp(kGpuStampBase + 2 * slot + 1);
-			if (t1 > t0 && t1 - t0 < 1000000000ull)
-			{
-				s_gpuNsSum += t1 - t0;
-				if (t1 - t0 > s_gpuNsWorst) s_gpuNsWorst = t1 - t0;
-				++s_gpuFrames;
-			}
-			s_gpuStamped[slot] = 0;
-		}
-	}
-	s_gpuReadUpTo = done;
-}
 static u32 s_label = 1;
 static bool s_firstFrame = true;
 static bool s_frameReady;	// this frame has passed the flip gate
@@ -412,13 +385,6 @@ static void FrameBegin()
 	// could never be met, and forced a segment change at the start of every frame.
 	CmdReserve(6 * 1024);
 	if (s_skipFrame) return;	// no room: CmdReserve dropped the frame
-	ReadGpuStamps();
-	{
-		const u32 f = s_frameSeq + 1;	// this frame's number once Present fences it
-		const u32 slot = f % kGpuStampFrames;
-		s_gpuStamped[slot] = 0;		// until the end stamp is queued too
-		rsxSetTimeStamp(s_ctx, kGpuStampBase + 2 * slot);
-	}
 	SetRenderTarget();
 	DrawFrameStart();
 	const unsigned frame = s_frames + 1;
@@ -667,11 +633,6 @@ void Present(IDirect3DDevice9*)
 	else if (!s_skipFrame)
 	{
 		CmdReserve(64);
-		{
-			const u32 slot = (s_frameSeq + 1) % kGpuStampFrames;
-			rsxSetTimeStamp(s_ctx, kGpuStampBase + 2 * slot + 1);
-			s_gpuStamped[slot] = s_frameSeq + 1;
-		}
 		rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);	// the frame fence
 		// Flip at the next vsync. No gcmSetWaitFlip: the CPU checks the flip before the
 		// next frame (FlipGate), so nothing is queued behind a held flip.
@@ -706,14 +667,9 @@ void Present(IDirect3DDevice9*)
 		const unsigned segs = s_segmentChanges - s_lastSegmentChanges;
 		const unsigned waitUs = (unsigned)(s_cmdWaitTicks * 1000 / 79800);
 		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held; "
-			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame; "
-			"RSX time %u.%02u ms a frame, worst %u.%02u ms, over %u frames)",
+			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame)",
 			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced,
-			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10,
-			(unsigned)(s_gpuFrames ? s_gpuNsSum / s_gpuFrames / 1000000 : 0), (unsigned)(s_gpuFrames ? s_gpuNsSum / s_gpuFrames / 10000 % 100 : 0),
-			(unsigned)(s_gpuNsWorst / 1000000), (unsigned)(s_gpuNsWorst / 10000 % 100), s_gpuFrames);
-		s_gpuNsSum = s_gpuNsWorst = 0;
-		s_gpuFrames = 0;
+			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10);
 		s_lastSegmentChanges = s_segmentChanges;
 		s_cmdWaitTicks = 0;
 	}
