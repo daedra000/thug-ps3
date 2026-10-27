@@ -317,26 +317,32 @@ namespace Pcm
 
 #ifdef __PLAT_PS3__
 			// Opened later, on the streaming thread (OpenDeferred).
-			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size) : wadPath(wad), wadOffset(offset), wadSize(size)
+			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size) : deferredPath(wad), fromWad(true), wadOffset(offset), wadSize(size)
 			{
 				opening = true;
 			}
-			stdfs::path wadPath;
+			stdfs::path deferredPath;
+			bool fromWad = false;
 			uint32 wadOffset = 0, wadSize = 0;
 
 			void OpenDeferred() override
 			{
 				const u64 t0 = sysGetSystemTime();
-				if (!wadbuf.Open(std::string(wadPath), wadOffset, wadSize))	// resolved: the data's names are case-insensitive
-					return;
+				if (fromWad)
+				{
+					if (wadbuf.Open(std::string(deferredPath), wadOffset, wadSize))	// resolved: the data's names are case-insensitive
+					{
+						from_mem = true;
+						if (!OpenBink(mem))
+							from_mem = false;	// not Bink: nothing to play
+					}
+				}
+				else
+					OpenFile(deferredPath, false);
 				const u64 t1 = sysGetSystemTime();
-				from_mem = true;
-				if (!OpenBink(mem))
-					from_mem = false;	// not Bink: nothing to play
-				const u64 t2 = sysGetSystemTime();
-				if (t2 - t0 > 10000)
-					printf("[music] opening a pcm.wad stream took %u ms (file %u ms, Bink header %u ms), on the streaming thread\n",
-						(unsigned)((t2 - t0) / 1000), (unsigned)((t1 - t0) / 1000), (unsigned)((t2 - t1) / 1000));
+				if (t1 - t0 > 10000)
+					printf("[music] opening a %s took %u ms, on the streaming thread\n", fromWad ? "pcm.wad stream" : "music file",
+						(unsigned)((t1 - t0) / 1000));
 			}
 
 			bool IsOpen() const { return file.is_open() || from_mem; }
@@ -344,7 +350,20 @@ namespace Pcm
 			// unbuffered: for a movie's sound track, whose frames are mostly video. The decoder
 			// reads only each frame's audio packet, and a buffered stream would read on into
 			// the video data around it.
-			MusicDecoder(stdfs::path path, bool unbuffered = false)
+			// deferred: opened on the streaming thread (OpenDeferred), not here on the game
+			// thread, where starting the next music track was a 100 ms hitch.
+			MusicDecoder(stdfs::path path, bool unbuffered = false, bool deferred = false)
+			{
+				if (deferred)
+				{
+					deferredPath = path;
+					opening = true;
+					return;
+				}
+				OpenFile(path, unbuffered);
+			}
+
+			void OpenFile(const stdfs::path &path, bool unbuffered)
 			{
 				if (unbuffered)
 					file.rdbuf()->pubsetbuf(nullptr, 0);
@@ -873,7 +892,11 @@ namespace Pcm
 		if (it == nullptr)
 			return false;
 
+#ifdef __PLAT_PS3__
+		ReplaceStream(music_stream, new MusicDecoder(File::DataPath() / *it, false, true));
+#else
 		ReplaceStream(music_stream, new MusicDecoder(File::DataPath() / *it));
+#endif
 		return true;
 	}
 
@@ -1170,7 +1193,11 @@ namespace Pcm
 			return false;
 
 		// Play song
+#ifdef __PLAT_PS3__
+		Streamer *song = new MusicDecoder(File::DataPath() / *it, false, true);
+#else
 		Streamer *song = new MusicDecoder(File::DataPath() / *it);
+#endif
 		song->Play();
 		ReplaceStream(music_stream, song);
 		return true;
@@ -1206,7 +1233,11 @@ namespace Pcm
 	{
 		// Play song
 		const UserSoundtrack::Soundtracks &soundtracks = UserSoundtrack::GetSoundtracks();
+#ifdef __PLAT_PS3__
+		Streamer *song = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path, false, true);
+#else
 		Streamer *song = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path);
+#endif
 		song->Play();
 		ReplaceStream(music_stream, song);
 		return true;
@@ -1259,7 +1290,11 @@ namespace Pcm
 		else
 		{
 			// Play stream
+#ifdef __PLAT_PS3__
+			stream = new MusicDecoder(File::DataPath() / it->second, false, true);
+#else
 			stream = new MusicDecoder(File::DataPath() / it->second);
+#endif
 		}
 		if (!preload)
 			stream->Play();
