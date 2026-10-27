@@ -102,7 +102,46 @@ static bool s_flipPending;
 static int s_heldFrames, s_forcedRun;
 static unsigned s_skipped, s_forced;
 u32 s_frameSeq;
-enum { kLabelIndex = 255, kFrameLabel = 253 };
+enum { kLabelIndex = 255, kFrameLabel = 253, kFrameStartLabel = 252 };
+
+// GPU frame times. The RSX writes the frame number to kFrameStartLabel when it reaches a
+// frame's first commands and to kFrameLabel (the fence) after its last, both backend labels
+// like the fence already is. The hitch sampler thread reads both every millisecond
+// (GpuSample) and notes when each changes: end minus start is how long the RSX spent on the
+// frame, waiting for the CPU's commands included. Frames over 16.7 ms there can't make 60 fps.
+static volatile u32 s_gpuLastStart, s_gpuLastEnd;
+static volatile u64 s_gpuStartAt[8];		// when the start label showed frame n (slot n % 8)
+static volatile u32 s_gpuStartFrame[8];	// and which frame that was
+static volatile u64 s_gpuSumUs, s_gpuWorstUs;
+static volatile u32 s_gpuFrames, s_gpuOver16, s_gpuOver33;
+static void GpuSample(unsigned long long now)
+{
+	const u32 start = *(vu32*)gcmGetLabelAddress(kFrameStartLabel);
+	const u32 end = *(vu32*)gcmGetLabelAddress(kFrameLabel);
+	if (start != s_gpuLastStart)
+	{
+		s_gpuStartAt[start & 7] = now;
+		s_gpuStartFrame[start & 7] = start;
+		s_gpuLastStart = start;
+	}
+	if (end != s_gpuLastEnd)
+	{
+		const u64 at = s_gpuStartAt[end & 7];
+		if (s_gpuStartFrame[end & 7] == end)	// this frame's start was seen
+		{
+			const u64 us = at && now > at ? now - at : 0;
+			if (us && us < 2000000)
+			{
+				s_gpuSumUs += us;
+				if (us > s_gpuWorstUs) s_gpuWorstUs = us;
+				++s_gpuFrames;
+				if (us > 16700) ++s_gpuOver16;
+				if (us > 33300) ++s_gpuOver33;
+			}
+		}
+		s_gpuLastEnd = end;
+	}
+}
 
 // Frame capture, for finding rendering bugs: at frame kCaptureFrame and then every
 // kCaptureEvery frames (about 30 s), one frame's draws are logged ([cap] lines) and the
@@ -385,6 +424,7 @@ static void FrameBegin()
 	// could never be met, and forced a segment change at the start of every frame.
 	CmdReserve(6 * 1024);
 	if (s_skipFrame) return;	// no room: CmdReserve dropped the frame
+	rsxSetWriteBackendLabel(s_ctx, kFrameStartLabel, s_frameSeq + 1);	// GpuSample: this frame starts
 	SetRenderTarget();
 	DrawFrameStart();
 	const unsigned frame = s_frames + 1;
@@ -542,6 +582,8 @@ bool Init(D3DPRESENT_PARAMETERS* pp)
 		if (s_buffers > 2) gcmSetFlipHandler(FlipHandler);
 
 		*(vu32*)gcmGetLabelAddress(kFrameLabel) = 0;	// the frame fence starts clear
+		*(vu32*)gcmGetLabelAddress(kFrameStartLabel) = 0;
+		g_ps3GpuSampler = GpuSample;
 		s_cur = 0;
 		gcmResetFlipStatus();
 		s_ready = true;
@@ -667,9 +709,14 @@ void Present(IDirect3DDevice9*)
 		const unsigned segs = s_segmentChanges - s_lastSegmentChanges;
 		const unsigned waitUs = (unsigned)(s_cmdWaitTicks * 1000 / 79800);
 		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held; "
-			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame)",
+			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame; "
+			"RSX %u.%02u ms a frame (worst %u.%02u), %u of %u frames over 16.7 ms, %u over 33.3 ms)",
 			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced,
-			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10);
+			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10,
+			(unsigned)(s_gpuFrames ? s_gpuSumUs / s_gpuFrames / 1000 : 0), (unsigned)(s_gpuFrames ? s_gpuSumUs / s_gpuFrames % 1000 / 10 : 0),
+			(unsigned)(s_gpuWorstUs / 1000), (unsigned)(s_gpuWorstUs % 1000 / 10), (unsigned)s_gpuOver16, (unsigned)s_gpuFrames, (unsigned)s_gpuOver33);
+		s_gpuSumUs = s_gpuWorstUs = 0;
+		s_gpuFrames = s_gpuOver16 = s_gpuOver33 = 0;
 		s_lastSegmentChanges = s_segmentChanges;
 		s_cmdWaitTicks = 0;
 	}

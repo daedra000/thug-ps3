@@ -204,6 +204,8 @@ namespace
 			if (i == s_hitchCurN && s_hitchCurN < kHitchSlots) s_hitchCur[s_hitchCurN++] = s;
 			++s_hitchCurTotal;
 			sysLwMutexUnlock(&s_hitchLock);
+			if (void (*gpu)(unsigned long long) = g_ps3GpuSampler)
+				gpu(sysGetSystemTime());
 			usleep(1000);
 		}
 	}
@@ -273,6 +275,7 @@ namespace
 volatile bool g_ps3TraceTasks = false;
 volatile unsigned g_ps3Frame = 0;
 volatile unsigned long long g_ps3FrameTime = 0;
+void (*volatile g_ps3GpuSampler)(unsigned long long now) = 0;
 volatile const void* g_ps3CurrentTask = 0;
 volatile const char* g_ps3Where = 0;
 volatile const char* g_ps3ScriptName = 0;

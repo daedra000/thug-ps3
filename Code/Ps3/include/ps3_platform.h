@@ -11,6 +11,8 @@ extern volatile bool g_ps3TraceTasks;
 // Main loop progress, shown on the [alive] lines: the frame number and the task running now.
 extern volatile unsigned g_ps3Frame;
 extern volatile unsigned long long g_ps3FrameTime;	// sysGetSystemTime() when g_ps3Frame last changed
+// Called by the hitch sampler thread every millisecond when set (the renderer's GPU frame timer).
+extern void (*volatile g_ps3GpuSampler)(unsigned long long now);
 extern volatile const void* g_ps3CurrentTask;
 // Where the game thread is (a label set along the main loop's path) and the spawned script
 // being updated, for the [alive] lines.
