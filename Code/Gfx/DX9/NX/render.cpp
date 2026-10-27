@@ -2668,6 +2668,7 @@ struct sSortedMeshEntry
 	sMesh				*p_mesh;
 	float				sort;
 	sSortedMeshEntry	*pNext;
+	int					order;		// PS3: position in the scene, to break ties (see cmp)
 };
 
 
@@ -3219,7 +3220,14 @@ void render_shadow_meshes( sScene *p_scene, sMesh **p_mesh_indices, int num_mesh
 /******************************************************************/
 static int cmp( const void *p1, const void *p2 )
 {
-	return((sSortedMeshEntry*)p1)->sort < ((sSortedMeshEntry*)p2)->sort ? -1 : ((sSortedMeshEntry*)p1)->sort > ((sSortedMeshEntry*)p2)->sort ? 1 : 0;
+	const sSortedMeshEntry *a = (const sSortedMeshEntry*)p1, *b = (const sSortedMeshEntry*)p2;
+	if( a->sort < b->sort ) return -1;
+	if( a->sort > b->sort ) return 1;
+	// Layers that share a bounding sphere (a road and the decals and lightmap passes drawn over
+	// it) tie. qsort leaves ties in any order, and newlib's order changed with the rest of the
+	// list as the camera moved, so the layers swapped and whole surfaces flashed dark or pale.
+	// Ties keep their order in the scene, which is the order the layers were built to draw in.
+	return a->order < b->order ? -1 : a->order > b->order ? 1 : 0;
 }
 
 
@@ -3597,14 +3605,22 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 
 						sortedMeshArray[next_sorted_mesh_entry].p_mesh	= p_mesh;
 						sortedMeshArray[next_sorted_mesh_entry].sort	= boundingSphereNearestZ;
+						sortedMeshArray[next_sorted_mesh_entry].order	= next_sorted_mesh_entry;
 
-						++next_sorted_mesh_entry;
+						// (The array holds 1000: the original ran on past the end.)
+						if( next_sorted_mesh_entry < (int)( sizeof( sortedMeshArray ) / sizeof( sortedMeshArray[0] )) - 1 )
+							++next_sorted_mesh_entry;
 					}
 				}
 			}
 			if( next_sorted_mesh_entry > 0 )
 			{
 				// Sort the array into ascending sort order.
+#ifdef __PLAT_PS3__
+				// no_transparent_sort.txt: draw these in scene order, unsorted (a test switch).
+				static int s_ps3NoTransparentSort = -1;
+				if( !Ps3CullSwitch( s_ps3NoTransparentSort, "no_transparent_sort.txt" ))
+#endif
 				qsort( sortedMeshArray, next_sorted_mesh_entry, sizeof( sSortedMeshEntry ), cmp );
 		
 				for( int m = 0; m < next_sorted_mesh_entry; ++m )
