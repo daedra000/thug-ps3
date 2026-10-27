@@ -28,6 +28,8 @@
 
 // lwss: ifdef off xbox includes
 #ifdef __PLAT_XBOX__
+#include <string.h>
+#include <stdio.h>
 #include	<xtl.h>
 #include	<xgraphics.h>
 #endif
@@ -352,8 +354,34 @@ void CEngine::s_plat_post_render( void )
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+#ifdef __PLAT_PS3__
+// Where the world render's CPU time goes (timebase ticks, 79800 a millisecond), logged about
+// every 600 frames: the render phase is about 3 ms more than the draw calls themselves.
+enum { kRwShadow, kRwOpaqueScenes, kRwSplats, kRwOpaqueInst, kRwSky, kRwSemiInstPre, kRwSemiScenes, kRwParticles, kRwSemiInstPost, kRwPhases };
+static const char* const kRwNames[kRwPhases] = { "shadows", "opaque world", "splats+imposters", "opaque instances", "sky", "semi instances (pre)", "semi world", "particles+weather+shatter", "semi instances (post)" };
+static unsigned long long s_rw[kRwPhases];
+static unsigned s_rwFrames;
+#define RW_MARK(phase) do { const unsigned long long n_ = __builtin_ppc_get_timebase(); s_rw[phase] += n_ - rwLast; rwLast = n_; } while (0)
+#else
+#define RW_MARK(phase) do { } while (0)
+#endif
+
 void CEngine::s_plat_render_world( void )
 {
+#ifdef __PLAT_PS3__
+	unsigned long long rwLast = __builtin_ppc_get_timebase();
+	if( ++s_rwFrames >= 600 )
+	{
+		char line[600];
+		int o = snprintf( line, sizeof( line ), "[render] world CPU ms a frame:" );
+		for( int i = 0; i < kRwPhases && o > 0 && o < (int)sizeof( line ) - 40; ++i )
+			o += snprintf( line + o, sizeof( line ) - o, " %s %u.%02u", kRwNames[i], (unsigned)( s_rw[i] / s_rwFrames / 79800 ),
+				(unsigned)( s_rw[i] / s_rwFrames * 100 / 79800 % 100 ));
+		printf( "%s\n", line );
+		memset( s_rw, 0, sizeof( s_rw ));
+		s_rwFrames = 0;
+	}
+#endif
 	if (NxXbox::g_disableRendering)
 	{
 		return;
@@ -378,6 +406,7 @@ void CEngine::s_plat_render_world( void )
 		NxXbox::set_render_state( RS_ZTESTENABLE,	1 );
 
 		NxXbox::render_shadow_targets();
+		RW_MARK( kRwShadow );
 
 		//CEngine::sGetImposterManager()->ProcessImposters(); // lwss remove for PC
 
@@ -455,14 +484,17 @@ void CEngine::s_plat_render_world( void )
 				}
 			}
 
+			RW_MARK( kRwOpaqueScenes );
 			NxXbox::set_render_state( RS_ZWRITEENABLE,	0 );
 			Nx::TextureSplatRender();
 			NxXbox::set_render_state( RS_ZWRITEENABLE,	1 );
 
 			CEngine::sGetImposterManager()->DrawImposters();
 
+			RW_MARK( kRwSplats );
 			// Render all opaque instances.
 			NxXbox::render_instances( NxXbox::vRENDER_OPAQUE );
+			RW_MARK( kRwOpaqueInst );
 		
 			// Now that opaque geometry is drawn, do the render tests for the light glows.
 			// LWSS: Seems removed in PC
@@ -535,9 +567,11 @@ void CEngine::s_plat_render_world( void )
 
 			// Revert to the regular camera.
 			NxXbox::set_camera( &( p_cur_camera->GetMatrix()), &( p_cur_camera->GetPos()), p_cur_camera->GetAdjustedHFOV(), aspect_ratio );
+			RW_MARK( kRwSky );
 
 			// Render all semitransparent instances.
 			NxXbox::render_instances( NxXbox::vRENDER_SEMITRANSPARENT | NxXbox::vRENDER_INSTANCE_PRE_WORLD_SEMITRANSPARENT );
+			RW_MARK( kRwSemiInstPre );
 
 			// Render the non-sky semitransparent scene geometry.
 			// Setting the depth clip control to clamp here means that semitransparent periphary objects that would usually cull out
@@ -564,6 +598,7 @@ void CEngine::s_plat_render_world( void )
 			// LWSS: Removed for PC
 			//D3DDevice_SetRenderState( D3DRS_DEPTHCLIPCONTROL, D3DDCC_CULLPRIMITIVE );
 
+			RW_MARK( kRwSemiScenes );
 			// Render the particles.
 			NxXbox::set_render_state( RS_ZWRITEENABLE,	0 );
 			render_particles();
@@ -581,8 +616,10 @@ void CEngine::s_plat_render_world( void )
 			// We want shatter objects to be rendered after the sky since they will typically be semitransparent.
 			Nx::ShatterRender();
 
+			RW_MARK( kRwParticles );
 			// Render all semitransparent instances.
 			NxXbox::render_instances( NxXbox::vRENDER_SEMITRANSPARENT | NxXbox::vRENDER_INSTANCE_POST_WORLD_SEMITRANSPARENT );
+			RW_MARK( kRwSemiInstPost );
 
 			// Render the light glows (the visibility tests were performed earlier).
 			// LWSS: Removed in PC

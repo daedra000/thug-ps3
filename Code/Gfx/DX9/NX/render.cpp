@@ -2437,44 +2437,6 @@ float get_bounding_sphere_nearest_z( void )
 static int s_ps3NoVisMask = -1, s_ps3NoFrustumTest = -1;
 static bool Ps3CullSwitch(int& flag, const char* name);
 #endif
-#ifdef __PLAT_PS3__
-// Objects blinked out at the screen edges, cured by drawing without this test: check each cull
-// against the side planes of the projection matrix the draws use (view-space sphere). A cull
-// those planes disagree with is logged (the first few in full, then a count now and then).
-static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame, s_ps3SphereTests, s_ps3OrthoCulls, s_ps3TestFrame, s_ps3RotatedOff;
-static void ps3_check_cull( const XGVECTOR4& v, float radius )
-{
-	if( EngineGlobals.is_orthographic ) { ++s_ps3OrthoCulls; return; }
-	++s_ps3Culls;
-	const XGMATRIX& P = EngineGlobals.projection_matrix;
-	// Row-vector convention (clip = v * P): column j is (P.m[0][j], P.m[1][j], P.m[2][j], P.m[3][j]).
-	float pl[4][4];
-	for( int i = 0; i < 4; ++i )
-	{
-		const int j = i >> 1;
-		const float sgn = ( i & 1 ) ? -1.0f : 1.0f;
-		for( int k = 0; k < 4; ++k ) pl[i][k] = P.m[k][3] + sgn * P.m[k][j];
-	}
-	for( int i = 0; i < 4; ++i )
-	{
-		const float len = sqrtf( pl[i][0] * pl[i][0] + pl[i][1] * pl[i][1] + pl[i][2] * pl[i][2] );
-		if( len <= 0.0f ) return;
-		const float d = ( pl[i][0] * v.x + pl[i][1] * v.y + pl[i][2] * v.z + pl[i][3] ) / len;
-		if( d < -radius ) return;	// the projection agrees: outside this plane
-	}
-	++s_ps3WrongCulls;
-	if( s_ps3WrongCulls <= 8 )
-		printf( "[cull] wrong cull: view (%.1f, %.1f, %.1f) r %.1f; angle %.2f, TX %.4f TY %.4f SX %.4f CX %.4f SY %.4f CY %.4f; proj %.4f %.4f %.4f %.4f\n",
-			v.x, v.y, v.z, radius, EngineGlobals.screen_angle, EngineGlobals.ViewFrustumTX, EngineGlobals.ViewFrustumTY,
-			EngineGlobals.ViewFrustumSX, EngineGlobals.ViewFrustumCX, EngineGlobals.ViewFrustumSY, EngineGlobals.ViewFrustumCY,
-			P.m[0][0], P.m[1][1], P.m[2][2], P.m[3][2] );
-	if( g_globalFrameCounter - s_ps3CullFrame >= 600 )
-	{
-		s_ps3CullFrame = g_globalFrameCounter;
-		printf( "[cull] %u culls, %u of them inside the projection's frustum\n", s_ps3Culls, s_ps3WrongCulls );
-	}
-}
-#endif
 
 bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 {
@@ -2488,15 +2450,6 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 		// translation (the full transform was commented out for speed), which puts the sphere
 		// in the wrong place for a rotated object whose sphere isn't centred on its origin.
 		XGVec3Transform( &test_out, (XGVECTOR3*)p_center, p_bbox_transform );
-		{
-			// How often the translation-only centre would have been wrong enough to matter.
-			XGVECTOR4 old_out;
-			old_out.x = p_center->x + p_bbox_transform->_41;
-			old_out.y = p_center->y + p_bbox_transform->_42;
-			old_out.z = p_center->z + p_bbox_transform->_43;
-			const float dx = old_out.x - test_out.x, dy = old_out.y - test_out.y, dz = old_out.z - test_out.z;
-			if( dx * dx + dy * dy + dz * dz > radius * radius * 0.25f ) ++s_ps3RotatedOff;
-		}
 #else
 		// Object to world.
 		test_out.x = p_center->x + p_bbox_transform->_41;
@@ -2524,17 +2477,6 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 	float sy_z	= EngineGlobals.ViewFrustumSY * test_out.z;
 	float cy_y	= EngineGlobals.ViewFrustumCY * test_out.y;
 	const bool culled = ( radius < sx_z - cx_x ) || ( radius < sx_z + cx_x ) || ( radius < sy_z + cy_y ) || ( radius < sy_z - cy_y );
-#ifdef __PLAT_PS3__
-	++s_ps3SphereTests;
-	if( culled )
-		ps3_check_cull( test_out, radius );
-	if( g_globalFrameCounter - s_ps3TestFrame >= 600 )
-	{
-		s_ps3TestFrame = g_globalFrameCounter;
-		printf( "[cull] frame %d: %u sphere tests, %u culled (%u of those while orthographic), %u inside the projection's frustum; %u object spheres moved by their rotation\n",
-			g_globalFrameCounter, s_ps3SphereTests, s_ps3Culls + s_ps3OrthoCulls, s_ps3OrthoCulls, s_ps3WrongCulls, s_ps3RotatedOff );
-	}
-#endif
 #ifdef __PLAT_PS3__
 	// no_frustum_test.txt: the sphere test passes everything (the visibility mask, occluders
 	// and the near/far draw order still work as normal).
