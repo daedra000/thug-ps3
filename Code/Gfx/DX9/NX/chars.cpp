@@ -301,6 +301,32 @@ int DwordizeTexelData(intptr_t texel_data_dword_array, intptr_t texel_data_char_
 /*                                                                */
 /*                                                                */
 /******************************************************************/
+#ifdef __PLAT_PS3__
+// The PC data's scripts use button tags past the PS2 buttons font's 19 glyphs (slots 0-i),
+// for its own prompts: \bm = Accept, \bn = Back, \bo = Delete/Contract, \bp = Expand/Hide,
+// \bq/\br = Zoom/Order, \bs/\bt = Rotate/Raise/Lower and page tabs, \bk the right stick. They
+// drew as glyph 0 (the triangle). Each goes to the PS2 glyph the PS2 scripts use for the same
+// prompt (triangle 0, square 1, circle 2, X 3, arrows 4-7, L1 e, R1 f, L2 g, R2 h).
+static uint ButtonSlot( uint digit )
+{
+	switch( digit )
+	{
+		case 20: return 5;	// k: right stick (no glyph): the right arrow
+		case 22: return 3;	// m: Accept -> X
+		case 23: return 0;	// n: Back -> triangle
+		case 24: return 1;	// o: Delete, Contract, Load, Preview -> square
+		case 25: return 2;	// p: Expand, Hide -> circle
+		case 26: return 16;	// q: Zoom / Order -> L2
+		case 27: return 17;	// r: Zoom / Order, Reset -> R2
+		case 28: return 14;	// s: Rotate, Lower, previous page -> L1
+		case 29: return 15;	// t: Rotate, Raise, next page -> R1
+		default: return digit;
+	}
+}
+#else
+static inline uint ButtonSlot( uint digit ) { return digit; }
+#endif
+
 // LWSS: Should be done.
 SFont* LoadFont( const char *Filename, bool memory_resident )
 {
@@ -682,7 +708,7 @@ void SFont::QueryString( char *String, float &width, float &height )
 				case 'B':
 				{
 					pLetter++; // skip "b"
-					uint digit = Str::DehexifyDigit(pLetter);
+					uint digit = ButtonSlot( Str::DehexifyDigit(pLetter ));
 					
 					// switch over to buttons font, the regular font will be used again on the next character
 
@@ -841,7 +867,7 @@ void SText::Draw( void )
 					// 'B' stands for button, accesses the button font
 
 					pLetter++; // skip "b"
-					uint digit = Str::DehexifyDigit( pLetter );
+					uint digit = ButtonSlot( Str::DehexifyDigit( pLetter ));
 					
 					// switch to the buttons font!
 					p_font = pButtonsFont;
