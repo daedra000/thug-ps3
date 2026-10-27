@@ -62,8 +62,12 @@ namespace Ps3Gfx
 {
 
 enum { kMaxBuffers = 3 };
-static const u32 kCommandBufferSize = 256 * 1024;
-static const u32 kIoSize = 1024 * 1024;	// main memory mapped for the RSX: the command buffer only
+// A New Jersey frame is about 3 MB of commands. With a 256 KB buffer the CPU could never be
+// more than 256 KB ahead of the RSX: every segment change waited for it, so the two took turns
+// instead of working at once. 4 MB holds more than a frame (the frame fence lets the CPU get
+// one frame ahead, no more).
+static const u32 kCommandBufferSize = 4 * 1024 * 1024;
+static const u32 kIoSize = 5 * 1024 * 1024;	// main memory mapped for the RSX: the command buffer only
 
 gcmContextData* s_ctx;
 static void* s_ioBuffer;
@@ -86,6 +90,8 @@ static u32 s_flipsQueued, s_flipsWaived;
 static volatile u32 s_flipsDone;
 static unsigned s_frames, s_draws;
 static unsigned s_segmentChanges;
+static u64 s_cmdWaitTicks;			// timebase ticks spent in segment changes (waiting for the RSX), since the last report
+static unsigned s_lastSegmentChanges;	// s_segmentChanges at the last report
 static u32 s_label = 1;
 static bool s_firstFrame = true;
 static bool s_frameReady;	// this frame has passed the flip gate
@@ -179,7 +185,9 @@ static s32 __attribute__((noinline)) FifoCallback(gcmContextData* context, u32 c
 void CmdReserve(u32 words)
 {
 	if (!s_ctx || s_ctx->current + words <= s_ctx->end) return;
+	const u64 t0 = __builtin_ppc_get_timebase();
 	s32 r = FifoCallback(s_ctx, words);
+	s_cmdWaitTicks += __builtin_ppc_get_timebase() - t0;
 	++s_segmentChanges;
 	if (r != 0 || s_ctx->current + words > s_ctx->end)
 	{
@@ -652,8 +660,19 @@ void Present(IDirect3DDevice9*)
 		s_cur = (s_cur + 1) % s_buffers;
 	}
 	if (s_frames <= 3 || (s_frames % 600) == 0)
-		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held)",
-			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced);
+	{
+		// Command-buffer waits: time the CPU spent in segment changes, waiting for the RSX to
+		// free space (79800 timebase ticks a millisecond).
+		const unsigned frames = s_frames <= 3 ? 1 : 600;
+		const unsigned segs = s_segmentChanges - s_lastSegmentChanges;
+		const unsigned waitUs = (unsigned)(s_cmdWaitTicks * 1000 / 79800);
+		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held; "
+			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame)",
+			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced,
+			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10);
+		s_lastSegmentChanges = s_segmentChanges;
+		s_cmdWaitTicks = 0;
+	}
 }
 
 void Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
