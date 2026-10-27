@@ -257,8 +257,11 @@ static u32 s_ringBase;		// this frame's slot
 // in use" (an extra rename or deferred free), never the other way.
 static u32 s_doneCache;
 static unsigned s_doneAge;
+static bool s_freshDone;	// rsx_fresh_label.txt: read the label every time (a test switch)
+static bool s_vsAlways;		// rsx_vs_always.txt: recompute the vertex constants for every draw (a test switch)
 static inline u32 DoneCached()
 {
+	if (s_freshDone) return FramesDone();
 	if (++s_doneAge >= 32)
 	{
 		s_doneAge = 0;
@@ -2016,7 +2019,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
 	DP_MARK(kDpState);
-	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms)
+	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms || s_vsAlways)
 	{
 		float vc[kVcCount][4];
 		FillVsConstants(dev, vc);
@@ -2218,6 +2221,10 @@ bool DrawInit()
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
+	s_freshDone = FlagFile("rsx_fresh_label.txt");
+	s_vsAlways = FlagFile("rsx_vs_always.txt");
+	if (s_freshDone) GpuLog("rsx_fresh_label.txt: the fence label is read every time");
+	if (s_vsAlways) GpuLog("rsx_vs_always.txt: vertex constants recomputed for every draw");
 	GpuLog("draw path: a175dd3 savings on, a fresh fragment-program copy per draw");
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
 		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
