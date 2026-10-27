@@ -2437,10 +2437,10 @@ float get_bounding_sphere_nearest_z( void )
 // Objects blinked out at the screen edges, cured by drawing without this test: check each cull
 // against the side planes of the projection matrix the draws use (view-space sphere). A cull
 // those planes disagree with is logged (the first few in full, then a count now and then).
-static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame;
+static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame, s_ps3SphereTests, s_ps3OrthoCulls, s_ps3TestFrame;
 static void ps3_check_cull( const XGVECTOR4& v, float radius )
 {
-	if( EngineGlobals.is_orthographic ) return;
+	if( EngineGlobals.is_orthographic ) { ++s_ps3OrthoCulls; return; }
 	++s_ps3Culls;
 	const XGMATRIX& P = EngineGlobals.projection_matrix;
 	// Row-vector convention (clip = v * P): column j is (P.m[0][j], P.m[1][j], P.m[2][j], P.m[3][j]).
@@ -2505,8 +2505,15 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 	float cy_y	= EngineGlobals.ViewFrustumCY * test_out.y;
 	const bool culled = ( radius < sx_z - cx_x ) || ( radius < sx_z + cx_x ) || ( radius < sy_z + cy_y ) || ( radius < sy_z - cy_y );
 #ifdef __PLAT_PS3__
+	++s_ps3SphereTests;
 	if( culled )
 		ps3_check_cull( test_out, radius );
+	if( g_globalFrameCounter - s_ps3TestFrame >= 600 )
+	{
+		s_ps3TestFrame = g_globalFrameCounter;
+		printf( "[cull] frame %d: %u sphere tests, %u culled (%u of those while orthographic), %u inside the projection's frustum\n",
+			g_globalFrameCounter, s_ps3SphereTests, s_ps3Culls + s_ps3OrthoCulls, s_ps3OrthoCulls, s_ps3WrongCulls );
+	}
 #endif
 	return !culled;
 }
