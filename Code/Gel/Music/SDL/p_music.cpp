@@ -196,6 +196,67 @@ namespace Pcm
 			}
 	};
 
+#ifdef __PLAT_PS3__
+	// One entry of streams/pcm/pcm.wad as a stream of its own, read in 32 KB pieces as the
+	// decoder asks for them (on the streaming thread). Reading the whole entry when a stream
+	// started (several MB, on the game thread) froze the game for about 170 ms each time a
+	// level's ambient sound changed.
+	class WadRangeBuf : public std::streambuf
+	{
+		FILE *f = nullptr;
+		uint32 base = 0, size = 0;	// the entry's place in the WAD
+		uint32 bufAt = 0;			// entry offset of buf[0]
+		char buf[32 * 1024];
+
+	public:
+		bool Open(const std::string &path, uint32 offset, uint32 length)
+		{
+			f = fopen(path.c_str(), "rb");
+			base = offset;
+			size = length;
+			bufAt = 0;
+			setg(buf, buf, buf);
+			return f != nullptr;
+		}
+		~WadRangeBuf() { if (f) fclose(f); }
+
+	protected:
+		int_type underflow() override
+		{
+			if (gptr() < egptr()) return traits_type::to_int_type(*gptr());
+			const uint32 at = bufAt + (uint32)(egptr() - eback());
+			if (!f || at >= size) return traits_type::eof();
+			uint32 n = size - at;
+			if (n > sizeof(buf)) n = sizeof(buf);
+			if (fseek(f, (long)(base + at), SEEK_SET) != 0) return traits_type::eof();
+			const size_t got = fread(buf, 1, n, f);
+			bufAt = at;
+			setg(buf, buf, buf + got);
+			return got ? traits_type::to_int_type(*gptr()) : traits_type::eof();
+		}
+		pos_type seekpos(pos_type p, std::ios_base::openmode) override
+		{
+			const long long want = (long long)p;
+			if (want < 0 || want > (long long)size) return pos_type(off_type(-1));
+			const uint32 w = (uint32)want;
+			if (w >= bufAt && w <= bufAt + (uint32)(egptr() - eback()))
+				setg(eback(), eback() + (w - bufAt), egptr());	// inside what is buffered
+			else
+			{
+				bufAt = w;
+				setg(buf, buf, buf);	// read from there on the next underflow
+			}
+			return p;
+		}
+		pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode which) override
+		{
+			const long long cur = (long long)bufAt + (gptr() - eback());
+			long long to = dir == std::ios_base::beg ? (long long)off : dir == std::ios_base::cur ? cur + off : (long long)size + off;
+			return seekpos(pos_type(off_type(to)), which);
+		}
+	};
+#endif
+
 	class MusicDecoder : public Streamer
 	{
 		private:
@@ -209,8 +270,9 @@ namespace Pcm
 			// can't decode (Code/Ps3/audio/bink_audio.cpp does).
 			BinkAudio *bink = nullptr;
 
-			// A stream held in memory (one entry of streams/pcm/pcm.wad), instead of a file.
-			std::istringstream mem;
+			// A stream read from one entry of streams/pcm/pcm.wad, instead of a file of its own.
+			WadRangeBuf wadbuf;
+			std::istream mem{&wadbuf};
 			bool from_mem = false;
 
 			bool OpenBink(std::istream &in)
@@ -238,8 +300,10 @@ namespace Pcm
 #endif
 
 #ifdef __PLAT_PS3__
-			MusicDecoder(const std::string &bytes) : mem(bytes)
+			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size)
 			{
+				if (!wadbuf.Open(std::string(wad), offset, size))	// resolved: the data's names are case-insensitive
+					return;
 				from_mem = true;
 				if (!OpenBink(mem))
 					from_mem = false;	// not Bink: nothing to play
@@ -547,18 +611,13 @@ namespace Pcm
 		printf("[music] pcm.wad: %u ambient streams\n", (unsigned)wad_entries.size());
 	}
 
-	static bool ReadWadEntry(uint32 checksum, std::string &out)
+	// A decoder reading the entry straight from pcm.wad (see WadRangeBuf); NULL if there is none.
+	static MusicDecoder *OpenWadEntry(uint32 checksum)
 	{
 		auto it = wad_entries.find(checksum);
 		if (it == wad_entries.end())
-			return false;
-		std::ifstream wad(File::DataPath() / "streams" / "pcm" / "pcm.wad", std::ios::binary);
-		if (!wad.is_open())
-			return false;
-		out.resize(it->second.size);
-		wad.seekg(it->second.offset);
-		wad.read(&out[0], it->second.size);
-		return (size_t)wad.gcount() == it->second.size;
+			return nullptr;
+		return new MusicDecoder(File::DataPath() / "streams" / "pcm" / "pcm.wad", it->second.offset, it->second.size);
 	}
 #endif
 
@@ -1157,10 +1216,9 @@ namespace Pcm
 		if (it == stream_paths.end())
 		{
 #ifdef __PLAT_PS3__
-			std::string bytes;
-			if (!ReadWadEntry(checksum, bytes))
+			stream = OpenWadEntry(checksum);
+			if (stream == nullptr)
 				return false;
-			stream = new MusicDecoder(bytes);
 #else
 			return false;
 #endif
