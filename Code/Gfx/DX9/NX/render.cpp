@@ -2434,6 +2434,10 @@ float get_bounding_sphere_nearest_z( void )
 /*                                                                */
 /******************************************************************/
 #ifdef __PLAT_PS3__
+static int s_ps3NoVisMask = -1, s_ps3NoFrustumTest = -1;
+static bool Ps3CullSwitch(int& flag, const char* name);
+#endif
+#ifdef __PLAT_PS3__
 // Objects blinked out at the screen edges, cured by drawing without this test: check each cull
 // against the side planes of the projection matrix the draws use (view-space sphere). A cull
 // those planes disagree with is logged (the first few in full, then a count now and then).
@@ -2530,6 +2534,12 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 		printf( "[cull] frame %d: %u sphere tests, %u culled (%u of those while orthographic), %u inside the projection's frustum; %u object spheres moved by their rotation\n",
 			g_globalFrameCounter, s_ps3SphereTests, s_ps3Culls + s_ps3OrthoCulls, s_ps3OrthoCulls, s_ps3WrongCulls, s_ps3RotatedOff );
 	}
+#endif
+#ifdef __PLAT_PS3__
+	// no_frustum_test.txt: the sphere test passes everything (the visibility mask, occluders
+	// and the near/far draw order still work as normal).
+	if( culled && Ps3CullSwitch( s_ps3NoFrustumTest, "no_frustum_test.txt" ))
+		return true;
 #endif
 	return !culled;
 }
@@ -3273,6 +3283,12 @@ void render_shadow_volumes( sScene *p_scene, uint32 viewport )
 
 
 #ifdef __PLAT_PS3__
+// no_vis_mask.txt: draw meshes whose visibility mask hides them in this viewport.
+#define PS3_VIS_MASK_OK( x ) (( x ) || Ps3CullSwitch( s_ps3NoVisMask, "no_vis_mask.txt" ))
+#else
+#define PS3_VIS_MASK_OK( x ) ( x )
+#endif
+#ifdef __PLAT_PS3__
 // Test switches (empty files in USRDIR) for objects blinking at the screen edges:
 // no_frustum_cull.txt draws every world mesh, no_occlusion.txt skips the occluder test.
 extern uint32 NumOcclusionPolys;
@@ -3360,7 +3376,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 					render = false;
 
 					// Check the visibility mask.
-					if( p_mesh->m_visibility_mask & viewport )
+					if( PS3_VIS_MASK_OK( p_mesh->m_visibility_mask & viewport ))
 					{
 						// Frustum cull this set of meshes, using the associated bounding sphere and bounding box.
 						if( frustum_check_sphere( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius ))
@@ -3491,7 +3507,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 					render = false;
 
 					// Check the visibility mask.
-					if( p_mesh->m_visibility_mask & viewport )
+					if( PS3_VIS_MASK_OK( p_mesh->m_visibility_mask & viewport ))
 					{
 						// Frustum cull this set of meshes, using the associated bounding box.
 						if( frustum_check_sphere( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius ))
@@ -3549,7 +3565,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 						render = false;
 
 						// Check the visibility mask.
-						if( p_mesh->m_visibility_mask & viewport )
+						if( PS3_VIS_MASK_OK( p_mesh->m_visibility_mask & viewport ))
 						{
 							// Frustum cull this set of meshes, using the associated bounding box.
 							if( frustum_check_sphere( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius ))
@@ -3610,7 +3626,7 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 						render = false;
 
 						// Check the visibility mask.
-						if( p_mesh->m_visibility_mask & viewport )
+						if( PS3_VIS_MASK_OK( p_mesh->m_visibility_mask & viewport ))
 						{
 							// Frustum cull this set of meshes, using the associated bounding box.
 							if( frustum_check_sphere( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius ))
