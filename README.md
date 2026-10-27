@@ -29,7 +29,14 @@ sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
 - [x] Movies: the PC data's Bink 1 movies (`Code/Ps3/video/bink_video.cpp`, LGPL 2.1+, derived
       from FFmpeg; checked against ffmpeg with `tools/bink-video-test`); Start or X skips
 - [x] Crash log: a PPU exception handler (liblv2dbg) logs pc, registers and a backtrace;
-      `thug-ps3.map` from the CI artifacts names the addresses
+      `thug-ps3.map` from the CI artifacts names the addresses. A hang watchdog, a frame
+      profiler (`[prof]`, `[hitch]`) and memory reports (`[mem]`) also go to the log
+- [x] Renderer: tiled display and depth buffers, ZCULL, triple buffering; a 4 MB command
+      buffer so the CPU and RSX work in parallel
+- [x] Surfaces flashing dark or pale as the camera moved: fixed (patched fragment programs
+      now get a fresh copy for every draw)
+- [ ] Performance: 27–60 fps in New Jersey. Being worked on: frames dropping to 30 fps, and a
+      short hitch when a level's ambient sound changes
 - [ ] Story mode cutscenes past the first (being checked)
 - [ ] Saves (`USRDIR/Save`): written to a `.tmp` file and swapped in when complete; untested
 
@@ -46,12 +53,13 @@ sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
    screenshot about every 30 seconds as `USRDIR/thug-frame-NNN.bmp` and log every draw of that
    frame. Each capture pauses the game for several seconds; it is off by default.
 
-Two PKGs are built:
+Three PKGs are built (each CI run keeps them for 7 days):
 
 | PKG | What it is |
 |-----|------------|
 | `thug-ps3.pkg` | The game. |
-| `thug-ps3-headless.pkg` | Test build: loads and runs the game logic without video, audio or pad, writing everything to the log. Useful for checking the data loads before the renderer is finished. |
+| `thug-ps3-asserts.pkg` | The game with its asserts on, logging to `thug-ps3.log`. For tracking down crashes. |
+| `thug-ps3-headless.pkg` | Test build: loads and runs the game logic without video, audio or pad, writing everything to the log. |
 
 ## Quick testing with ps3load / PS3LoadX
 
@@ -81,9 +89,30 @@ the PS3 toolchain.
 
 ## Testing switches
 
-Empty files in `USRDIR` change how the RSX renderer works, to help narrow down problems:
-`rsx_linear_textures.txt` (no texture swizzling or mipmaps), `rsx_flip_cull.txt` (cull the
-other triangle winding), `rsx_no_draw.txt` (clear and flip only).
+Empty files in `USRDIR` change how the port works, to help narrow down problems. None is
+needed to play; leave them all out unless asked for one.
+
+| File | Effect |
+|------|--------|
+| `rsx_capture.txt` | Save a screenshot and log every draw about every 30 s (see Installing) |
+| `rsx_linear_textures.txt` | No texture swizzling (and so no mipmaps) |
+| `rsx_flip_cull.txt` | Cull the other triangle winding (the old mapping) |
+| `rsx_no_draw.txt` | Clear and flip only, draw nothing |
+| `rsx_depth_clamp.txt` | Depth clamp instead of near/far clipping |
+| `rsx_double_buffer.txt` | Two display buffers instead of three |
+| `rsx_notiles.txt` | No tiled display or depth buffers |
+| `rsx_no_zcull.txt` | ZCULL off |
+| `rsx_keep_texture_data.txt`, `rsx_keep_buffer_data.txt` | Keep the main-memory copies of uploaded textures / vertex buffers |
+| `no_frustum_cull.txt` | Draw every world mesh (no sphere test, visibility mask or occluders) |
+| `no_frustum_test.txt`, `no_vis_mask.txt`, `no_occlusion.txt` | Turn off one of those three |
+| `no_transparent_sort.txt` | Draw the sorted see-through meshes in scene order |
+| `sort_front_to_back.txt` | Draw the opaque world in the original two loops |
+| `no_stream_thread.txt` | Decode music and ambience on the mixer thread |
+| `no_atomic_saves.txt` | Write saves in place instead of through a `.tmp` file |
+| `no_device_lock.txt` | Don't serialise the renderer between threads |
+| `no_crash_handler.txt` | Don't install the crash handler |
+| `no_mallopt.txt` | Leave newlib's heap trimming on |
+| `fs_no_missing_cache.txt` | Don't cache file names found missing |
 
 For start-up problems: `nothreads.txt` (none of the port's threads; the game's
 `CreateThread` calls are refused) and `memcap.txt` (allocations over 10 MB fail during
