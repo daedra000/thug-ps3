@@ -2437,7 +2437,7 @@ float get_bounding_sphere_nearest_z( void )
 // Objects blinked out at the screen edges, cured by drawing without this test: check each cull
 // against the side planes of the projection matrix the draws use (view-space sphere). A cull
 // those planes disagree with is logged (the first few in full, then a count now and then).
-static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame, s_ps3SphereTests, s_ps3OrthoCulls, s_ps3TestFrame;
+static unsigned s_ps3Culls, s_ps3WrongCulls, s_ps3CullFrame, s_ps3SphereTests, s_ps3OrthoCulls, s_ps3TestFrame, s_ps3RotatedOff;
 static void ps3_check_cull( const XGVECTOR4& v, float radius )
 {
 	if( EngineGlobals.is_orthographic ) { ++s_ps3OrthoCulls; return; }
@@ -2479,11 +2479,27 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 	// Build the composite transform if required.
 	if( p_bbox_transform )
 	{
+#ifdef __PLAT_PS3__
+		// Object to world with the object's rotation too. The original took only the
+		// translation (the full transform was commented out for speed), which puts the sphere
+		// in the wrong place for a rotated object whose sphere isn't centred on its origin.
+		XGVec3Transform( &test_out, (XGVECTOR3*)p_center, p_bbox_transform );
+		{
+			// How often the translation-only centre would have been wrong enough to matter.
+			XGVECTOR4 old_out;
+			old_out.x = p_center->x + p_bbox_transform->_41;
+			old_out.y = p_center->y + p_bbox_transform->_42;
+			old_out.z = p_center->z + p_bbox_transform->_43;
+			const float dx = old_out.x - test_out.x, dy = old_out.y - test_out.y, dz = old_out.z - test_out.z;
+			if( dx * dx + dy * dy + dz * dz > radius * radius * 0.25f ) ++s_ps3RotatedOff;
+		}
+#else
 		// Object to world.
 		test_out.x = p_center->x + p_bbox_transform->_41;
 		test_out.y = p_center->y + p_bbox_transform->_42;
 		test_out.z = p_center->z + p_bbox_transform->_43;
 //		XGVec3Transform( &test_out, (XGVECTOR3*)p_center, p_bbox_transform );
+#endif
 
 		// World to view.
 		XGVec3Transform( &test_out, (XGVECTOR3*)&test_out, (XGMATRIX*)&EngineGlobals.view_matrix );
@@ -2511,8 +2527,8 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 	if( g_globalFrameCounter - s_ps3TestFrame >= 600 )
 	{
 		s_ps3TestFrame = g_globalFrameCounter;
-		printf( "[cull] frame %d: %u sphere tests, %u culled (%u of those while orthographic), %u inside the projection's frustum\n",
-			g_globalFrameCounter, s_ps3SphereTests, s_ps3Culls + s_ps3OrthoCulls, s_ps3OrthoCulls, s_ps3WrongCulls );
+		printf( "[cull] frame %d: %u sphere tests, %u culled (%u of those while orthographic), %u inside the projection's frustum; %u object spheres moved by their rotation\n",
+			g_globalFrameCounter, s_ps3SphereTests, s_ps3Culls + s_ps3OrthoCulls, s_ps3OrthoCulls, s_ps3WrongCulls, s_ps3RotatedOff );
 	}
 #endif
 	return !culled;
