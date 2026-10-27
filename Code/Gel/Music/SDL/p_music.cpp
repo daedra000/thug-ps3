@@ -22,6 +22,7 @@
 #include <sys/mutex.h>
 #include <sys/cond.h>
 #include <sys/thread.h>
+#include <sys/systime.h>
 #endif
 #include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
@@ -1211,6 +1212,9 @@ namespace Pcm
 		(void)fPitch;
 
 		// Find stream path from checksum
+#ifdef __PLAT_PS3__
+		const u64 t0 = sysGetSystemTime();
+#endif
 		auto it = stream_paths.find(checksum);
 		Streamer *stream = nullptr;
 		if (it == stream_paths.end())
@@ -1230,7 +1234,21 @@ namespace Pcm
 		}
 		if (!preload)
 			stream->Play();
+#ifdef __PLAT_PS3__
+		const u64 t1 = sysGetSystemTime();
+#endif
 		ReplaceStream(stream_stream[whichStream], stream);
+#ifdef __PLAT_PS3__
+		{
+			// Starting a stream on the game thread: opening it (the Bink header and frame
+			// index) and swapping it in (waiting for the streaming thread to put the old one
+			// down). Logged when slow, to find the hitches that follow "Playing ... stream".
+			const u64 t2 = sysGetSystemTime();
+			if (t2 - t0 > 10000)
+				printf("[music] stream %u took %u ms to start (open %u ms, swap %u ms)\n", (unsigned)whichStream,
+					(unsigned)((t2 - t0) / 1000), (unsigned)((t1 - t0) / 1000), (unsigned)((t2 - t1) / 1000));
+		}
+#endif
 
 		if (p_volume != nullptr)
 			PCMAudio_SetStreamVolume(p_volume, whichStream);

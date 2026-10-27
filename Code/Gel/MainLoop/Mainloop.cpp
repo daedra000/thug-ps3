@@ -531,18 +531,22 @@ void		Manager::MainLoop( void )
 			// The first frames, then every 10 s or so (60 Hz), in the log.
 			++s_ps3Frame;
 			g_ps3Frame = s_ps3Frame;
-			// Hitches: a main loop frame that took over 150 ms (outside the first frames,
+			// Hitches: a main loop frame that took over 50 ms (outside the first frames,
 			// which load), with where the previous frame ended up, to find the freezes.
 			{
 				static u64 s_ps3LastFrameTime = 0;
 				static unsigned s_ps3Hitches = 0;
 				const u64 now = sysGetSystemTime();
-				if (s_ps3LastFrameTime && s_ps3Frame > 30 && now - s_ps3LastFrameTime > 150000 && s_ps3Hitches < 300)
+				g_ps3FrameTime = now;
+				// Over 50 ms (three missed vsyncs): with what the sampler saw that frame.
+				if (s_ps3LastFrameTime && s_ps3Frame > 30 && now - s_ps3LastFrameTime > 50000 && s_ps3Hitches < 300)
 				{
 					++s_ps3Hitches;
-					printf("[hitch] frame %u took %u ms (task %p, at %s, script 0x%08x line %u)\n", s_ps3Frame,
+					printf("[hitch] frame %u took %u ms (task %p, at %s, script 0x%08x line %u)\n", s_ps3Frame - 1,
 						(unsigned)((now - s_ps3LastFrameTime) / 1000), (const void*)g_ps3CurrentTask,
 						g_ps3Where ? (const char*)g_ps3Where : "-", g_ps3ScriptSub, g_ps3ScriptLine);
+					fflush(stdout);
+					Ps3Platform::LogHitchSamples(s_ps3Frame - 1);
 				}
 				// A frame over a second is nearly always a level load or unload: log the heaps
 				// as it left them.
