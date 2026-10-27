@@ -1082,6 +1082,7 @@ struct FpSlot
 	float vals[9][4];
 };
 enum { kFpSlots = 4 };
+static bool s_noFpSlots;	// rsx_no_fp_cache.txt: no kept copies, every patch in the ring (a test switch)
 
 struct FpEntry
 {
@@ -1288,7 +1289,7 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 	if (e->numConsts)
 	{
 		FpSlot* slot = NULL;
-		for (int i = 0; i < kFpSlots && !slot; ++i)
+		for (int i = 0; i < kFpSlots && !slot && !s_noFpSlots; ++i)
 			if (e->slots[i].mem && SameConsts(e, e->slots[i].vals, values)) slot = &e->slots[i];
 		if (slot)
 			offset = slot->offset;	// a kept copy with these values
@@ -1298,14 +1299,14 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 		{
 			// A new copy: in an empty slot, else in the least recently used slot the RSX is
 			// done with; with every slot busy, in the ring for this frame.
-			for (int i = 0; i < kFpSlots && !slot; ++i)
+			for (int i = 0; i < kFpSlots && !slot && !s_noFpSlots; ++i)
 			{
 				if (e->slots[i].mem) continue;
 				e->slots[i].mem = (u8*)LocalAlloc(e->ucodeSize, 64, &e->slots[i].offset);
 				if (e->slots[i].mem) slot = &e->slots[i];
 				break;
 			}
-			if (!slot)
+			if (!slot && !s_noFpSlots)
 			{
 				for (int i = 0; i < kFpSlots; ++i)
 				{
@@ -2137,6 +2138,8 @@ bool DrawInit()
 	if (s_flipCull) GpuLog("rsx_flip_cull.txt: the old cull mapping");
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
+	s_noFpSlots = FlagFile("rsx_no_fp_cache.txt");
+	if (s_noFpSlots) printf("[gfx] rsx_no_fp_cache.txt: every patched fragment program goes through the frame ring\n");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
 		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
