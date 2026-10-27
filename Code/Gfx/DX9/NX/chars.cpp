@@ -849,6 +849,19 @@ void SText::Draw( void )
 					
 					pChar = p_font->pChars + p_font->SpecialMap[digit];
 					got_char_tag = true;
+#ifdef __PLAT_PS3__
+					{
+						// Button glyphs all showed as the triangle (glyph 0): log what the first ones draw.
+						static int s_btnLogs = 0;
+						if( s_btnLogs < 24 )
+						{
+							++s_btnLogs;
+							printf( "[font] draw \\b%c: digit %u -> glyph %d of %p (text font %p), uv %.3f,%.3f-%.3f,%.3f, %dx%d\n",
+								*pLetter, digit, (int)p_font->SpecialMap[digit], (void*)p_font, (void*)mp_font,
+								pChar->u0, pChar->v0, pChar->u1, pChar->v1, (int)pChar->w, (int)pChar->h );
+						}
+					}
+#endif
 					
 					EndDraw();
 					BeginDraw();
