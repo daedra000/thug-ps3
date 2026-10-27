@@ -378,6 +378,22 @@ SFont* LoadFont( const char *Filename, bool memory_resident )
 		}
 	}
 
+#ifdef __PLAT_PS3__
+	// Button glyphs all showed as the triangle: log a buttons font's character table (each
+	// glyph's code: negative codes are the \b0-\bf button slots, SpecialMap).
+	if( !memory_resident && Filename && strstr( Filename, "utton" ))
+	{
+		char line[1024];
+		int o = snprintf( line, sizeof( line ), "[font] %s: %d glyphs, codes:", Filename, NumChars );
+		for( i = 0, pData = FontBuf; i < NumChars && o > 0 && o < (int)sizeof( line ) - 8; i++, pData += 4 )
+			o += snprintf( line + o, sizeof( line ) - o, " %d", (int)Endian::ReadLeS16( pData + 2 ));
+		printf( "%s\n", line );
+		o = snprintf( line, sizeof( line ), "[font] %s: button slots ->", Filename );
+		for( i = 0; i < 32 && o > 0 && o < (int)sizeof( line ) - 8; i++ )
+			o += snprintf( line + o, sizeof( line ) - o, " %d", (int)pFont->SpecialMap[i] );
+		printf( "%s\n", line );
+	}
+#endif
 	// If there is a null character in the font, make characters that could not be found
 	// in the font display that instead of 'A'
 	if( pFont->SpecialMap[31] != 0 )
