@@ -22,6 +22,7 @@
 #include <sys/mutex.h>
 #include <sys/cond.h>
 #include <sys/thread.h>
+#include <sys/systime.h>
 #endif
 #include "usersoundtrack.h"	// stdfs (std::filesystem, or the PS3 subset)
 
@@ -91,10 +92,23 @@ namespace Pcm
 			StreamRing ring;
 			virtual size_t Decode(float *out, size_t frames) = 0;
 
+			// A stream whose opening (file, Bink header, ring) is left to the thread filling
+			// it: OpenDeferred runs there before the first decode, and until it has, the mixer
+			// plays silence instead of ending the stream. Opening on the game thread took
+			// 100-160 ms per ambient stream, a hitch every time a level object started one.
+			volatile bool opening = false;
+			virtual void OpenDeferred() {}
+
 			// Decodes one piece into the ring if it has room for one (or a rewind was asked
 			// for). Returns true if it did anything.
 			bool Fill()
 			{
+				if (opening)
+				{
+					OpenDeferred();
+					__atomic_store_n(&opening, false, __ATOMIC_RELEASE);	// the ring is set up before this
+					return true;
+				}
 				if (!ring.Valid())
 					return false;
 				bool did = false;
@@ -133,6 +147,8 @@ namespace Pcm
 
 #ifdef __PLAT_PS3__
 				// Only reads what the streaming thread has decoded: never waits for it.
+				if (__atomic_load_n(&opening, __ATOMIC_ACQUIRE))
+					return 0;	// not opened yet: silence, still playing
 				if (!ring.Valid())
 				{
 					playing = false;	// nothing to play
@@ -196,6 +212,67 @@ namespace Pcm
 			}
 	};
 
+#ifdef __PLAT_PS3__
+	// One entry of streams/pcm/pcm.wad as a stream of its own, read in 32 KB pieces as the
+	// decoder asks for them (on the streaming thread). Reading the whole entry when a stream
+	// started (several MB, on the game thread) froze the game for about 170 ms each time a
+	// level's ambient sound changed.
+	class WadRangeBuf : public std::streambuf
+	{
+		FILE *f = nullptr;
+		uint32 base = 0, size = 0;	// the entry's place in the WAD
+		uint32 bufAt = 0;			// entry offset of buf[0]
+		char buf[32 * 1024];
+
+	public:
+		bool Open(const std::string &path, uint32 offset, uint32 length)
+		{
+			f = fopen(path.c_str(), "rb");
+			base = offset;
+			size = length;
+			bufAt = 0;
+			setg(buf, buf, buf);
+			return f != nullptr;
+		}
+		~WadRangeBuf() { if (f) fclose(f); }
+
+	protected:
+		int_type underflow() override
+		{
+			if (gptr() < egptr()) return traits_type::to_int_type(*gptr());
+			const uint32 at = bufAt + (uint32)(egptr() - eback());
+			if (!f || at >= size) return traits_type::eof();
+			uint32 n = size - at;
+			if (n > sizeof(buf)) n = sizeof(buf);
+			if (fseek(f, (long)(base + at), SEEK_SET) != 0) return traits_type::eof();
+			const size_t got = fread(buf, 1, n, f);
+			bufAt = at;
+			setg(buf, buf, buf + got);
+			return got ? traits_type::to_int_type(*gptr()) : traits_type::eof();
+		}
+		pos_type seekpos(pos_type p, std::ios_base::openmode) override
+		{
+			const long long want = (long long)p;
+			if (want < 0 || want > (long long)size) return pos_type(off_type(-1));
+			const uint32 w = (uint32)want;
+			if (w >= bufAt && w <= bufAt + (uint32)(egptr() - eback()))
+				setg(eback(), eback() + (w - bufAt), egptr());	// inside what is buffered
+			else
+			{
+				bufAt = w;
+				setg(buf, buf, buf);	// read from there on the next underflow
+			}
+			return p;
+		}
+		pos_type seekoff(off_type off, std::ios_base::seekdir dir, std::ios_base::openmode which) override
+		{
+			const long long cur = (long long)bufAt + (gptr() - eback());
+			long long to = dir == std::ios_base::beg ? (long long)off : dir == std::ios_base::cur ? cur + off : (long long)size + off;
+			return seekpos(pos_type(off_type(to)), which);
+		}
+	};
+#endif
+
 	class MusicDecoder : public Streamer
 	{
 		private:
@@ -209,8 +286,9 @@ namespace Pcm
 			// can't decode (Code/Ps3/audio/bink_audio.cpp does).
 			BinkAudio *bink = nullptr;
 
-			// A stream held in memory (one entry of streams/pcm/pcm.wad), instead of a file.
-			std::istringstream mem;
+			// A stream read from one entry of streams/pcm/pcm.wad, instead of a file of its own.
+			WadRangeBuf wadbuf;
+			std::istream mem{&wadbuf};
 			bool from_mem = false;
 
 			bool OpenBink(std::istream &in)
@@ -238,11 +316,33 @@ namespace Pcm
 #endif
 
 #ifdef __PLAT_PS3__
-			MusicDecoder(const std::string &bytes) : mem(bytes)
+			// Opened later, on the streaming thread (OpenDeferred).
+			MusicDecoder(const stdfs::path &wad, uint32 offset, uint32 size) : deferredPath(wad), fromWad(true), wadOffset(offset), wadSize(size)
 			{
-				from_mem = true;
-				if (!OpenBink(mem))
-					from_mem = false;	// not Bink: nothing to play
+				opening = true;
+			}
+			stdfs::path deferredPath;
+			bool fromWad = false;
+			uint32 wadOffset = 0, wadSize = 0;
+
+			void OpenDeferred() override
+			{
+				const u64 t0 = sysGetSystemTime();
+				if (fromWad)
+				{
+					if (wadbuf.Open(std::string(deferredPath), wadOffset, wadSize))	// resolved: the data's names are case-insensitive
+					{
+						from_mem = true;
+						if (!OpenBink(mem))
+							from_mem = false;	// not Bink: nothing to play
+					}
+				}
+				else
+					OpenFile(deferredPath, false);
+				const u64 t1 = sysGetSystemTime();
+				if (t1 - t0 > 10000)
+					printf("[music] opening a %s took %u ms, on the streaming thread\n", fromWad ? "pcm.wad stream" : "music file",
+						(unsigned)((t1 - t0) / 1000));
 			}
 
 			bool IsOpen() const { return file.is_open() || from_mem; }
@@ -250,7 +350,20 @@ namespace Pcm
 			// unbuffered: for a movie's sound track, whose frames are mostly video. The decoder
 			// reads only each frame's audio packet, and a buffered stream would read on into
 			// the video data around it.
-			MusicDecoder(stdfs::path path, bool unbuffered = false)
+			// deferred: opened on the streaming thread (OpenDeferred), not here on the game
+			// thread, where starting the next music track was a 100 ms hitch.
+			MusicDecoder(stdfs::path path, bool unbuffered = false, bool deferred = false)
+			{
+				if (deferred)
+				{
+					deferredPath = path;
+					opening = true;
+					return;
+				}
+				OpenFile(path, unbuffered);
+			}
+
+			void OpenFile(const stdfs::path &path, bool unbuffered)
 			{
 				if (unbuffered)
 					file.rdbuf()->pubsetbuf(nullptr, 0);
@@ -391,6 +504,14 @@ namespace Pcm
 	static Streamer *s_working = nullptr;
 	static int s_workWaiters = 0;
 	static bool s_worker = false;		// the thread is running (otherwise the mixer decodes)
+	// Streams taken out of their slots, for the streaming thread to delete (under s_workLock).
+	// ReplaceStream used to wait for the thread to put a stream down before deleting it
+	// itself, which held the game thread for as long as the thread's current job: opening a
+	// stream's Bink header takes up to about 140 ms, and deleting an object that played a
+	// stream showed as a 90 ms hitch.
+	enum { kGraveyard = 32 };
+	static Streamer *s_graveyard[kGraveyard];
+	static int s_graveyardCount = 0;
 
 	static Streamer *&Slot(int i)
 	{
@@ -404,6 +525,18 @@ namespace Pcm
 		for (;;)
 		{
 			bool did = false;
+			{
+				// Delete the streams taken out of their slots (none is s_working now).
+				Streamer *dead[kGraveyard];
+				int n = 0;
+				sysMutexLock(s_workLock, 0);
+				for (; n < s_graveyardCount; n++)
+					dead[n] = s_graveyard[n];
+				s_graveyardCount = 0;
+				sysMutexUnlock(s_workLock);
+				for (int i = 0; i < n; i++)
+					delete dead[i];
+			}
 			for (int i = 0; i < kSlots; i++)
 			{
 				sysMutexLock(s_workLock, 0);
@@ -547,18 +680,13 @@ namespace Pcm
 		printf("[music] pcm.wad: %u ambient streams\n", (unsigned)wad_entries.size());
 	}
 
-	static bool ReadWadEntry(uint32 checksum, std::string &out)
+	// A decoder reading the entry straight from pcm.wad (see WadRangeBuf); NULL if there is none.
+	static MusicDecoder *OpenWadEntry(uint32 checksum)
 	{
 		auto it = wad_entries.find(checksum);
 		if (it == wad_entries.end())
-			return false;
-		std::ifstream wad(File::DataPath() / "streams" / "pcm" / "pcm.wad", std::ios::binary);
-		if (!wad.is_open())
-			return false;
-		out.resize(it->second.size);
-		wad.seekg(it->second.offset);
-		wad.read(&out[0], it->second.size);
-		return (size_t)wad.gcount() == it->second.size;
+			return nullptr;
+		return new MusicDecoder(File::DataPath() / "streams" / "pcm" / "pcm.wad", it->second.offset, it->second.size);
 	}
 #endif
 
@@ -580,12 +708,17 @@ namespace Pcm
 		Audio::Unlock();
 #ifdef __PLAT_PS3__
 		// The streaming thread may still be decoding the old stream (it took it before the
-		// swap): wait for it to put it down. A new stream gets its first decode right away.
+		// swap): it deletes it once it has put it down. Only with no room on its list does
+		// this wait, as before. A new stream gets its first decode right away.
 		if (s_worker)
 		{
 			sysMutexLock(s_workLock, 0);
-			if (replacement != nullptr)
-				sysCondSignal(s_workWake);
+			if (old != nullptr && s_graveyardCount < kGraveyard)
+			{
+				s_graveyard[s_graveyardCount++] = old;
+				old = nullptr;
+			}
+			sysCondSignal(s_workWake);
 			while (old != nullptr && s_working == old)
 			{
 				++s_workWaiters;
@@ -784,7 +917,11 @@ namespace Pcm
 		if (it == nullptr)
 			return false;
 
+#ifdef __PLAT_PS3__
+		ReplaceStream(music_stream, new MusicDecoder(File::DataPath() / *it, false, true));
+#else
 		ReplaceStream(music_stream, new MusicDecoder(File::DataPath() / *it));
+#endif
 		return true;
 	}
 
@@ -1081,7 +1218,11 @@ namespace Pcm
 			return false;
 
 		// Play song
+#ifdef __PLAT_PS3__
+		Streamer *song = new MusicDecoder(File::DataPath() / *it, false, true);
+#else
 		Streamer *song = new MusicDecoder(File::DataPath() / *it);
+#endif
 		song->Play();
 		ReplaceStream(music_stream, song);
 		return true;
@@ -1117,7 +1258,11 @@ namespace Pcm
 	{
 		// Play song
 		const UserSoundtrack::Soundtracks &soundtracks = UserSoundtrack::GetSoundtracks();
+#ifdef __PLAT_PS3__
+		Streamer *song = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path, false, true);
+#else
 		Streamer *song = new MusicDecoder(soundtracks.at(soundtrack).tracks.at(track).path);
+#endif
 		song->Play();
 		ReplaceStream(music_stream, song);
 		return true;
@@ -1152,15 +1297,17 @@ namespace Pcm
 		(void)fPitch;
 
 		// Find stream path from checksum
+#ifdef __PLAT_PS3__
+		const u64 t0 = sysGetSystemTime();
+#endif
 		auto it = stream_paths.find(checksum);
 		Streamer *stream = nullptr;
 		if (it == stream_paths.end())
 		{
 #ifdef __PLAT_PS3__
-			std::string bytes;
-			if (!ReadWadEntry(checksum, bytes))
+			stream = OpenWadEntry(checksum);
+			if (stream == nullptr)
 				return false;
-			stream = new MusicDecoder(bytes);
 #else
 			return false;
 #endif
@@ -1168,11 +1315,29 @@ namespace Pcm
 		else
 		{
 			// Play stream
+#ifdef __PLAT_PS3__
+			stream = new MusicDecoder(File::DataPath() / it->second, false, true);
+#else
 			stream = new MusicDecoder(File::DataPath() / it->second);
+#endif
 		}
 		if (!preload)
 			stream->Play();
+#ifdef __PLAT_PS3__
+		const u64 t1 = sysGetSystemTime();
+#endif
 		ReplaceStream(stream_stream[whichStream], stream);
+#ifdef __PLAT_PS3__
+		{
+			// Starting a stream on the game thread: opening it (the Bink header and frame
+			// index) and swapping it in (waiting for the streaming thread to put the old one
+			// down). Logged when slow, to find the hitches that follow "Playing ... stream".
+			const u64 t2 = sysGetSystemTime();
+			if (t2 - t0 > 10000)
+				printf("[music] stream %u took %u ms to start (open %u ms, swap %u ms)\n", (unsigned)whichStream,
+					(unsigned)((t2 - t0) / 1000), (unsigned)((t1 - t0) / 1000), (unsigned)((t2 - t1) / 1000));
+		}
+#endif
 
 		if (p_volume != nullptr)
 			PCMAudio_SetStreamVolume(p_volume, whichStream);

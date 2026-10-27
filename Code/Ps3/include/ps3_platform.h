@@ -10,6 +10,7 @@
 extern volatile bool g_ps3TraceTasks;
 // Main loop progress, shown on the [alive] lines: the frame number and the task running now.
 extern volatile unsigned g_ps3Frame;
+extern volatile unsigned long long g_ps3FrameTime;	// sysGetSystemTime() when g_ps3Frame last changed
 extern volatile const void* g_ps3CurrentTask;
 // Where the game thread is (a label set along the main loop's path) and the spawned script
 // being updated, for the [alive] lines.
@@ -31,6 +32,11 @@ extern volatile unsigned g_ps3RunScript;
 
 namespace Ps3Platform
 {
+	// The hitch sampler: what the game thread was running (task, C function, script, member
+	// function, main loop label) during main loop frame `frame`, sampled every millisecond,
+	// the most frequent first, to the log. For [hitch] lines.
+	void LogHitchSamples(unsigned frame);
+
 	// Called first thing in main(): app path, log file (USRDIR/thug-ps3.log, also
 	// mirrored to the TTY), system modules, network, XMB callbacks.
 	void Init(int argc, char** argv);

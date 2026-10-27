@@ -728,7 +728,14 @@ void	App::send_network_data( const Tsk::Task< App > &task )
 	app = &task.GetData();
 	Dbg_Assert( app );
 
+#ifdef __PLAT_PS3__
+	// Hitches came from this task: say which half was slow.
+	const unsigned long long t0 = __builtin_ppc_get_timebase();
+#endif
 	app->process_stream_messages();
+#ifdef __PLAT_PS3__
+	const unsigned long long t1 = __builtin_ppc_get_timebase();
+#endif
 
 #ifdef __PLAT_NGPS__
 	WaitSema( app->m_transfer_semaphore_id );
@@ -736,6 +743,13 @@ void	App::send_network_data( const Tsk::Task< App > &task )
 	WakeupThread( app->m_socket_thread_id );
 #else
 	app->SendData( true );    
+#endif
+#ifdef __PLAT_PS3__
+	const unsigned long long t2 = __builtin_ppc_get_timebase();
+	if (t2 - t0 > 10 * 79800)
+		printf("[net] %s: send_network_data took %u ms (stream messages %u ms, SendData %u ms; %s)\n",
+			app->GetName() ? app->GetName() : "?", (unsigned)((t2 - t0) / 79800), (unsigned)((t1 - t0) / 79800),
+			(unsigned)((t2 - t1) / 79800), app->IsLocal() ? "local" : "socket");
 #endif
 
 }

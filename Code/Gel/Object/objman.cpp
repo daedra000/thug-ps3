@@ -203,6 +203,15 @@ void CGeneralManager::FlushDeadObjects()
 {
 	Lst::Head< CObject >*		head = &m_kill_list;
 	Lst::Node< CObject >*		next = head->GetNext();
+#ifdef __PLAT_PS3__
+	// Hitches came from this task with no single delete over 10 ms: a slow pass (over 20 ms)
+	// logs how many objects of each type it deleted and how long each type took.
+	struct TypeTime { int type; unsigned count; unsigned long long ticks; };
+	TypeTime types[8];
+	int numTypes = 0;
+	unsigned total = 0;
+	const unsigned long long pass0 = __builtin_ppc_get_timebase();
+#endif
 
 	while ( next )
 	{
@@ -214,8 +223,36 @@ void CGeneralManager::FlushDeadObjects()
 		// Lock Assert is not needed for objects that have been flagged for deletion  	
 		pObject->SetLockAssertOff();
 		#endif
+#ifdef __PLAT_PS3__
+		// Hitches came from this task: say which objects were slow to delete.
+		const uint32 id = pObject->GetID(), type = pObject->GetType();
+		const unsigned long long t0 = __builtin_ppc_get_timebase();
+#endif
 		delete pObject;
+#ifdef __PLAT_PS3__
+		const unsigned long long ticks = __builtin_ppc_get_timebase() - t0;
+		const unsigned us = (unsigned)(ticks * 1000 / 79800);
+		if (us > 10000)
+			printf("[obj] deleting object 0x%08x (type %u) took %u ms\n", (unsigned)id, (unsigned)type, us / 1000);
+		++total;
+		int t = 0;
+		while (t < numTypes && types[t].type != (int)type) ++t;
+		if (t == numTypes && numTypes < 8) { types[t].type = (int)type; types[t].count = 0; types[t].ticks = 0; ++numTypes; }
+		if (t < numTypes) { ++types[t].count; types[t].ticks += ticks; }
+#endif
 	}	
+#ifdef __PLAT_PS3__
+	const unsigned passMs = (unsigned)((__builtin_ppc_get_timebase() - pass0) / 79800);
+	if (passMs > 20)
+	{
+		char line[256];
+		int o = snprintf(line, sizeof(line), "[obj] deleting %u objects took %u ms:", total, passMs);
+		for (int t = 0; t < numTypes && o > 0 && o < (int)sizeof(line) - 40; ++t)
+			o += snprintf(line + o, sizeof(line) - o, " type %d x%u %u ms;", types[t].type, types[t].count,
+				(unsigned)(types[t].ticks / 79800));
+		printf("%s\n", line);
+	}
+#endif
 }
 
 

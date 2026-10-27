@@ -9,6 +9,7 @@
 #include <sys/tty.h>
 #include <sys/file.h>
 #include <sys/mutex.h>
+#include <lv2/mutex.h>
 #include <sysutil/sysutil.h>
 #include <sysmodule/sysmodule.h>
 #include <net/net.h>
@@ -167,6 +168,46 @@ namespace
 	// XMB events serviced all the time (the game's loop doesn't run during loads), a
 	// heartbeat in the log every 5 s, and a forced exit 3 s after "Quit Game" if the game
 	// hasn't gone by then. (Grid Siege runs its system callbacks on a thread too.)
+	// The hitch sampler. Every millisecond it notes what the game thread is running; when the
+	// main loop frame changes, the counts for the frame that ended are kept for LogHitchSamples.
+	struct HitchSample { const void* task; const void* cfunc; unsigned script, member; const char* where; unsigned count; };
+	enum { kHitchSlots = 32 };
+	HitchSample s_hitchCur[kHitchSlots], s_hitchDone[kHitchSlots];
+	unsigned s_hitchCurN, s_hitchDoneN, s_hitchCurTotal, s_hitchDoneTotal;
+	volatile unsigned s_hitchCurFrame, s_hitchDoneFrame;
+	sys_lwmutex_t s_hitchLock;
+	bool s_hitchReady;
+
+	void HitchSamplerThread(void*)
+	{
+		for (;;)
+		{
+			const unsigned f = g_ps3Frame;
+			sysLwMutexLock(&s_hitchLock, 0);
+			if (f != s_hitchCurFrame)
+			{
+				memcpy(s_hitchDone, s_hitchCur, sizeof(s_hitchCur));
+				s_hitchDoneN = s_hitchCurN;
+				s_hitchDoneTotal = s_hitchCurTotal;
+				s_hitchDoneFrame = s_hitchCurFrame;
+				s_hitchCurN = s_hitchCurTotal = 0;
+				s_hitchCurFrame = f;
+			}
+			HitchSample s = { (const void*)g_ps3CurrentTask, (const void*)g_ps3CFunction, g_ps3ScriptSub, g_ps3MemberFunction,
+				(const char*)g_ps3Where, 1 };
+			unsigned i = 0;
+			for (; i < s_hitchCurN; ++i)
+			{
+				HitchSample& h = s_hitchCur[i];
+				if (h.task == s.task && h.cfunc == s.cfunc && h.script == s.script && h.member == s.member && h.where == s.where) { ++h.count; break; }
+			}
+			if (i == s_hitchCurN && s_hitchCurN < kHitchSlots) s_hitchCur[s_hitchCurN++] = s;
+			++s_hitchCurTotal;
+			sysLwMutexUnlock(&s_hitchLock);
+			usleep(1000);
+		}
+	}
+
 	void SystemThread(void*)
 	{
 		u64 start = sysGetSystemTime(), lastBeat = start, lastSync = start;
@@ -231,6 +272,7 @@ namespace
 
 volatile bool g_ps3TraceTasks = false;
 volatile unsigned g_ps3Frame = 0;
+volatile unsigned long long g_ps3FrameTime = 0;
 volatile const void* g_ps3CurrentTask = 0;
 volatile const char* g_ps3Where = 0;
 volatile const char* g_ps3ScriptName = 0;
@@ -241,6 +283,33 @@ volatile unsigned g_ps3ScriptSub = 0;
 volatile unsigned g_ps3ScriptLine = 0;
 volatile unsigned g_ps3ScriptToken = 0;
 volatile unsigned g_ps3RunScript = 0;
+
+void Ps3Platform::LogHitchSamples(unsigned frame)
+{
+	if (!s_hitchReady) return;
+	// The sampler notices the new frame within a millisecond or so.
+	for (int t = 0; t < 10 && s_hitchDoneFrame != frame; ++t) usleep(500);
+	HitchSample top[kHitchSlots];
+	unsigned n, total;
+	sysLwMutexLock(&s_hitchLock, 0);
+	const bool ok = s_hitchDoneFrame == frame;
+	n = s_hitchDoneN;
+	total = s_hitchDoneTotal;
+	memcpy(top, s_hitchDone, sizeof(top));
+	sysLwMutexUnlock(&s_hitchLock);
+	if (!ok || !total) { RawLog("[hitch]   (no samples for that frame)\n"); return; }
+	for (unsigned i = 0; i < n; ++i)	// most samples first
+		for (unsigned j = i + 1; j < n; ++j)
+			if (top[j].count > top[i].count) { HitchSample t2 = top[i]; top[i] = top[j]; top[j] = t2; }
+	char line[300];
+	for (unsigned i = 0; i < n && i < 6 && top[i].count * 20 >= total; ++i)	// 5% or more
+	{
+		snprintf(line, sizeof(line), "[hitch]   %u%% (%u ms): task %p, cfunc %p, script 0x%08x, member 0x%08x, at %s\n",
+			top[i].count * 100 / total, top[i].count, top[i].task, top[i].cfunc, top[i].script, top[i].member,
+			top[i].where ? top[i].where : "-");
+		RawLog(line);
+	}
+}
 
 namespace Ps3Platform
 {
@@ -313,11 +382,15 @@ void Step(const char* what)
 	// Once the game runs, steps come from loading (every model, texture and animation pushes
 	// a memory profile): the memory budget at most every 2 s, from the game thread. The main
 	// loop's own every-10-s steps are left out, so a level in play doesn't fill the log.
+	// Not while a level is being played (the main loop's last frame started under half a
+	// second ago): the report walks every newlib block and heap, which made a hitch when a
+	// level loaded something mid-game (its particle systems, say).
 	static u64 s_lastReport = 0;
 	if (!s_syncEveryWrite && self == s_gameThread && what && strncmp(what, "main loop frame", 15) != 0)
 	{
 		const u64 now = sysGetSystemTime();
-		if (now - s_lastReport >= 2000000)
+		const bool playing = g_ps3Frame > 30 && now - g_ps3FrameTime < 500000;
+		if (!playing && now - s_lastReport >= 2000000)
 		{
 			s_lastReport = now;
 			MemoryReport(what);
@@ -393,6 +466,16 @@ void Init(int argc, char** argv)
 		// quit still run while the game busy-waits.
 		s_sysThread = sysThreadCreate(&tid, SystemThread, NULL, 500, 128 * 1024, 0, (char*)"thug-sysutil") == 0;
 		printf("[sys] system thread %s\n", s_sysThread ? "running" : "could not start");
+		// The hitch sampler, above the game thread so it samples while the game is busy.
+		sys_lwmutex_attr_t attr;
+		memset(&attr, 0, sizeof(attr));
+		attr.attr_protocol = SYS_LWMUTEX_PROTOCOL_PRIO;
+		attr.attr_recursive = SYS_LWMUTEX_ATTR_NOT_RECURSIVE;
+		strcpy(attr.name, "hitch");
+		sys_ppu_thread_t sampler;
+		s_hitchReady = sysLwMutexCreate(&s_hitchLock, &attr) == 0 &&
+			sysThreadCreate(&sampler, HitchSamplerThread, NULL, 400, 32 * 1024, 0, (char*)"thug-hitch") == 0;
+		printf("[sys] hitch sampler %s\n", s_hitchReady ? "running" : "could not start");
 	}
 
 	if (sysModuleLoad(SYSMODULE_NET) == 0 && netInitialize() == 0)
