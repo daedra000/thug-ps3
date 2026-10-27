@@ -731,6 +731,10 @@ public:
 	D3DMATERIAL9 m_material;
 	D3DLIGHT9 m_lights[8];
 	BOOL m_lightEnabled[8];
+	// Bumped when anything the fixed-function vertex constants come from changes (transforms,
+	// viewport, material, lights, ambient, fog range, point size): draws with the same serial
+	// skip recomputing and comparing them (RsxPipeline::FillVsConstants).
+	unsigned m_vsSerial;
 	RECT m_scissor;
 	DWORD m_fvf;
 	IDirect3DVertexDeclaration9* m_decl;

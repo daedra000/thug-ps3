@@ -251,9 +251,25 @@ static u32 s_ringBase;		// this frame's slot
 // Frame of last use, stored +1 so 0 means never used: the frame fence's label reaches that
 // value once the RSX has finished the frame (FramesDone). The signed difference keeps the
 // test right should the counters ever wrap.
+// FramesDone reads the fence label the RSX writes, an uncached read; a few per draw were a
+// good part of the draw path's CPU time. Draws use a copy refreshed every 32 calls and at each
+// frame start. It can only be behind the real label, which makes GpuMayUse err towards "still
+// in use" (an extra rename or deferred free), never the other way.
+static u32 s_doneCache;
+static unsigned s_doneAge;
+static inline u32 DoneCached()
+{
+	if (++s_doneAge >= 32)
+	{
+		s_doneAge = 0;
+		s_doneCache = FramesDone();
+	}
+	return s_doneCache;
+}
+
 static bool GpuMayUse(u32 usedPlusOne)
 {
-	return usedPlusOne != 0 && (s32)(FramesDone() - usedPlusOne) < 0;
+	return usedPlusOne != 0 && (s32)(DoneCached() - usedPlusOne) < 0;
 }
 
 // RSX memory the GPU may still read: freed once the frame that last used it is done. The
@@ -267,7 +283,8 @@ static u32 s_deferredScanAt;		// FramesDone() at the last scan
 
 static void RunDeferredFrees()
 {
-	s_deferredScanAt = FramesDone();
+	s_doneCache = s_deferredScanAt = FramesDone();
+	s_doneAge = 0;
 	u32 keep = 0;
 	for (u32 i = 0; i < s_deferredCount; ++i)
 	{
@@ -299,7 +316,7 @@ static void DeferFree(void* mem, u32 usedPlusOne)
 	}
 	DeferredFree d = { mem, usedPlusOne };
 	s_deferred[s_deferredCount++] = d;
-	if (FramesDone() != s_deferredScanAt) RunDeferredFrees();	// the RSX has moved on since the last scan
+	if (DoneCached() != s_deferredScanAt) RunDeferredFrees();	// the RSX has moved on since the last scan
 }
 
 // Out of RSX memory with frees still waiting: wait for the RSX to run everything queued so
@@ -1147,6 +1164,10 @@ static u32 s_fpStamp;
 static const VpEntry* s_currentVp;
 static u32 s_currentFpOffset = 0xFFFFFFFF;
 static float s_vc[kVcCount][4];
+// The device's m_vsSerial when the constants on the RSX (s_vc) were last brought up to date; 0
+// after anything that cleared s_vcValid. A draw with the same serial skips FillVsConstants and
+// the comparison.
+static unsigned s_vcSerial;
 static bool s_vcValid[kVcCount];
 
 // The assembler fills a std::vector; the program is kept in a malloc'd copy of it.
@@ -1391,6 +1412,7 @@ static void UseVertexProgram(const VpEntry* e, const float (*c)[4])
 		rsxLoadVertexProgram(s_ctx, e->prog, e->ucode);
 		s_currentVp = e;
 	}
+	if (!c) return;	// the constants on the RSX are already this draw's (s_vcSerial)
 	// Constants that changed, in runs.
 	for (int i = 0; i < kVcCount;)
 	{
@@ -1994,9 +2016,15 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
 	DP_MARK(kDpState);
-	float vc[kVcCount][4];
-	FillVsConstants(dev, vc);
-	UseVertexProgram(vp, vc);
+	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms)
+	{
+		float vc[kVcCount][4];
+		FillVsConstants(dev, vc);
+		UseVertexProgram(vp, vc);
+		s_vcSerial = dev->m_vsSerial;
+	}
+	else
+		UseVertexProgram(vp, NULL);
 	DP_MARK(kDpVsConst);
 	if (!UseFragmentProgram(fp, fc)) return false;
 	DP_MARK(kDpFp);
@@ -2240,6 +2268,9 @@ void DrawFrameStart()
 	s_currentVp = NULL;
 	s_currentFpOffset = 0xFFFFFFFF;
 	memset(s_vcValid, 0, sizeof(s_vcValid));
+	s_vcSerial = 0;
+	s_doneCache = FramesDone();
+	s_doneAge = 0;
 	memset(s_bound, 0, sizeof(s_bound));
 	s_attribMask = 0xFFFFFFFF;
 	s_attrValid = false;
