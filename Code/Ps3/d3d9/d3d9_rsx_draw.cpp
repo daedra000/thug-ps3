@@ -79,15 +79,16 @@ static_assert(D3D::TA_TEMP == D3DTA_TEMP && D3D::TA_COMPLEMENT == D3DTA_COMPLEME
 // ---------------------------------------------------------------------------
 static bool s_drawReady;
 static bool s_forceLinear, s_flipCull, s_noDraw;
-// Test switches for the surface flashing (a175dd3), each bringing back how one of its pieces
-// worked before (see DrawInit for the files).
-static bool s_wholeBuffers;	// F4: renamed buffers copied whole; no NOOVERWRITE writes into a ring copy
-static bool s_rebindAttribs;	// F3: vertex attributes bound on every draw
-static bool s_resendState;	// F10: render state, viewport and scissor sent on every draw
-static bool s_resendPrograms;	// programs and vertex constants sent on every draw
-static bool s_lateFrees;	// M7: freed RSX memory held until the frame being built is done
-static bool s_noTexSpares;	// M6: no spare blocks for textures updated every frame
-static bool s_noKick;		// F6: no mid-frame command-buffer flushes
+// a175dd3's draw-path savings are off: with them, whole surfaces flashed dark or pale as the
+// camera moved, and bisect builds with all of them undone (bisect2-*, up to 7fcf1a5) were
+// steady. Each comes back on its own, tested, before it is turned on again:
+static const bool s_wholeBuffers = true;	// F4: renamed buffers copied whole; no NOOVERWRITE writes into a ring copy
+static const bool s_rebindAttribs = true;	// F3: vertex attributes bound on every draw
+static const bool s_resendState = true;	// F10: render state, viewport and scissor sent on every draw
+static const bool s_resendPrograms = true;	// programs and vertex constants sent on every draw
+static const bool s_lateFrees = true;	// M7: freed RSX memory held until the frame being built is done
+static const bool s_noTexSpares = true;	// M6: no spare blocks for textures updated every frame
+static const bool s_noKick = true;		// F6: no mid-frame command-buffer flushes
 
 static struct Stats
 {
@@ -355,7 +356,6 @@ static u8* RingAlloc(u32 size, u32 align, u32* offset)
 // Vertex or index data was written into RSX memory: the next draw invalidates the vertex
 // cache first (a draw's own one-word invalidate is not the full sequence).
 static bool s_vertexWritten;
-static bool s_lazyVertexCache;	// rsx_lazy_vertex_cache.txt (see DoDraw)
 
 // Mid-frame flush: hands what is queued to the RSX instead of letting it idle until a
 // segment fills or Present. Every kKickDraws draws, after a new render target, and after a
@@ -1095,7 +1095,6 @@ struct FpSlot
 	float vals[9][4];
 };
 enum { kFpSlots = 4 };
-static bool s_noFpSlots;	// rsx_no_fp_cache.txt: no kept copies, every patch in the ring (a test switch)
 
 struct FpEntry
 {
@@ -1301,8 +1300,23 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 	const u32 usedPlusOne = s_frameSeq + 1;
 	if (e->numConsts)
 	{
+		// A fresh copy in the ring on every draw. Kept copies (F5) and reusing this frame's
+		// copy when the constants matched were the last difference between main, which
+		// flashed with every other switch on, and the steady bisect builds.
+		u8* fresh = RingAlloc(e->ucodeSize, 64, &offset);
+		if (!fresh) return false;
+		WritePatched(e, fresh, values, e->last);
+		e->lastFrame = s_frameSeq;
+		e->lastOffset = offset;
+		CmdReserve(64);
+		rsxLoadFragmentProgramLocation(s_ctx, e->prog, offset, GCM_LOCATION_RSX);
+		s_currentFpOffset = offset;
+		return true;
+	}
+	if (e->numConsts)
+	{
 		FpSlot* slot = NULL;
-		for (int i = 0; i < kFpSlots && !slot && !s_noFpSlots; ++i)
+		for (int i = 0; i < kFpSlots && !slot; ++i)
 			if (e->slots[i].mem && SameConsts(e, e->slots[i].vals, values)) slot = &e->slots[i];
 		if (slot)
 			offset = slot->offset;	// a kept copy with these values
@@ -1312,14 +1326,14 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 		{
 			// A new copy: in an empty slot, else in the least recently used slot the RSX is
 			// done with; with every slot busy, in the ring for this frame.
-			for (int i = 0; i < kFpSlots && !slot && !s_noFpSlots; ++i)
+			for (int i = 0; i < kFpSlots && !slot; ++i)
 			{
 				if (e->slots[i].mem) continue;
 				e->slots[i].mem = (u8*)LocalAlloc(e->ucodeSize, 64, &e->slots[i].offset);
 				if (e->slots[i].mem) slot = &e->slots[i];
 				break;
 			}
-			if (!slot && !s_noFpSlots)
+			if (!slot)
 			{
 				for (int i = 0; i < kFpSlots; ++i)
 				{
@@ -1977,11 +1991,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
 	CmdReserve(64 + count / 256 * 2);
-	// The vertex cache is invalidated before every draw, as before a175dd3. Sending it only
-	// after vertex data was written made surfaces flash dark or pale from frame to frame (draws
-	// reusing what the cache held from an earlier draw: other vertex colours or positions).
-	// rsx_lazy_vertex_cache.txt goes back to invalidating only after writes, for testing.
-	if (s_vertexWritten || !s_lazyVertexCache)
+	// The vertex cache is invalidated before every draw, as before a175dd3.
 	{
 		rsxInvalidateVertexCache(s_ctx);
 		s_vertexWritten = false;
@@ -2157,25 +2167,8 @@ bool DrawInit()
 	if (s_flipCull) GpuLog("rsx_flip_cull.txt: the old cull mapping");
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
-	s_noFpSlots = FlagFile("rsx_no_fp_cache.txt");
-	s_lazyVertexCache = FlagFile("rsx_lazy_vertex_cache.txt");
-	if (s_lazyVertexCache) printf("[gfx] rsx_lazy_vertex_cache.txt: the vertex cache is invalidated only after vertex data is written\n");
-	if (s_noFpSlots) printf("[gfx] rsx_no_fp_cache.txt: every patched fragment program goes through the frame ring\n");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
-	struct { bool* flag; const char* file; const char* what; } const tests[] = {
-		{ &s_wholeBuffers, "rsx_whole_buffers.txt", "renamed buffers are copied whole" },
-		{ &s_rebindAttribs, "rsx_rebind_attribs.txt", "vertex attributes are bound on every draw" },
-		{ &s_resendState, "rsx_resend_state.txt", "render state, viewport and scissor are sent on every draw" },
-		{ &s_resendPrograms, "rsx_resend_programs.txt", "programs and vertex constants are sent on every draw" },
-		{ &s_lateFrees, "rsx_late_frees.txt", "freed RSX memory waits for the frame being built" },
-		{ &s_noTexSpares, "rsx_no_texture_spares.txt", "no spare blocks for textures updated every frame" },
-		{ &s_noKick, "rsx_no_kick.txt", "no mid-frame command-buffer flushes" },
-	};
-	for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
-	{
-		*tests[i].flag = FlagFile(tests[i].file);
-		if (*tests[i].flag) printf("[gfx] %s: %s\n", tests[i].file, tests[i].what);
-	}
+	GpuLog("draw path: a175dd3's savings off (whole buffer copies, state and programs sent every draw, fresh fragment-program copies, late frees)");
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
 		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
 
