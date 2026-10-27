@@ -79,9 +79,10 @@ static_assert(D3D::TA_TEMP == D3DTA_TEMP && D3D::TA_COMPLEMENT == D3DTA_COMPLEME
 // ---------------------------------------------------------------------------
 static bool s_drawReady;
 static bool s_forceLinear, s_flipCull, s_noDraw;
-// a175dd3's draw-path savings are off: with them, whole surfaces flashed dark or pale as the
-// camera moved, and bisect builds with all of them undone (bisect2-*, up to 7fcf1a5) were
-// steady. Each comes back on its own, tested, before it is turned on again:
+// a175dd3's draw-path savings, all on. The flashing surfaces came from reusing patched
+// fragment programs (see UseFragmentProgram), not from these: bisect builds and the
+// test-savings-on build (afb41d7) were steady with them on. Kept as constants so each can be
+// turned off again in a test build.
 static const bool s_wholeBuffers = false;	// F4: renamed buffers copied whole; no NOOVERWRITE writes into a ring copy
 static const bool s_rebindAttribs = false;	// F3: vertex attributes bound on every draw
 static const bool s_resendState = false;	// F10: render state, viewport and scissor sent on every draw
@@ -1991,7 +1992,7 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
 	CmdReserve(64 + count / 256 * 2);
-	// Test build: only after vertex data was written, as in a175dd3.
+	// Only after vertex data was written (a175dd3; steady once fragment programs stopped being reused).
 	if (s_vertexWritten)
 	{
 		rsxInvalidateVertexCache(s_ctx);
@@ -2169,8 +2170,7 @@ bool DrawInit()
 	if (s_noDraw) GpuLog("rsx_no_draw.txt: nothing is drawn");
 	s_keepTextureData = FlagFile("rsx_keep_texture_data.txt");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
-	GpuLog("test-savings-on: a175dd3's savings on except fragment-program reuse");
-	GpuLog("draw path: a175dd3's savings off (whole buffer copies, state and programs sent every draw, fresh fragment-program copies, late frees)");
+	GpuLog("draw path: a175dd3 savings on, a fresh fragment-program copy per draw");
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
 		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
 
