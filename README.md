@@ -61,13 +61,6 @@ Three PKGs are built (each CI run keeps them for 7 days):
 | `thug-ps3-asserts.pkg` | The game with its asserts on, logging to `thug-ps3.log`. For tracking down crashes. |
 | `thug-ps3-headless.pkg` | Test build: loads and runs the game logic without video, audio or pad, writing everything to the log. |
 
-## Quick testing with ps3load / PS3LoadX
-
-Each CI run also has `thug-ps3.self` (and `thug-ps3-headless.self` in the headless zip). Send it
-to PS3LoadX on the console with the `ps3load` client instead of installing a PKG. The game still
-needs the PKG installed once: started from elsewhere, it uses the installed game's `USRDIR` for
-`Data` and the log.
-
 ## Building
 
 Every push builds both PKGs on GitHub Actions (**Actions** tab → latest run → artifacts). The
