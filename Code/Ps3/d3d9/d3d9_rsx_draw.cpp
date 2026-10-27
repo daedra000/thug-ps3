@@ -79,6 +79,15 @@ static_assert(D3D::TA_TEMP == D3DTA_TEMP && D3D::TA_COMPLEMENT == D3DTA_COMPLEME
 // ---------------------------------------------------------------------------
 static bool s_drawReady;
 static bool s_forceLinear, s_flipCull, s_noDraw;
+// Test switches for the surface flashing (a175dd3), each bringing back how one of its pieces
+// worked before (see DrawInit for the files).
+static bool s_wholeBuffers;	// F4: renamed buffers copied whole; no NOOVERWRITE writes into a ring copy
+static bool s_rebindAttribs;	// F3: vertex attributes bound on every draw
+static bool s_resendState;	// F10: render state, viewport and scissor sent on every draw
+static bool s_resendPrograms;	// programs and vertex constants sent on every draw
+static bool s_lateFrees;	// M7: freed RSX memory held until the frame being built is done
+static bool s_noTexSpares;	// M6: no spare blocks for textures updated every frame
+static bool s_noKick;		// F6: no mid-frame command-buffer flushes
 
 static struct Stats
 {
@@ -262,6 +271,7 @@ static void RunDeferredFrees()
 static void DeferFree(void* mem, u32 usedPlusOne)
 {
 	if (!mem) return;
+	if (s_lateFrees && (usedPlusOne == 0 || (s32)(usedPlusOne - (s_frameSeq + 1)) < 0)) usedPlusOne = s_frameSeq + 1;
 	if (!GpuMayUse(usedPlusOne)) { rsxFree(mem); return; }
 	if (s_deferredCount == s_deferredCap)
 	{
@@ -354,8 +364,9 @@ enum { kKickDraws = 48 };
 static unsigned s_drawsSinceKick;
 static void Kick()
 {
-	rsxFlushBuffer(s_ctx);
 	s_drawsSinceKick = 0;
+	if (s_noKick) return;
+	rsxFlushBuffer(s_ctx);
 	++s_stats.kicks;
 }
 
@@ -451,7 +462,7 @@ static RsxTexture* RenderTargetTexture(IDirect3DTexture9* t, RsxTexture* r);
 // doesn't keep a spare block for good.
 static void RetireTextureBlock(RsxTexture* r, u32 total)
 {
-	const bool frequent = r->quickUploads >= 2;
+	const bool frequent = r->quickUploads >= 2 && !s_noTexSpares;
 	if (frequent && r->bytes >= total)
 	{
 		for (int i = 0; i < 2; ++i)
@@ -922,6 +933,7 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 		return false;
 	}
 	if (dirty || !b->mem) b->changedPlusOne = now + 1;
+	if (s_wholeBuffers) { needLo = 0; needHi = size; }
 	if (needHi > size) needHi = size;
 	if (needLo > needHi) needLo = needHi;
 
@@ -955,7 +967,7 @@ static bool BufferOffset(const BYTE* data, u32 size, bool& dirty, const Ps3Buffe
 			b->stale = false;
 			s_vertexWritten = true;
 		}
-		else if (changes.noOverwrite && b->ringFrame == now)
+		else if (changes.noOverwrite && b->ringFrame == now && !s_wholeBuffers)
 		{
 			// Appended to with NOOVERWRITE after this frame renamed it: the same promise covers
 			// the ring copy, so the changed bytes it already holds are rewritten in place (the
@@ -1948,6 +1960,9 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (stride > 255) return Skip("vertex stride over 255 bytes");
 
 	// State, programs, textures, then the draw.
+	if (s_resendState) { s_stateValid = false; s_viewValid = false; s_clipsSent = false; }
+	if (s_resendPrograms) { s_currentVp = NULL; s_currentFpOffset = 0xFFFFFFFF; memset(s_vcValid, 0, sizeof(s_vcValid)); }
+	if (s_rebindAttribs) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
 	float vc[kVcCount][4];
@@ -2147,6 +2162,20 @@ bool DrawInit()
 	if (s_lazyVertexCache) printf("[gfx] rsx_lazy_vertex_cache.txt: the vertex cache is invalidated only after vertex data is written\n");
 	if (s_noFpSlots) printf("[gfx] rsx_no_fp_cache.txt: every patched fragment program goes through the frame ring\n");
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
+	struct { bool* flag; const char* file; const char* what; } const tests[] = {
+		{ &s_wholeBuffers, "rsx_whole_buffers.txt", "renamed buffers are copied whole" },
+		{ &s_rebindAttribs, "rsx_rebind_attribs.txt", "vertex attributes are bound on every draw" },
+		{ &s_resendState, "rsx_resend_state.txt", "render state, viewport and scissor are sent on every draw" },
+		{ &s_resendPrograms, "rsx_resend_programs.txt", "programs and vertex constants are sent on every draw" },
+		{ &s_lateFrees, "rsx_late_frees.txt", "freed RSX memory waits for the frame being built" },
+		{ &s_noTexSpares, "rsx_no_texture_spares.txt", "no spare blocks for textures updated every frame" },
+		{ &s_noKick, "rsx_no_kick.txt", "no mid-frame command-buffer flushes" },
+	};
+	for (unsigned i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
+	{
+		*tests[i].flag = FlagFile(tests[i].file);
+		if (*tests[i].flag) printf("[gfx] %s: %s\n", tests[i].file, tests[i].what);
+	}
 	GpuLog("main-memory copies of uploaded textures: %s (rsx_keep_texture_data.txt); of static vertex buffers: %s (rsx_keep_buffer_data.txt)",
 		s_keepTextureData ? "kept" : "released after 30 unchanged frames", s_keepBufferData ? "kept" : "released after 30 unchanged frames");
 
