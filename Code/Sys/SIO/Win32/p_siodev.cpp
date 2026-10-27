@@ -596,6 +596,14 @@ void Device::Acquire( void )
 		m_data.m_valid = false;
 		//m_state = vACQUIRING;
 		m_state = vACQUIRED;
+#ifdef __PLAT_PS3__
+		// Part of what query_capabilities would have set (kisak skipped it): two motors, 0-255 each. Without the actuator count and caps bit, every vibration
+		// call was ignored.
+		m_data.m_num_actuators		= 2;
+		m_data.m_actuator_max[0]	= 255;
+		m_data.m_actuator_max[1]	= 255;
+		m_data.m_caps.SetMask( mACTUATORS );
+#endif
 		
 		return;
 

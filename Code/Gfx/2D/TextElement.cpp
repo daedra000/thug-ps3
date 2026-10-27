@@ -6,6 +6,7 @@
 #include <gel/scripting/vecpair.h>
 #include <gfx/NxFontMan.h>
 #include <gfx/NxFont.h>
+#include <core/crc.h>
 #include <gfx/2D/ScreenElement2.h>
 #include <gfx/2D/ScreenElemMan.h>
 #include <gfx/2D/TextElement.h>
@@ -222,6 +223,29 @@ void CTextElement::SetText(const char *pText)
 		}
 	}
 	*p_out = '\0';
+#ifdef __PLAT_PS3__
+	{
+		// Button tags the PS2 buttons font has no glyph for (\bj-\bv: 19 glyphs, slots 0-i) drew
+		// as glyph 0 (the triangle). Log each text that has one, once, to map them.
+		static uint32 s_seen[64];
+		static int s_seenCount = 0;
+		for (const char *p = mp_text; *p && s_seenCount < 64; ++p)
+		{
+			if (p[0] != '\\' || (p[1] != 'b' && p[1] != 'B') || !p[2]) continue;
+			const char c = p[2];
+			if (!((c >= 'j' && c <= 'v') || (c >= 'J' && c <= 'V'))) continue;
+			const uint32 h = Crc::GenerateCRCFromString(pText);
+			int i = 0;
+			while (i < s_seenCount && s_seen[i] != h) ++i;
+			if (i == s_seenCount)
+			{
+				s_seen[s_seenCount++] = h;
+				printf("[font] text with unmapped button tags: \"%.120s\"\n", pText);
+			}
+			break;
+		}
+	}
+#endif
 	
 	if( mp_font )
 	{
