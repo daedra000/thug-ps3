@@ -3320,6 +3320,16 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 #ifdef __PLAT_PS3__
 	if( Ps3CullSwitch( s_ps3NoOcclusion, "no_occlusion.txt" ))
 		flags &= ~vRENDER_OCCLUDED;
+	// The opaque pass drew meshes within 50 feet at once and deferred the rest to a second
+	// loop (an Xbox fast-z ordering). Objects popped in and out with it, and drawing all of
+	// them in one loop (as no_frustum_cull.txt ended up doing) cured it, while turning off the
+	// sphere test, the visibility mask or the occluders alone didn't. So one loop, in scene
+	// order; sort_front_to_back.txt brings the split back.
+	{
+		static int s_ps3SortFrontToBack = -1;
+		if( !Ps3CullSwitch( s_ps3SortFrontToBack, "sort_front_to_back.txt" ))
+			flags &= ~vRENDER_SORT_FRONT_TO_BACK;
+	}
 	if( Ps3CullSwitch( s_ps3NoFrustumCull, "no_frustum_cull.txt" ))
 		flags |= vRENDER_NO_CULLING;
 	{
