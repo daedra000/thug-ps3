@@ -504,6 +504,14 @@ namespace Pcm
 	static Streamer *s_working = nullptr;
 	static int s_workWaiters = 0;
 	static bool s_worker = false;		// the thread is running (otherwise the mixer decodes)
+	// Streams taken out of their slots, for the streaming thread to delete (under s_workLock).
+	// ReplaceStream used to wait for the thread to put a stream down before deleting it
+	// itself, which held the game thread for as long as the thread's current job: opening a
+	// stream's Bink header takes up to about 140 ms, and deleting an object that played a
+	// stream showed as a 90 ms hitch.
+	enum { kGraveyard = 32 };
+	static Streamer *s_graveyard[kGraveyard];
+	static int s_graveyardCount = 0;
 
 	static Streamer *&Slot(int i)
 	{
@@ -517,6 +525,18 @@ namespace Pcm
 		for (;;)
 		{
 			bool did = false;
+			{
+				// Delete the streams taken out of their slots (none is s_working now).
+				Streamer *dead[kGraveyard];
+				int n = 0;
+				sysMutexLock(s_workLock, 0);
+				for (; n < s_graveyardCount; n++)
+					dead[n] = s_graveyard[n];
+				s_graveyardCount = 0;
+				sysMutexUnlock(s_workLock);
+				for (int i = 0; i < n; i++)
+					delete dead[i];
+			}
 			for (int i = 0; i < kSlots; i++)
 			{
 				sysMutexLock(s_workLock, 0);
@@ -688,12 +708,17 @@ namespace Pcm
 		Audio::Unlock();
 #ifdef __PLAT_PS3__
 		// The streaming thread may still be decoding the old stream (it took it before the
-		// swap): wait for it to put it down. A new stream gets its first decode right away.
+		// swap): it deletes it once it has put it down. Only with no room on its list does
+		// this wait, as before. A new stream gets its first decode right away.
 		if (s_worker)
 		{
 			sysMutexLock(s_workLock, 0);
-			if (replacement != nullptr)
-				sysCondSignal(s_workWake);
+			if (old != nullptr && s_graveyardCount < kGraveyard)
+			{
+				s_graveyard[s_graveyardCount++] = old;
+				old = nullptr;
+			}
+			sysCondSignal(s_workWake);
 			while (old != nullptr && s_working == old)
 			{
 				++s_workWaiters;
