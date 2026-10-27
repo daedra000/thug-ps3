@@ -114,6 +114,13 @@ static volatile u64 s_gpuStartAt[8];		// when the start label showed frame n (sl
 static volatile u32 s_gpuStartFrame[8];	// and which frame that was
 static volatile u64 s_gpuSumUs, s_gpuWorstUs;
 static volatile u32 s_gpuFrames, s_gpuOver16, s_gpuOver33;
+// When the CPU finished queueing frame n (Present, before its fence): the time from there to
+// the fence passing is how long the RSX still had to work once it had the whole frame. Near
+// zero means the RSX keeps up with the CPU (the CPU is the limit); large means the RSX is.
+static volatile u64 s_cpuDoneAt[8];
+static volatile u32 s_cpuDoneFrame[8];
+static volatile u64 s_tailSumUs;
+static volatile u32 s_tailFrames, s_tailOver4;
 static void GpuSample(unsigned long long now)
 {
 	const u32 start = *(vu32*)gcmGetLabelAddress(kFrameStartLabel);
@@ -127,6 +134,16 @@ static void GpuSample(unsigned long long now)
 	if (end != s_gpuLastEnd)
 	{
 		const u64 at = s_gpuStartAt[end & 7];
+		if (s_cpuDoneFrame[end & 7] == end && now > s_cpuDoneAt[end & 7])
+		{
+			const u64 tail = now - s_cpuDoneAt[end & 7];
+			if (tail < 2000000)
+			{
+				s_tailSumUs += tail;
+				++s_tailFrames;
+				if (tail > 4000) ++s_tailOver4;
+			}
+		}
 		if (s_gpuStartFrame[end & 7] == end)	// this frame's start was seen
 		{
 			const u64 us = at && now > at ? now - at : 0;
@@ -675,6 +692,8 @@ void Present(IDirect3DDevice9*)
 	else if (!s_skipFrame)
 	{
 		CmdReserve(64);
+		s_cpuDoneAt[(s_frameSeq + 1) & 7] = sysGetSystemTime();
+		s_cpuDoneFrame[(s_frameSeq + 1) & 7] = s_frameSeq + 1;
 		rsxSetWriteBackendLabel(s_ctx, kFrameLabel, ++s_frameSeq);	// the frame fence
 		// Flip at the next vsync. No gcmSetWaitFlip: the CPU checks the flip before the
 		// next frame (FlipGate), so nothing is queued behind a held flip.
@@ -710,11 +729,16 @@ void Present(IDirect3DDevice9*)
 		const unsigned waitUs = (unsigned)(s_cmdWaitTicks * 1000 / 79800);
 		GpuLog("frame %u alive (%s; %u segment changes, %u frames skipped and %u flips forced while the display was held; "
 			"command buffer: %u segment changes and %u.%02u ms waiting for the RSX a frame; "
-			"RSX %u.%02u ms a frame (worst %u.%02u), %u of %u frames over 16.7 ms, %u over 33.3 ms)",
+			"RSX %u.%02u ms a frame (worst %u.%02u), %u of %u frames over 16.7 ms, %u over 33.3 ms; "
+			"RSX still busy %u.%02u ms after the CPU queued the frame, %u of %u frames over 4 ms)",
 			s_frames, DrawStats(), s_segmentChanges, s_skipped, s_forced,
 			segs / frames, waitUs / frames / 1000, waitUs / frames % 1000 / 10,
 			(unsigned)(s_gpuFrames ? s_gpuSumUs / s_gpuFrames / 1000 : 0), (unsigned)(s_gpuFrames ? s_gpuSumUs / s_gpuFrames % 1000 / 10 : 0),
-			(unsigned)(s_gpuWorstUs / 1000), (unsigned)(s_gpuWorstUs % 1000 / 10), (unsigned)s_gpuOver16, (unsigned)s_gpuFrames, (unsigned)s_gpuOver33);
+			(unsigned)(s_gpuWorstUs / 1000), (unsigned)(s_gpuWorstUs % 1000 / 10), (unsigned)s_gpuOver16, (unsigned)s_gpuFrames, (unsigned)s_gpuOver33,
+			(unsigned)(s_tailFrames ? s_tailSumUs / s_tailFrames / 1000 : 0), (unsigned)(s_tailFrames ? s_tailSumUs / s_tailFrames % 1000 / 10 : 0),
+			(unsigned)s_tailOver4, (unsigned)s_tailFrames);
+		s_tailSumUs = 0;
+		s_tailFrames = s_tailOver4 = 0;
 		s_gpuSumUs = s_gpuWorstUs = 0;
 		s_gpuFrames = s_gpuOver16 = s_gpuOver33 = 0;
 		s_lastSegmentChanges = s_segmentChanges;
