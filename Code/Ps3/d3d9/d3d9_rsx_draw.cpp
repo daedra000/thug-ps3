@@ -100,6 +100,7 @@ static struct Stats
 	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned targetWaits;	// RSX idle waits after drawing into a texture
+	unsigned reused;		// draws that reused the previous draw's set-up (s_dc)
 	unsigned long long ringBytes;
 } s_stats;
 static char s_statsLine[1400];
@@ -263,6 +264,7 @@ static bool s_freshDone;	// rsx_fresh_label.txt: read the label every time (a te
 static bool s_vsAlways;		// rsx_vs_always.txt: recompute the vertex constants for every draw (a test switch)
 static bool s_slowDraws;		// rsx_slow_draws.txt: spin 2.5 us in every draw, nothing else changed (a test switch)
 static bool s_noTargetWait;	// rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture (a test switch)
+static bool s_noStateReuse;	// rsx_no_state_reuse.txt: every draw works out its set-up again (a test switch)
 static inline u32 DoneCached()
 {
 	if (s_freshDone) return FramesDone();
@@ -1845,21 +1847,58 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 	}
 }
 
+static bool DrawRest(IDirect3DDevice9* dev, const DrawCall& call, u8 type, u32 count, const FvfLayout& l,
+	const RsxTexture* const* tex, FpEntry* fp, const float (*fc)[4], VpEntry* vp, bool hasDepth, bool applyState,
+	unsigned long long dpLast);
+
+// The previous draw's set-up (DoDraw), for draws that change nothing but transforms, streams
+// or indices.
+static struct DrawSetup
+{
+	bool valid;
+	unsigned serial;	// the device's m_stateSerial it was made for
+	FvfLayout l;
+	const RsxTexture* tex[4];
+	FpEntry* fp;
+	float fc[9][4];
+	VpEntry* vp;
+	bool hasDepth;
+} s_dc;
+
 static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 {
 	unsigned long long dpLast = __builtin_ppc_get_timebase();
 	if (s_noDraw) return false;
+	bool typeOk;
+	const u8 type = PrimType(call.type, &typeOk);
+	if (!typeOk) return Skip("point lists");
+	const u32 count = call.indexed ? VertexCount(call.type, call.primCount) : call.vertexCount;
+	if (count == 0) return false;
+
+	// Nothing but transforms, streams or indices changed since the last draw (the device's
+	// state serial): its target, textures, programs and render state are this draw's too.
+	// A texture the game wrote into since (m_dirty) is uploaded on the full path.
+	bool reuse = s_dc.valid && dev->m_stateSerial == s_dc.serial && s_targetValid && !s_noStateReuse &&
+		!s_resendState && !s_resendPrograms && !s_capture;
+	for (int s = 0; s < 4 && reuse; ++s)
+	{
+		IDirect3DBaseTexture9* bt = dev->m_textures[s];
+		if (bt && bt->GetType() == D3DRTYPE_TEXTURE && static_cast<IDirect3DTexture9*>(bt)->m_dirty) reuse = false;
+	}
+	if (reuse)
+	{
+		++s_stats.reused;
+		const FvfLayout& l = s_dc.l;
+		const bool hasDepth = s_dc.hasDepth;
+		return DrawRest(dev, call, type, count, l, s_dc.tex, s_dc.fp, s_dc.fc, s_dc.vp, hasDepth, !s_stateValid || !s_viewValid, dpLast);
+	}
+
 	bool hasDepth = false;
 	if (!ApplyTarget(dev, &hasDepth)) return false;
 	if (dev->m_vs) return Skip("vertex shaders are not supported (the game uses fixed-function)");
 	if (!dev->m_fvf) return Skip("no FVF (vertex declarations are not supported)");
-	bool typeOk;
-	const u8 type = PrimType(call.type, &typeOk);
-	if (!typeOk) return Skip("point lists");
 
 	const FvfLayout l = Layout(dev->m_fvf);
-	const u32 count = call.indexed ? VertexCount(call.type, call.primCount) : call.vertexCount;
-	if (count == 0) return false;
 
 	// Textures for the fragment program.
 	const RsxTexture* tex[4] = { NULL, NULL, NULL, NULL };
@@ -1944,6 +1983,25 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (!vp || !vp->prog) return Skip("vertex program unavailable");
 	DP_MARK(kDpVp);
 
+	s_dc.serial = dev->m_stateSerial;
+	s_dc.l = l;
+	for (int t = 0; t < 4; ++t) s_dc.tex[t] = tex[t];
+	s_dc.fp = fp;
+	memcpy(s_dc.fc, fc, sizeof(fc));
+	s_dc.vp = vp;
+	s_dc.hasDepth = hasDepth;
+	s_dc.valid = true;
+	return DrawRest(dev, call, type, count, l, tex, fp, fc, vp, hasDepth, true, dpLast);
+}
+
+// The rest of a draw, from its vertex data on: also what a draw with the previous draw's
+// set-up does (s_dc). applyState false skips the render state and view (unchanged and still
+// valid on the RSX).
+static bool DrawRest(IDirect3DDevice9* dev, const DrawCall& call, u8 type, u32 count, const FvfLayout& l,
+	const RsxTexture* const* tex, FpEntry* fp, const float (*fc)[4], VpEntry* vp, bool hasDepth, bool applyState,
+	unsigned long long dpLast)
+{
+
 	// Vertex and index data on the RSX.
 	u32 vbase, stride, ioff = 0;
 	if (call.vertexData)
@@ -2020,8 +2078,11 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_resendState) { s_stateValid = false; s_viewValid = false; s_clipsSent = false; }
 	if (s_resendPrograms) { s_currentVp = NULL; s_currentFpOffset = 0xFFFFFFFF; memset(s_vcValid, 0, sizeof(s_vcValid)); }
 	if (s_rebindAttribs) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
-	ApplyView(dev);
-	ApplyState(dev, hasDepth);
+	if (applyState || s_resendState)
+	{
+		ApplyView(dev);
+		ApplyState(dev, hasDepth);
+	}
 	DP_MARK(kDpState);
 	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms || s_vsAlways)
 	{
@@ -2249,6 +2310,8 @@ bool DrawInit()
 	s_vsAlways = FlagFile("rsx_vs_always.txt");
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
+	s_noStateReuse = FlagFile("rsx_no_state_reuse.txt");
+	if (s_noStateReuse) GpuLog("rsx_no_state_reuse.txt: every draw works out its set-up again");
 	if (s_noTargetWait) GpuLog("rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture");
 	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
 	if (s_freshDone) GpuLog("rsx_fresh_label.txt: the fence label is read every time");
@@ -2304,6 +2367,7 @@ void DrawFrameStart()
 	s_currentFpOffset = 0xFFFFFFFF;
 	memset(s_vcValid, 0, sizeof(s_vcValid));
 	s_vcSerial = 0;
+	s_dc.valid = false;	// targets and records are set up again each frame
 	s_doneCache = FramesDone();
 	s_doneAge = 0;
 	memset(s_bound, 0, sizeof(s_bound));
@@ -2321,11 +2385,11 @@ const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
-		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
+		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u draws reused the last set-up, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
-		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
+		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, s_stats.reused, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
