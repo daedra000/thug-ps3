@@ -100,7 +100,6 @@ static struct Stats
 	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned targetWaits;	// RSX idle waits after drawing into a texture
-	unsigned replayed, recorded, packetFails;	// draw packets (see "Draw packets")
 	unsigned long long ringBytes;
 } s_stats;
 static char s_statsLine[1400];
@@ -1463,7 +1462,6 @@ static bool s_stateValid;
 // part of the buffer, leaves ZCULL's values behind the buffer's: they are rebuilt
 // (invalidated) before the next draw that uses ZCULL. A clear of the whole buffer resets them.
 static bool s_zcullStale;
-static bool s_zcullControlSent;	// rsxSetZCullControl this frame (ApplyState)
 static u32 s_displayDepthOffset;	// the display's depth buffer (DrawInit)
 static SurfaceDesc s_target;	// the bound target (ApplyTarget)
 static bool s_targetValid;
@@ -1639,9 +1637,7 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 	if (all || s.shade != o.shade) rsxSetShadeModel(s_ctx, s.shade);
 	if (zcull && (all || s.zcull != o.zcull))
 	{
-		// Once a frame: re-sent with every full state (each recorded draw, see "Draw packets")
-		// it came with tons of flicker.
-		if (!s_zcullControlSent) { rsxSetZCullControl(s_ctx, GCM_ZCULL_LESS, GCM_ZCULL_LONES); s_zcullControlSent = true; }
+		if (all) rsxSetZCullControl(s_ctx, GCM_ZCULL_LESS, GCM_ZCULL_LONES);
 		rsxSetZCullEnable(s_ctx, s.zcull ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
 	}
 	s_state = s;
@@ -1853,354 +1849,6 @@ static void LogCapturedDraw(IDirect3DDevice9* dev, const DrawCall& call, const F
 	}
 }
 
-// A draw's vertex and index data on the RSX (uploaded or renamed as needed): the vertex
-// base, the stride and the index offset.
-static bool DrawBuffers(IDirect3DDevice9* dev, const DrawCall& call, const FvfLayout& l, u32 count,
-	u32* vbaseOut, u32* strideOut, u32* ioffOut)
-{
-	u32 vbase, stride, ioff = 0;
-	if (call.vertexData)
-	{
-		stride = call.vertexStride;
-		const u32 verts = call.indexed ? call.minIndex + call.vertexCount : call.vertexCount;
-		u8* p = RingAlloc(verts * stride, 128, &vbase);
-		if (!p) return false;
-		memcpy(p, call.vertexData, verts * stride);
-		s_stats.ringBytes += verts * stride;
-		if (call.indexed)
-		{
-			const u32 isize = count * (call.indexFormat == D3DFMT_INDEX32 ? 4 : 2);
-			u8* ip = RingAlloc(isize, 16, &ioff);
-			if (!ip) return false;
-			memcpy(ip, call.indexData, isize);
-			s_stats.ringBytes += isize;
-		}
-		s_vertexWritten = true;
-	}
-	else
-	{
-		IDirect3DVertexBuffer9* vb = dev->m_streams[0];
-		if (!vb) return Skip("no vertex buffer");
-		stride = dev->m_streamStride[0] ? dev->m_streamStride[0] : l.stride;
-		IDirect3DIndexBuffer9* ib = call.indexed ? dev->m_indices : NULL;
-		if (call.indexed && !ib) return Skip("no index buffer");
-		const u32 isz = ib && ib->m_format == D3DFMT_INDEX32 ? 4 : 2;
-
-		// The bytes this draw reads, for a buffer that may have to be renamed into the ring
-		// (only those are copied there). Indexed draws scan their indices for the range
-		// rather than trusting MinIndex/NumVertices, which PC drivers ignore. Anything odd
-		// falls back to the whole buffer.
-		u32 vLo = 0, vHi = vb->m_size;
-		const RsxBuffer* vbb = (const RsxBuffer*)vb->m_backend;
-		if (vb->m_dirty || (vbb && vbb->stale))
-		{
-			long long first = -1, last = -1;
-			if (!call.indexed)
-			{
-				first = call.startVertex;
-				last = (long long)call.startVertex + count - 1;
-			}
-			else if (((unsigned long long)call.startIndex + count) * isz <= ib->m_size && ib->m_data)
-			{
-				u32 mn, mx;
-				IndexRange(ib->m_data + call.startIndex * isz, isz == 4, count, &mn, &mx);
-				first = (long long)call.baseVertex + mn;
-				last = (long long)call.baseVertex + mx;
-			}
-			const long long lo = (long long)dev->m_streamOffset[0] + first * stride;
-			long long hi = (long long)dev->m_streamOffset[0] + last * stride + stride;
-			if (hi > (long long)vb->m_size) hi = vb->m_size;
-			if (first >= 0 && last >= first && lo >= 0 && lo < hi) { vLo = (u32)lo; vHi = (u32)hi; }
-		}
-		u32 off;
-		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, vLo, vHi, &off)) return false;
-		if (vb->m_data) ReleaseVertexBufferData(vb);
-		vbase = off + dev->m_streamOffset[0];
-		if (call.indexed)
-		{
-			vbase += call.baseVertex * stride;
-			const u32 iLo = call.startIndex * isz;
-			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_changes, ib->m_backend, iLo, iLo + count * isz, &ioff)) return false;
-			ioff += iLo;
-		}
-		else
-			vbase += call.startVertex * stride;
-	}
-	*vbaseOut = vbase;
-	*strideOut = stride;
-	*ioffOut = ioff;
-	return true;
-}
-
-// ---------------------------------------------------------------------------
-// Draw packets: a draw's commands, recorded once and replayed
-// ---------------------------------------------------------------------------
-// Most of a frame's draws are the level's meshes, drawn the same way frame after frame: the
-// same buffers, textures and render state. Working each one out again cost about 4 us a
-// draw, 8-10 ms in a busy view. So an indexed draw from buffers records the commands it sends
-// for its render state, view, fragment program, textures and vertex attributes, and the draw
-// itself, sent with every cache in this file reset first, so the block stands on its own. Next
-// time the same draw (same buffers and range) comes with exactly the same device state
-// (compared whole: render, stage and sampler states, textures, shaders and their constants,
-// viewport, scissor, targets, FVF, lights), the same texture layouts and the same buffer
-// offsets, the block is copied into the command buffer instead. Only the fragment program's
-// address is patched: it still gets a fresh copy every draw (reusing copies flashes). The
-// vertex program and its constants are sent before the block, as for any draw. Anything that
-// doesn't match records the draw again; draws that keep changing stop being recorded.
-// rsx_no_packets.txt turns them off.
-static bool s_noPackets;
-
-struct DrawPacket
-{
-	// What the commands were made from.
-	DWORD rs[D3DRS_MAX];
-	DWORD tss[4][D3DTSS_MAX];
-	DWORD ss[4][D3DSAMP_MAX];
-	IDirect3DBaseTexture9* textures[4];
-	float psConst[8][4];
-	D3DVIEWPORT9 viewport;
-	RECT scissor;
-	DWORD fvf;
-	IDirect3DVertexDeclaration9* decl;
-	IDirect3DVertexShader9* vs;
-	IDirect3DPixelShader9* ps;
-	IDirect3DSurface9* renderTarget;
-	IDirect3DSurface9* depthTarget;
-	BOOL lightEnabled[8];
-	D3DLIGHTTYPE lightType[8];
-	UINT streamOffset, streamStride;
-	bool hasDepth, i32;
-	u32 vbase, stride, ioff;
-	const RsxTexture* tex[4];	// bound per unit (NULL: unit unused)
-	gcmTexture texDesc[4];
-	FpEntry* fp;
-	float fc[9][4];
-	VpEntry* vp;
-	FvfLayout layout;
-	bool zcull, farWrite;		// ZCULL on for the draw / it writes depth farther than what is there
-	u32 epoch;					// s_packetEpoch when recorded
-	u32 lastUse;				// frame of the last replay
-	u32 fpWord;					// index of the fragment program address in cmds
-	u32 words;
-	u32 cmds[1];				// (words of them)
-};
-
-struct PacketSlot
-{
-	IDirect3DVertexBuffer9* vb;
-	IDirect3DIndexBuffer9* ib;
-	INT baseVertex;
-	UINT startIndex, primCount;
-	u32 type;
-	DrawPacket* p[2];			// two: a mesh drawn in two passes keeps both
-	u16 records, replays;		// since the last check (recording stops for draws that keep changing)
-	u32 noRecordUntil;			// frame
-};
-enum { kPacketSlots = 8192, kMaxPacketWords = 1024 };
-static PacketSlot* s_slots;
-static u32 s_packetEpoch = 1;	// bumped when a pixel shader goes (its programs are freed)
-static size_t s_packetBytes;
-static const size_t kMaxPacketBytes = 16u << 20;
-
-static bool PacketMatches(const DrawPacket* p, IDirect3DDevice9* dev, bool hasDepth)
-{
-	if (p->epoch != s_packetEpoch || p->hasDepth != hasDepth) return false;
-	if (p->fvf != dev->m_fvf || p->decl != dev->m_decl || p->vs != dev->m_vs || p->ps != dev->m_ps ||
-		p->renderTarget != dev->m_renderTarget || p->depthTarget != dev->m_depthTarget ||
-		p->streamOffset != dev->m_streamOffset[0] || p->streamStride != dev->m_streamStride[0])
-		return false;
-	if (memcmp(p->textures, dev->m_textures, sizeof(p->textures))) return false;
-	if (memcmp(p->rs, dev->m_rs, sizeof(p->rs))) return false;
-	if (memcmp(p->tss, dev->m_tss, sizeof(p->tss))) return false;
-	if (memcmp(p->ss, dev->m_ss, sizeof(p->ss))) return false;
-	if (memcmp(p->psConst, dev->m_psConst, sizeof(p->psConst))) return false;
-	if (memcmp(&p->viewport, &dev->m_viewport, sizeof(p->viewport)) || memcmp(&p->scissor, &dev->m_scissor, sizeof(p->scissor))) return false;
-	if (memcmp(p->lightEnabled, dev->m_lightEnabled, sizeof(p->lightEnabled))) return false;
-	for (int i = 0; i < 8; ++i) if (p->lightEnabled[i] && p->lightType[i] != dev->m_lights[i].Type) return false;
-	// The textures as uploaded now (a texture written since is uploaded on the full path).
-	for (int t = 0; t < 4; ++t)
-	{
-		if (!p->tex[t] || p->tex[t] == &s_white) continue;
-		IDirect3DBaseTexture9* bt = dev->m_textures[t];
-		if (!bt || bt->GetType() != D3DRTYPE_TEXTURE) return false;
-		IDirect3DTexture9* tx = static_cast<IDirect3DTexture9*>(bt);
-		const RsxTexture* r = (const RsxTexture*)tx->m_backend;
-		if (tx->m_dirty || r != p->tex[t] || !r->valid || memcmp(&r->desc, &p->texDesc[t], sizeof(r->desc))) return false;
-	}
-	return true;
-}
-
-static PacketSlot* SlotFor(IDirect3DDevice9* dev, const DrawCall& call)
-{
-	if (!s_slots) return NULL;
-	IDirect3DVertexBuffer9* vb = dev->m_streams[0];
-	IDirect3DIndexBuffer9* ib = dev->m_indices;
-	unsigned long long h = (unsigned long long)(uintptr_t)vb * 0x9E3779B97F4A7C15ull;
-	h ^= ((unsigned long long)(uintptr_t)ib + call.startIndex * 31u + call.primCount * 131u + (u32)call.baseVertex * 7u + call.type) * 0xC2B2AE3D27D4EB4Full;
-	PacketSlot* slot = &s_slots[(h >> 40) & (kPacketSlots - 1)];
-	if (slot->vb != vb || slot->ib != ib || slot->startIndex != call.startIndex || slot->primCount != call.primCount ||
-		slot->baseVertex != call.baseVertex || slot->type != (u32)call.type)
-	{
-		// Another draw: the slot goes to this one.
-		for (int k = 0; k < 2; ++k) if (slot->p[k]) { s_packetBytes -= sizeof(DrawPacket) + slot->p[k]->words * 4; free(slot->p[k]); }
-		memset(slot, 0, sizeof(*slot));
-		slot->vb = vb;
-		slot->ib = ib;
-		slot->startIndex = call.startIndex;
-		slot->primCount = call.primCount;
-		slot->baseVertex = call.baseVertex;
-		slot->type = (u32)call.type;
-	}
-	return slot;
-}
-
-// The vertex program and its constants, for a draw (sent before its block).
-static void VertexProgramAndConstants(IDirect3DDevice9* dev, const VpEntry* vp)
-{
-	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms || s_vsAlways)
-	{
-		float vc[kVcCount][4];
-		FillVsConstants(dev, vc);
-		UseVertexProgram(vp, vc);
-		s_vcSerial = dev->m_vsSerial;
-	}
-	else
-		UseVertexProgram(vp, NULL);
-}
-
-// After a block: the RSX's state is the block's, which the caches here don't know.
-static void ForgetSentState()
-{
-	s_stateValid = false;
-	s_viewValid = false;
-	s_clipsSent = false;
-	s_attrValid = false;
-	s_attribMask = 0xFFFFFFFF;
-	memset(s_bound, 0, sizeof(s_bound));
-	s_currentFpOffset = 0xFFFFFFFF;
-}
-
-static bool ReplayPacket(IDirect3DDevice9* dev, const DrawCall& call, PacketSlot* slot, u32 count, bool hasDepth)
-{
-	DrawPacket* p = NULL;
-	for (int k = 0; k < 2 && !p; ++k)
-		if (slot->p[k] && PacketMatches(slot->p[k], dev, hasDepth)) p = slot->p[k];
-	if (!p) return false;
-	u32 vbase, stride, ioff;
-	if (!DrawBuffers(dev, call, p->layout, count, &vbase, &stride, &ioff)) return false;
-	if (vbase != p->vbase || stride != p->stride || ioff != p->ioff || p->i32 != (dev->m_indices->m_format == D3DFMT_INDEX32)) return false;
-
-	VertexProgramAndConstants(dev, p->vp);
-	// The fragment program: a fresh copy, as for any draw.
-	u32 offset = p->fp->localOffset;
-	if (p->fp->numConsts)
-	{
-		u8* fresh = RingAlloc(p->fp->ucodeSize, 64, &offset);
-		if (!fresh) return false;
-		WritePatched(p->fp, fresh, p->fc, p->fp->last);
-		p->fp->lastFrame = s_frameSeq;
-		p->fp->lastOffset = offset;
-	}
-	else
-		p->fp->localUsed = s_frameSeq + 1;
-	CmdReserve(p->words + 32);
-	if (s_skipFrame) return true;
-	if (s_vertexWritten)
-	{
-		rsxInvalidateVertexCache(s_ctx);
-		s_vertexWritten = false;
-	}
-	if (p->zcull && s_zcullStale)
-	{
-		rsxSetZCullInvalidate(s_ctx);
-		s_zcullStale = false;
-	}
-	u32* out = (u32*)s_ctx->current;
-	memcpy(out, p->cmds, p->words * 4);
-	out[p->fpWord] = (GCM_LOCATION_RSX + 1) | (offset & 0x1fffffff);
-	s_ctx->current = out + p->words;
-	ForgetSentState();
-	s_currentFpOffset = offset;
-	if (p->farWrite) s_zcullStale = true;
-	for (int t = 0; t < 4; ++t) if (p->tex[t]) const_cast<RsxTexture*>(p->tex[t])->usedPlusOne = s_frameSeq + 1;
-	p->lastUse = s_frameSeq;
-	if (slot->replays < 60000) ++slot->replays;
-	++s_stats.drawn;
-	++s_stats.replayed;
-	if (++s_drawsSinceKick >= kKickDraws) Kick();
-	return true;
-}
-
-static void RecordPacket(IDirect3DDevice9* dev, PacketSlot* slot, const u32* start, u32 segBefore, bool hasDepth,
-	const FvfLayout& l, const RsxTexture* const* tex, FpEntry* fp, const float (*fc)[4], VpEntry* vp, u32 vbase, u32 stride, u32 ioff)
-{
-	const u32* end = (const u32*)s_ctx->current;
-	if (SegmentChanges() != segBefore || end <= start || (u32)(end - start) > kMaxPacketWords) { ++s_stats.packetFails; return; }
-	const u32 words = (u32)(end - start);
-	// The fragment program's address: the word holding it, after an FP_ADDRESS method (the
-	// last one, should it turn up twice).
-	u32 fpWord = 0xFFFFFFFF;
-	const u32 fpValue = (GCM_LOCATION_RSX + 1) | (s_currentFpOffset & 0x1fffffff);
-	for (u32 i = 1; i < words; ++i)
-		if (start[i] == fpValue && (start[i - 1] & 0xFFFC) == 0x08E4u) fpWord = i;
-	if (fpWord == 0xFFFFFFFF) { ++s_stats.packetFails; return; }
-	const size_t bytes = sizeof(DrawPacket) + words * 4;
-	if (s_packetBytes + bytes > kMaxPacketBytes) { ++s_stats.packetFails; return; }
-	DrawPacket* p = (DrawPacket*)malloc(bytes);
-	if (!p) { ++s_stats.packetFails; return; }
-	s_packetBytes += bytes;
-	memcpy(p->rs, dev->m_rs, sizeof(p->rs));
-	memcpy(p->tss, dev->m_tss, sizeof(p->tss));
-	memcpy(p->ss, dev->m_ss, sizeof(p->ss));
-	memcpy(p->textures, dev->m_textures, sizeof(p->textures));
-	memcpy(p->psConst, dev->m_psConst, sizeof(p->psConst));
-	p->viewport = dev->m_viewport;
-	p->scissor = dev->m_scissor;
-	p->fvf = dev->m_fvf;
-	p->decl = dev->m_decl;
-	p->vs = dev->m_vs;
-	p->ps = dev->m_ps;
-	p->renderTarget = dev->m_renderTarget;
-	p->depthTarget = dev->m_depthTarget;
-	memcpy(p->lightEnabled, dev->m_lightEnabled, sizeof(p->lightEnabled));
-	for (int i = 0; i < 8; ++i) p->lightType[i] = dev->m_lights[i].Type;
-	p->streamOffset = dev->m_streamOffset[0];
-	p->streamStride = dev->m_streamStride[0];
-	p->hasDepth = hasDepth;
-	p->i32 = dev->m_indices->m_format == D3DFMT_INDEX32;
-	p->vbase = vbase;
-	p->stride = stride;
-	p->ioff = ioff;
-	for (int t = 0; t < 4; ++t)
-	{
-		p->tex[t] = (fp->texMask & (1 << t)) ? (tex[t] ? tex[t] : &s_white) : NULL;
-		if (p->tex[t]) p->texDesc[t] = p->tex[t]->desc; else memset(&p->texDesc[t], 0, sizeof(p->texDesc[t]));
-	}
-	p->fp = fp;
-	memcpy(p->fc, fc, sizeof(p->fc));
-	p->vp = vp;
-	p->layout = l;
-	p->zcull = s_state.zcull != 0;
-	p->farWrite = ZcullActive() && s_state.depthWrite && OnDisplayDepth() && FarDepthWrite(s_state.depthFunc);
-	p->epoch = s_packetEpoch;
-	p->lastUse = s_frameSeq;
-	p->fpWord = fpWord;
-	p->words = words;
-	memcpy(p->cmds, start, words * 4);
-	// Into the empty way, else over the one replayed longest ago.
-	int k = !slot->p[0] ? 0 : !slot->p[1] ? 1 : (slot->p[0]->lastUse <= slot->p[1]->lastUse ? 0 : 1);
-	if (slot->p[k]) { s_packetBytes -= sizeof(DrawPacket) + slot->p[k]->words * 4; free(slot->p[k]); }
-	slot->p[k] = p;
-	++slot->records;
-	++s_stats.recorded;
-	// A draw recorded over and over without being replayed much: leave it alone for a while.
-	if (slot->records >= 8)
-	{
-		if (slot->replays < slot->records * 4) slot->noRecordUntil = s_frameSeq + 600;
-		slot->records = slot->replays = 0;
-	}
-}
-
 static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 {
 	unsigned long long dpLast = __builtin_ppc_get_timebase();
@@ -2216,16 +1864,6 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	const FvfLayout l = Layout(dev->m_fvf);
 	const u32 count = call.indexed ? VertexCount(call.type, call.primCount) : call.vertexCount;
 	if (count == 0) return false;
-
-	// A recorded draw (see "Draw packets").
-	PacketSlot* slot = NULL;
-	if (!s_noPackets && call.indexed && !call.vertexData && !s_capture && !s_resendState && !s_resendPrograms &&
-		dev->m_streams[0] && dev->m_indices)
-	{
-		slot = SlotFor(dev, call);
-		if (slot && ReplayPacket(dev, call, slot, count, hasDepth)) return true;
-		if (slot && (s32)(s_frameSeq - slot->noRecordUntil) < 0) slot = NULL;
-	}
 
 	// Textures for the fragment program.
 	const RsxTexture* tex[4] = { NULL, NULL, NULL, NULL };
@@ -2312,43 +1950,93 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 
 	// Vertex and index data on the RSX.
 	u32 vbase, stride, ioff = 0;
-	if (!DrawBuffers(dev, call, l, count, &vbase, &stride, &ioff)) return false;
+	if (call.vertexData)
+	{
+		stride = call.vertexStride;
+		const u32 verts = call.indexed ? call.minIndex + call.vertexCount : call.vertexCount;
+		u8* p = RingAlloc(verts * stride, 128, &vbase);
+		if (!p) return false;
+		memcpy(p, call.vertexData, verts * stride);
+		s_stats.ringBytes += verts * stride;
+		if (call.indexed)
+		{
+			const u32 isize = count * (call.indexFormat == D3DFMT_INDEX32 ? 4 : 2);
+			u8* ip = RingAlloc(isize, 16, &ioff);
+			if (!ip) return false;
+			memcpy(ip, call.indexData, isize);
+			s_stats.ringBytes += isize;
+		}
+		s_vertexWritten = true;
+	}
+	else
+	{
+		IDirect3DVertexBuffer9* vb = dev->m_streams[0];
+		if (!vb) return Skip("no vertex buffer");
+		stride = dev->m_streamStride[0] ? dev->m_streamStride[0] : l.stride;
+		IDirect3DIndexBuffer9* ib = call.indexed ? dev->m_indices : NULL;
+		if (call.indexed && !ib) return Skip("no index buffer");
+		const u32 isz = ib && ib->m_format == D3DFMT_INDEX32 ? 4 : 2;
+
+		// The bytes this draw reads, for a buffer that may have to be renamed into the ring
+		// (only those are copied there). Indexed draws scan their indices for the range
+		// rather than trusting MinIndex/NumVertices, which PC drivers ignore. Anything odd
+		// falls back to the whole buffer.
+		u32 vLo = 0, vHi = vb->m_size;
+		const RsxBuffer* vbb = (const RsxBuffer*)vb->m_backend;
+		if (vb->m_dirty || (vbb && vbb->stale))
+		{
+			long long first = -1, last = -1;
+			if (!call.indexed)
+			{
+				first = call.startVertex;
+				last = (long long)call.startVertex + count - 1;
+			}
+			else if (((unsigned long long)call.startIndex + count) * isz <= ib->m_size && ib->m_data)
+			{
+				u32 mn, mx;
+				IndexRange(ib->m_data + call.startIndex * isz, isz == 4, count, &mn, &mx);
+				first = (long long)call.baseVertex + mn;
+				last = (long long)call.baseVertex + mx;
+			}
+			const long long lo = (long long)dev->m_streamOffset[0] + first * stride;
+			long long hi = (long long)dev->m_streamOffset[0] + last * stride + stride;
+			if (hi > (long long)vb->m_size) hi = vb->m_size;
+			if (first >= 0 && last >= first && lo >= 0 && lo < hi) { vLo = (u32)lo; vHi = (u32)hi; }
+		}
+		u32 off;
+		if (!BufferOffset(vb->m_data, vb->m_size, vb->m_dirty, vb->m_changes, vb->m_backend, vLo, vHi, &off)) return false;
+		if (vb->m_data) ReleaseVertexBufferData(vb);
+		vbase = off + dev->m_streamOffset[0];
+		if (call.indexed)
+		{
+			vbase += call.baseVertex * stride;
+			const u32 iLo = call.startIndex * isz;
+			if (!BufferOffset(ib->m_data, ib->m_size, ib->m_dirty, ib->m_changes, ib->m_backend, iLo, iLo + count * isz, &ioff)) return false;
+			ioff += iLo;
+		}
+		else
+			vbase += call.startVertex * stride;
+	}
 	if (stride > 255) return Skip("vertex stride over 255 bytes");
 	DP_MARK(kDpBuffers);
 
-	// Programs and constants, state, textures, then the draw.
+	// State, programs, textures, then the draw.
 	if (s_resendState) { s_stateValid = false; s_viewValid = false; s_clipsSent = false; }
 	if (s_resendPrograms) { s_currentVp = NULL; s_currentFpOffset = 0xFFFFFFFF; memset(s_vcValid, 0, sizeof(s_vcValid)); }
 	if (s_rebindAttribs) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
-	VertexProgramAndConstants(dev, vp);
-	DP_MARK(kDpVsConst);
-	// Only after vertex data was written (a175dd3; steady once fragment programs stopped being reused).
-	if (s_vertexWritten)
-	{
-		CmdReserve(8);
-		rsxInvalidateVertexCache(s_ctx);
-		s_vertexWritten = false;
-	}
-	// Recording this draw: everything from here is sent in full, into one stretch of the
-	// command buffer (room is made first; a segment change on the way spoils the recording).
-	const u32* recStart = NULL;
-	u32 recSegs = 0;
-	if (slot && !s_skipFrame)
-	{
-		if (ZcullActive() && s_zcullStale)
-		{
-			CmdReserve(8);
-			rsxSetZCullInvalidate(s_ctx);
-			s_zcullStale = false;
-		}
-		CmdReserve(kMaxPacketWords + 64);
-		ForgetSentState();
-		recStart = (const u32*)s_ctx->current;
-		recSegs = SegmentChanges();
-	}
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
 	DP_MARK(kDpState);
+	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms || s_vsAlways)
+	{
+		float vc[kVcCount][4];
+		FillVsConstants(dev, vc);
+		UseVertexProgram(vp, vc);
+		s_vcSerial = dev->m_vsSerial;
+	}
+	else
+		UseVertexProgram(vp, NULL);
+	DP_MARK(kDpVsConst);
 	if (!UseFragmentProgram(fp, fc)) return false;
 	DP_MARK(kDpFp);
 	for (int t = 0; t < 4; ++t)
@@ -2360,6 +2048,12 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_capture) LogCapturedDraw(dev, call, l, count, stride, tex, fp, hasDepth);
 	if (s_skipFrame) return false;	// the command buffer ran out on the way here: the frame is dropped
 	CmdReserve(64 + count / 256 * 2);
+	// Only after vertex data was written (a175dd3; steady once fragment programs stopped being reused).
+	if (s_vertexWritten)
+	{
+		rsxInvalidateVertexCache(s_ctx);
+		s_vertexWritten = false;
+	}
 	if (call.indexed)
 	{
 		const bool i32 = call.vertexData ? call.indexFormat == D3DFMT_INDEX32 : dev->m_indices->m_format == D3DFMT_INDEX32;
@@ -2367,7 +2061,6 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	}
 	else
 		rsxDrawVertexArray(s_ctx, type, 0, count);
-	if (recStart && !s_skipFrame) RecordPacket(dev, slot, recStart, recSegs, hasDepth, l, tex, fp, fc, vp, vbase, stride, ioff);
 	++s_stats.drawn;
 	if (++s_drawsSinceKick >= kKickDraws) Kick();
 	DP_MARK(kDpSubmit);
@@ -2561,9 +2254,6 @@ bool DrawInit()
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
 	s_fpReuse = FlagFile("rsx_fp_reuse.txt");
-	s_noPackets = FlagFile("rsx_no_packets.txt");
-	if (!s_noPackets) s_slots = (PacketSlot*)calloc(kPacketSlots, sizeof(PacketSlot));
-	GpuLog("draw packets: %s", s_noPackets ? "off (rsx_no_packets.txt)" : s_slots ? "on" : "off (no memory for the table)");
 	if (s_fpReuse) GpuLog("rsx_fp_reuse.txt: fragment programs reused instead of a fresh copy per draw");
 	if (s_noTargetWait) GpuLog("rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture");
 	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
@@ -2620,7 +2310,6 @@ void DrawFrameStart()
 	s_currentFpOffset = 0xFFFFFFFF;
 	memset(s_vcValid, 0, sizeof(s_vcValid));
 	s_vcSerial = 0;
-	s_zcullControlSent = false;
 	s_doneCache = FramesDone();
 	s_doneAge = 0;
 	memset(s_bound, 0, sizeof(s_bound));
@@ -2638,11 +2327,11 @@ const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
-		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, draw packets: %u replayed, %u recorded, %u not recordable (%u KB), %u RSX frees waiting; "
+		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
-		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, s_stats.replayed, s_stats.recorded, s_stats.packetFails, (unsigned)(s_packetBytes / 1024), (unsigned)s_deferredCount,
+		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
@@ -2710,7 +2399,6 @@ void ShaderReleased(IDirect3DVertexShader9*) {}
 void ShaderReleased(IDirect3DPixelShader9* ps)
 {
 	DeviceGuard guard;
-	++s_packetEpoch;	// packets may name its fragment programs
 	// Drop its cached programs (the key holds the pointer, which may be reused).
 	for (int fog = 0; fog < 2; ++fog)
 	{
