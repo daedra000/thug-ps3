@@ -56,6 +56,10 @@
 #include <ps3_fs.h>
 #include "d3d9_rsx_internal.h"
 
+// Timebase ticks the game thread spent at a frame's start waiting for a flip to happen or for
+// the RSX to catch up (FrameBegin), for the main loop's profile (Mainloop.cpp).
+unsigned long long g_ps3FrameGateTicks;
+
 extern "C" const char* Ps3UsbRoot();	// ps3_diag.cpp: first USB drive, or NULL
 
 namespace Ps3Gfx
@@ -416,12 +420,14 @@ static void FrameBegin()
 {
 	if (s_frameReady) return;
 	s_frameReady = true;
+	const unsigned long long gate0 = __builtin_ppc_get_timebase();
 	s_skipFrame = !FlipGate();
-	if (s_skipFrame) { ++s_skipped; return; }
+	if (s_skipFrame) { ++s_skipped; g_ps3FrameGateTicks += __builtin_ppc_get_timebase() - gate0; return; }
 	// The RSX must have finished the frame before last, which read the buffer we are
 	// about to draw into (the flip status alone can't say so after a forced flip).
 	int t = 0;
 	for (; t < 4000 && FramesDone() + 1 < s_frameSeq; ++t) usleep(250);
+	g_ps3FrameGateTicks += __builtin_ppc_get_timebase() - gate0;
 	if (t == 4000)
 	{
 		// Still behind after 1 s. Drawing on would reuse the frame ring slot and the back

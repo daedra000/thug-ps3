@@ -70,6 +70,8 @@ void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
 static unsigned s_ps3Frame = 0;
+extern unsigned long long g_ps3FrameGateTicks;	// d3d9_rsx.cpp: flip and RSX waits at frame starts
+static unsigned long long s_profGateLast;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
 
 // Frame profiler: each main loop frame is split into phases, timed with the PPU timebase (a
@@ -89,6 +91,8 @@ namespace
 		u64 worstTotal;
 		u64 worst[kProfPhases];		// the slowest frame's phases
 		unsigned worstFrame;
+		u64 slowSum[kProfPhases];	// totals over the frames over 20 ms
+		u64 gate, slowGate;			// of render and present: waiting for a flip or the RSX (FrameBegin)
 	};
 	FrameProfile s_prof;
 
@@ -106,7 +110,7 @@ namespace
 	}
 
 	// One frame's phase times: added to the window, and the summary written once it is 10 s old.
-	void ProfCommit(const u64 ph[kProfPhases], bool skipped, unsigned frame, u64 now)
+	void ProfCommit(const u64 ph[kProfPhases], bool skipped, unsigned frame, u64 now, u64 gate)
 	{
 		FrameProfile& p = s_prof;
 		if (!p.tbPerMs)
@@ -126,7 +130,13 @@ namespace
 			for (int i = 0; i < kProfPhases; ++i) p.sum[i] += ph[i];
 			++p.frames;
 			if (skipped) ++p.skipped;
-			if (total > 20 * p.tbPerMs) ++p.slow;
+			p.gate += gate;
+			if (total > 20 * p.tbPerMs)
+			{
+				++p.slow;
+				for (int i = 0; i < kProfPhases; ++i) p.slowSum[i] += ph[i];
+				p.slowGate += gate;
+			}
 			if (total > p.worstTotal)
 			{
 				p.worstTotal = total;
@@ -137,7 +147,7 @@ namespace
 		if (now - p.windowStart < 10000 * p.tbPerMs)
 			return;
 
-		char line[640], *o = line, *end = line + sizeof(line);
+		char line[1024], *o = line, *end = line + sizeof(line);
 		o += snprintf(o, end - o, "[prof] %u frames (%u not drawn, %u over 20 ms, %u loads left out) avg ms:",
 			(unsigned)p.frames, (unsigned)p.skipped, (unsigned)p.slow, (unsigned)p.longFrames);
 		u64 avgTotal = 0;
@@ -149,6 +159,17 @@ namespace
 			o = ProfMs(o, end, avg);
 		}
 		if (o < end - 32) { o += snprintf(o, end - o, " = "); o = ProfMs(o, end, avgTotal); }
+		if (o < end - 64) { o += snprintf(o, end - o, " (waiting for a flip or the RSX "); o = ProfMs(o, end, p.frames ? p.gate / p.frames : 0); o += snprintf(o, end - o, " of it)"); }
+		if (p.slow && o < end - 64)
+		{
+			o += snprintf(o, end - o, "; frames over 20 ms avg:");
+			for (int i = 0; i < kProfPhases && o < end - 32; ++i)
+			{
+				o += snprintf(o, end - o, "%s %s ", i ? "," : "", s_profNames[i]);
+				o = ProfMs(o, end, p.slowSum[i] / p.slow);
+			}
+			if (o < end - 40) { o += snprintf(o, end - o, " (flip/RSX wait "); o = ProfMs(o, end, p.slowGate / p.slow); o += snprintf(o, end - o, ")"); }
+		}
 		if (o < end - 48) { o += snprintf(o, end - o, "; worst frame %u: ", p.worstFrame); o = ProfMs(o, end, p.worstTotal); o += snprintf(o, end - o, " ms ("); }
 		for (int i = 0; i < kProfPhases && o < end - 32; ++i)
 		{
@@ -759,7 +780,8 @@ void		Manager::MainLoop( void )
 		PS3_PHASE("frame: done");
 #ifdef __PLAT_PS3__
 		PS3_PROF_MARK(kProfOther);
-		ProfCommit(profPhase, NxXbox::g_disableRendering, s_ps3Frame, profLast);
+		ProfCommit(profPhase, NxXbox::g_disableRendering, s_ps3Frame, profLast, g_ps3FrameGateTicks - s_profGateLast);
+		s_profGateLast = g_ps3FrameGateTicks;
 #endif
  #ifdef	__PLAT_NGPS__		
 //		snProfSetRange( 4, (void*)NULL, (void*)-1);

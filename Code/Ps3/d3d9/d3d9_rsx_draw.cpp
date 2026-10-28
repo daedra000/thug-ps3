@@ -98,6 +98,7 @@ static struct Stats
 	unsigned texBlocks;		// re-uploads that needed a new RSX block (none was idle)
 	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
 	unsigned kicks;			// mid-frame command-buffer flushes
+	unsigned targetWaits;	// RSX idle waits after drawing into a texture
 	unsigned long long ringBytes;
 } s_stats;
 static char s_statsLine[1400];
@@ -259,7 +260,8 @@ static u32 s_doneCache;
 static unsigned s_doneAge;
 static bool s_freshDone;	// rsx_fresh_label.txt: read the label every time (a test switch)
 static bool s_vsAlways;		// rsx_vs_always.txt: recompute the vertex constants for every draw (a test switch)
-static bool s_slowDraws;	// rsx_slow_draws.txt: spin 2.5 us in every draw, nothing else changed (a test switch)
+static bool s_slowDraws;		// rsx_slow_draws.txt: spin 2.5 us in every draw, nothing else changed (a test switch)
+static bool s_noTargetWait;	// rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture (a test switch)
 static inline u32 DoneCached()
 {
 	if (s_freshDone) return FramesDone();
@@ -2199,6 +2201,22 @@ bool ApplyTarget(IDirect3DDevice9* dev, bool* hasDepth)
 
 	if (!s_targetValid || memcmp(&d, &s_target, sizeof(d)))
 	{
+		if (s_targetValid && !s_noTargetWait)
+		{
+			// Leaving a texture the game drew into (shadows, mostly): the RSX finishes those
+			// draws before the next ones start, as they may sample it. Without the wait a draw
+			// can read the texture while it is still being written, which only shows when the
+			// RSX has work queued back to back, i.e. when the CPU keeps it fed.
+			SurfaceDesc disp;
+			memset(&disp, 0, sizeof(disp));
+			DisplaySurface(&disp);
+			if (s_target.colorOffset != disp.colorOffset)
+			{
+				CmdReserve(8);
+				rsxSetWaitForIdle(s_ctx);
+				++s_stats.targetWaits;
+			}
+		}
 		s_target = d;
 		s_targetValid = true;
 		SetSurface(d);
@@ -2227,6 +2245,8 @@ bool DrawInit()
 	s_freshDone = FlagFile("rsx_fresh_label.txt");
 	s_vsAlways = FlagFile("rsx_vs_always.txt");
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
+	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
+	if (s_noTargetWait) GpuLog("rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture");
 	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
 	if (s_freshDone) GpuLog("rsx_fresh_label.txt: the fence label is read every time");
 	if (s_vsAlways) GpuLog("rsx_vs_always.txt: vertex constants recomputed for every draw");
@@ -2298,11 +2318,11 @@ const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
-		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u RSX frees waiting; "
+		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
-		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, (unsigned)s_deferredCount,
+		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
