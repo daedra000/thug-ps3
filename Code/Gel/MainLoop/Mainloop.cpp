@@ -71,6 +71,7 @@ void Win32_ApplyInputs();
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
 static unsigned s_ps3Frame = 0;
 unsigned long long g_ps3FrameGateTicks;	// added to by the renderer (d3d9_rsx.cpp): flip and RSX waits at frame starts
+volatile unsigned g_ps3FlipsQueued;	// counted by the renderer (d3d9_rsx.cpp): flips queued, for the frame pacing
 static unsigned long long s_profGateLast;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
 
@@ -482,6 +483,59 @@ void		Manager::MainLoop( void )
 		u64 profPhase[kProfPhases] = { 0 };
 		u64 profLast = ProfNow();
 #endif
+#ifdef __PLAT_PS3__
+		// PS3 pacing: the display paces the loop. A frame that flipped already waited for the
+		// vsync at its start (the renderer's flip gate), so it doesn't also wait for a 60 Hz
+		// timer of its own: the two clocks drifted against each other (the display runs at
+		// 59.94 Hz), and a frame that had just waited for the timer then waited a whole extra
+		// vsync for the flip, 33 ms for a frame with 5 ms of work. The timer still paces frames
+		// that drew nothing (loading, the system holding the display), but not the catch-up
+		// frames below. Frames that ran late are counted up, and a frame is left undrawn
+		// (up to 4 in a row) to let the game logic catch up, as before.
+		{
+			static unsigned long long s_prevStart = 0;
+			static long long s_late = 0;
+			static unsigned s_flipsSeen = 0;
+			static bool s_prevSkipped = false;
+			const long long tick = (long long)(frequency.QuadPart / 60);
+			const bool flipped = g_ps3FlipsQueued != s_flipsSeen;
+			s_flipsSeen = g_ps3FlipsQueued;
+			LARGE_INTEGER now;
+			QueryPerformanceCounter(&now);
+			if (!flipped && !s_prevSkipped && s_prevStart)
+			{
+				for (;;)
+				{
+					const long long remaining = (long long)(s_prevStart + tick) - (long long)now.QuadPart;
+					if (remaining <= 0) break;
+					// Sleep while more than 1.5 ms remain (lv2 may oversleep a little), then yield.
+					const long long remainingUs = remaining * 1000000 / frequency.QuadPart;
+					if (remainingUs > 1500)
+						sysUsleep((u32)(remainingUs > 20000 ? 19000 : remainingUs - 1000));
+					else
+						Sleep(0);
+					QueryPerformanceCounter(&now);
+				}
+			}
+			PS3_PROF_MARK(kProfWait);
+			const long long elapsed = s_prevStart ? (long long)(now.QuadPart - s_prevStart) : tick;
+			s_prevStart = now.QuadPart;
+			// Up to 0.5% over a tick is on time: the display's 59.94 Hz.
+			s_late += elapsed - tick - tick / 200;
+			if (s_late < 0) s_late = 0;
+			if (s_late > 20 * tick) s_late = 0;	// a load or a long hold: start counting again
+			NxXbox::g_disableRendering = false;
+			if (s_late > tick / 2 && s_mainLoopCounter < 4 && g_isWindowInFocus)
+			{
+				++s_mainLoopCounter;
+				NxXbox::g_disableRendering = true;
+			}
+			else
+				s_mainLoopCounter = 0;
+			s_prevSkipped = NxXbox::g_disableRendering;
+			perf.QuadPart = now.QuadPart;	// (unused on PS3 from here)
+		}
+#else
 		LARGE_INTEGER perfcount;
 		QueryPerformanceCounter(&perfcount);
 		LONG itr;
@@ -541,6 +595,7 @@ void		Manager::MainLoop( void )
 			}
 		}
 		perf.QuadPart += __PAIR64__(v3, v4);
+#endif
 
 		Tmr::Vblank();
 		Tmr::PreUpdateTimerInfo();

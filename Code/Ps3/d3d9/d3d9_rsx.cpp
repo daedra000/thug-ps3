@@ -59,6 +59,7 @@
 // Timebase ticks the game thread spent at a frame's start waiting for a flip to happen or for
 // the RSX to catch up (FrameBegin), for the main loop's profile (defined in Mainloop.cpp).
 extern unsigned long long g_ps3FrameGateTicks;
+extern volatile unsigned g_ps3FlipsQueued;	// Mainloop.cpp: the frame pacing waits on the flip gate instead of its timer
 
 extern "C" const char* Ps3UsbRoot();	// ps3_diag.cpp: first USB drive, or NULL
 
@@ -724,6 +725,7 @@ void Present(IDirect3DDevice9*)
 		rsxFlushBuffer(s_ctx);
 		s_flipPending = true;
 		++s_flipsQueued;
+		++g_ps3FlipsQueued;
 		s_cur = (s_cur + 1) % s_buffers;
 	}
 	if (s_frames <= 3 || (s_frames % 600) == 0)
