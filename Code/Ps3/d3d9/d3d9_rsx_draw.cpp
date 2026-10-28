@@ -266,6 +266,10 @@ static bool s_slowDraws;		// rsx_slow_draws.txt: spin 2.5 us in every draw, noth
 // match) instead of a fresh copy per draw. They flashed in October before the wait after
 // texture targets (s_noTargetWait) existed, which may have been the real cause (a test switch).
 static bool s_fpReuse;
+// rsx_full_state.txt: every draw sends its whole state (a test); rsx_full_keep_state.txt,
+// _view, _textures, _attribs, _fp leave that part out of it (s_fullKeep bits 1, 2, 4, 8, 16).
+static bool s_fullState;
+static unsigned s_fullKeep;
 static bool s_noTargetWait;	// rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture (a test switch)
 static inline u32 DoneCached()
 {
@@ -2024,6 +2028,16 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_resendState) { s_stateValid = false; s_viewValid = false; s_clipsSent = false; }
 	if (s_resendPrograms) { s_currentVp = NULL; s_currentFpOffset = 0xFFFFFFFF; memset(s_vcValid, 0, sizeof(s_vcValid)); }
 	if (s_rebindAttribs) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
+	if (s_fullState)
+	{
+		// Test: every draw sends everything, as the first draw of a frame does (the draw
+		// packets did this for each draw they recorded, and flickered all over).
+		if (!(s_fullKeep & 1)) s_stateValid = false;
+		if (!(s_fullKeep & 2)) { s_viewValid = false; s_clipsSent = false; }
+		if (!(s_fullKeep & 4)) memset(s_bound, 0, sizeof(s_bound));
+		if (!(s_fullKeep & 8)) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
+		if (!(s_fullKeep & 16)) s_currentFpOffset = 0xFFFFFFFF;
+	}
 	ApplyView(dev);
 	ApplyState(dev, hasDepth);
 	DP_MARK(kDpState);
@@ -2254,6 +2268,13 @@ bool DrawInit()
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
 	s_fpReuse = FlagFile("rsx_fp_reuse.txt");
+	s_fullState = FlagFile("rsx_full_state.txt");
+	s_fullKeep = (FlagFile("rsx_full_keep_state.txt") ? 1 : 0) | (FlagFile("rsx_full_keep_view.txt") ? 2 : 0) |
+		(FlagFile("rsx_full_keep_textures.txt") ? 4 : 0) | (FlagFile("rsx_full_keep_attribs.txt") ? 8 : 0) |
+		(FlagFile("rsx_full_keep_fp.txt") ? 16 : 0);
+	if (s_fullState) GpuLog("rsx_full_state.txt: every draw sends its whole state (kept as before: %s%s%s%s%s)",
+		s_fullKeep & 1 ? "render state " : "", s_fullKeep & 2 ? "view " : "", s_fullKeep & 4 ? "textures " : "",
+		s_fullKeep & 8 ? "attributes " : "", s_fullKeep & 16 ? "fragment program" : "");
 	if (s_fpReuse) GpuLog("rsx_fp_reuse.txt: fragment programs reused instead of a fresh copy per draw");
 	if (s_noTargetWait) GpuLog("rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture");
 	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
