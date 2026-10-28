@@ -38,6 +38,7 @@
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
 extern int g_ps3SceneTrace;	// p_nxsector.cpp
+extern unsigned long long g_ps3StageTicks[];	// Mainloop.cpp: this frame's CPU time by stage, for the slow-frame profile
 #endif
 
 #include	"gfx\camera.h"
@@ -361,7 +362,7 @@ enum { kRwShadow, kRwOpaqueScenes, kRwSplats, kRwOpaqueInst, kRwSky, kRwSemiInst
 static const char* const kRwNames[kRwPhases] = { "shadows", "opaque world", "splats+imposters", "opaque instances", "sky", "semi instances (pre)", "semi world", "particles+weather+shatter", "semi instances (post)" };
 static unsigned long long s_rw[kRwPhases];
 static unsigned s_rwFrames;
-#define RW_MARK(phase) do { const unsigned long long n_ = __builtin_ppc_get_timebase(); s_rw[phase] += n_ - rwLast; rwLast = n_; } while (0)
+#define RW_MARK(phase) do { const unsigned long long n_ = __builtin_ppc_get_timebase(); s_rw[phase] += n_ - rwLast; g_ps3StageTicks[phase] += n_ - rwLast; rwLast = n_; } while (0)
 #else
 #define RW_MARK(phase) do { } while (0)
 #endif

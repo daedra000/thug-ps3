@@ -71,6 +71,12 @@ void Win32_ApplyInputs();
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
 static unsigned s_ps3Frame = 0;
 unsigned long long g_ps3FrameGateTicks;	// added to by the renderer (d3d9_rsx.cpp): flip and RSX waits at frame starts
+// This frame's CPU time in the world render's stages (p_nx.cpp, 0-8) and the draw calls (9,
+// d3d9_rsx_draw.cpp), for the profile of the frames over 20 ms.
+enum { kStages = 10 };
+unsigned long long g_ps3StageTicks[kStages];
+static const char* const s_stageNames[kStages] = { "shadows", "opaque world", "splats", "opaque instances", "sky",
+	"semi instances pre", "semi world", "particles", "semi instances post", "of which draw calls" };
 volatile unsigned g_ps3FlipsQueued;	// counted by the renderer (d3d9_rsx.cpp): flips queued, for the frame pacing
 static unsigned long long s_profGateLast;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
@@ -94,6 +100,7 @@ namespace
 		unsigned worstFrame;
 		u64 slowSum[kProfPhases];	// totals over the frames over 20 ms
 		u64 gate, slowGate;			// of render and present: waiting for a flip or the RSX (FrameBegin)
+		u64 stage[kStages], slowStage[kStages];	// world render stages (g_ps3StageTicks)
 	};
 	FrameProfile s_prof;
 
@@ -132,11 +139,13 @@ namespace
 			++p.frames;
 			if (skipped) ++p.skipped;
 			p.gate += gate;
+			for (int i = 0; i < kStages; ++i) p.stage[i] += g_ps3StageTicks[i];
 			if (total > 20 * p.tbPerMs)
 			{
 				++p.slow;
 				for (int i = 0; i < kProfPhases; ++i) p.slowSum[i] += ph[i];
 				p.slowGate += gate;
+				for (int i = 0; i < kStages; ++i) p.slowStage[i] += g_ps3StageTicks[i];
 			}
 			if (total > p.worstTotal)
 			{
@@ -148,7 +157,7 @@ namespace
 		if (now - p.windowStart < 10000 * p.tbPerMs)
 			return;
 
-		char line[1024], *o = line, *end = line + sizeof(line);
+		char line[1800], *o = line, *end = line + sizeof(line);
 		o += snprintf(o, end - o, "[prof] %u frames (%u not drawn, %u over 20 ms, %u loads left out) avg ms:",
 			(unsigned)p.frames, (unsigned)p.skipped, (unsigned)p.slow, (unsigned)p.longFrames);
 		u64 avgTotal = 0;
@@ -170,6 +179,16 @@ namespace
 				o = ProfMs(o, end, p.slowSum[i] / p.slow);
 			}
 			if (o < end - 40) { o += snprintf(o, end - o, " (flip/RSX wait "); o = ProfMs(o, end, p.slowGate / p.slow); o += snprintf(o, end - o, ")"); }
+		}
+		// The world render's stages: every frame's average, then the slow frames'.
+		if (o < end - 48) o += snprintf(o, end - o, "; world render avg (slow frames):");
+		for (int i = 0; i < kStages && o < end - 64; ++i)
+		{
+			o += snprintf(o, end - o, "%s %s ", i ? "," : "", s_stageNames[i]);
+			o = ProfMs(o, end, p.frames ? p.stage[i] / p.frames : 0);
+			o += snprintf(o, end - o, " (");
+			o = ProfMs(o, end, p.slow ? p.slowStage[i] / p.slow : 0);
+			o += snprintf(o, end - o, ")");
 		}
 		if (o < end - 48) { o += snprintf(o, end - o, "; worst frame %u: ", p.worstFrame); o = ProfMs(o, end, p.worstTotal); o += snprintf(o, end - o, " ms ("); }
 		for (int i = 0; i < kProfPhases && o < end - 32; ++i)
@@ -836,6 +855,7 @@ void		Manager::MainLoop( void )
 #ifdef __PLAT_PS3__
 		PS3_PROF_MARK(kProfOther);
 		ProfCommit(profPhase, NxXbox::g_disableRendering, s_ps3Frame, profLast, g_ps3FrameGateTicks - s_profGateLast);
+		memset(g_ps3StageTicks, 0, sizeof(g_ps3StageTicks));
 		s_profGateLast = g_ps3FrameGateTicks;
 #endif
  #ifdef	__PLAT_NGPS__		

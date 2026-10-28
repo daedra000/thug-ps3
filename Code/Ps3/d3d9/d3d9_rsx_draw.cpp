@@ -64,6 +64,7 @@ extern volatile unsigned long long g_ps3TextureRamBytes;
 #include <vector>
 #include <rsx/rsx.h>
 
+extern unsigned long long g_ps3StageTicks[];	// Mainloop.cpp: this frame's CPU time by stage (9: the draw calls)
 namespace Ps3Gfx
 {
 
@@ -2073,7 +2074,9 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 	if (s_slowDraws)
 		while (__builtin_ppc_get_timebase() - t0 < 200) {}	// 200 ticks of 79.8 MHz: 2.5 us
 	DoDraw(dev, call);
-	s_dpTotal += __builtin_ppc_get_timebase() - t0;
+	const unsigned long long dt = __builtin_ppc_get_timebase() - t0;
+	s_dpTotal += dt;
+	::g_ps3StageTicks[9] += dt;	// Mainloop.cpp's slow-frame profile: the draw calls
 }
 
 // ---------------------------------------------------------------------------
