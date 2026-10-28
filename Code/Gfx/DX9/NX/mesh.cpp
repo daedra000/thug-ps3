@@ -3,7 +3,10 @@
 #include <ps3_platform.h>
 extern int g_ps3SceneTrace;	// p_nxsector.cpp
 #define PS3_MESH_TRACE(...) do { if (g_ps3SceneTrace > 0) Ps3Platform::Trace(__VA_ARGS__); } while (0)
+extern unsigned long long g_ps3StageTicks[];	// Mainloop.cpp: this frame's CPU time by stage
+#define PS3_STAGE(slot, t) do { const unsigned long long n_ = __builtin_ppc_get_timebase(); g_ps3StageTicks[slot] += n_ - (t); (t) = n_; } while (0)
 #else
+#define PS3_STAGE(slot, t) do { } while (0)
 #define PS3_MESH_TRACE(...) do { } while (0)
 #endif
 #include <sys/file/filesys.h>
@@ -985,6 +988,9 @@ void sMesh::TransformVertexBuffer_CASE3(BYTE* a2)
 // LWSS major changes for PC -- Considering done for now...
 void sMesh::Submit( void )
 {
+#ifdef __PLAT_PS3__
+	unsigned long long ps3t = __builtin_ppc_get_timebase();
+#endif
 	DWORD	stage_zero_minfilter = 0;
 	DWORD	zwrite = 0;
 	
@@ -1088,6 +1094,7 @@ DISABLE_FOG:
 	//IDirect3DVertexBuffer8*	p_submit_buffer = mp_vertex_buffer[m_current_write_vertex_buffer];
 	//IDirect3DVertexBuffer9*	p_submit_buffer = mp_vertex_buffer[m_current_write_vertex_buffer];
 	
+	PS3_STAGE(10, ps3t);	// mesh setup
 	if (this->p_rawdata && (m_lastRenderFrameCount != g_globalFrameCounter || m_lastRenderFlags != renderFlags))
 	{
 		m_lastRenderFrameCount = g_globalFrameCounter;
@@ -1112,6 +1119,7 @@ DISABLE_FOG:
 		mp_vertex_buffer[m_current_write_vertex_buffer]->Unlock();
 	}
 
+	PS3_STAGE(11, ps3t);	// CPU-transformed vertices
 	// Swap multiple vertex buffers if present.
 	SwapVertexBuffers();
 	
@@ -1183,7 +1191,9 @@ DRAW_SHIT:
 	if (EngineGlobals.hasHLSLv101)
 	{
 		int prim_count = m_num_indices[idx] - 2;
+		PS3_STAGE(10, ps3t);	// mesh setup (buffers, LOD)
 		{ HRESULT hr_ = D3DDevice_DrawIndexedPrimitive(m_primitive_type, 0, 0, m_num_vertices, 0, prim_count); Dbg_Assert(hr_ == D3D_OK); (void)hr_; }
+		PS3_STAGE(12, ps3t);	// the draw call (the renderer included)
 	}
 	else
 	{
@@ -1220,6 +1230,7 @@ DRAW_SHIT:
 	{
 		NxXbox::set_render_state(RS_CULLMODE, D3DCULL_CW);
 	}
+	PS3_STAGE(10, ps3t);	// mesh setup (restoring state)
 
 	//Sleep(1000);
 }

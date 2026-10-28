@@ -22,6 +22,7 @@
 #include "billboard.h"
 #ifdef __PLAT_PS3__
 #include <ps3_fs.h>
+extern unsigned long long g_ps3StageTicks[];	// Mainloop.cpp: this frame's CPU time by stage
 #endif
 
 //#include "PixelShader0.h"
@@ -3334,6 +3335,9 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 				else
 				{
 					render = false;
+#ifdef __PLAT_PS3__
+					const unsigned long long ps3t = __builtin_ppc_get_timebase();
+#endif
 
 					// Check the visibility mask.
 					if( PS3_VIS_MASK_OK( p_mesh->m_visibility_mask & viewport ))
@@ -3341,18 +3345,31 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 						// Frustum cull this set of meshes, using the associated bounding sphere and bounding box.
 						if( frustum_check_sphere( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius ))
 						{
+#ifdef __PLAT_PS3__
+							const unsigned long long ps3o = __builtin_ppc_get_timebase();
+							g_ps3StageTicks[13] += ps3o - ps3t;	// frustum tests
+#endif
 							// Check against any occluders.
 							if(( !( flags & vRENDER_OCCLUDED )) || ( !TestSphereAgainstOccluders( &p_mesh->m_sphere_center, p_mesh->m_sphere_radius )))
 							{
 								render = true;
 							}
+#ifdef __PLAT_PS3__
+							g_ps3StageTicks[14] += __builtin_ppc_get_timebase() - ps3o;	// occluder tests
+#endif
 						}
+#ifdef __PLAT_PS3__
+						else g_ps3StageTicks[13] += __builtin_ppc_get_timebase() - ps3t;
+#endif
 					}
 				}
 
 				// Draw this mesh if we decided it is visible.
 				if( render )
 				{
+#ifdef __PLAT_PS3__
+					++g_ps3StageTicks[15];	// a count: opaque world meshes drawn
+#endif
 					if(( flags & vRENDER_SORT_FRONT_TO_BACK ) == 0 )
 					{
 						// lwss: Comment out for PC

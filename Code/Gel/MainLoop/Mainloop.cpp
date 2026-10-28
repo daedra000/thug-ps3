@@ -73,10 +73,13 @@ static unsigned s_ps3Frame = 0;
 unsigned long long g_ps3FrameGateTicks;	// added to by the renderer (d3d9_rsx.cpp): flip and RSX waits at frame starts
 // This frame's CPU time in the world render's stages (p_nx.cpp, 0-8) and the draw calls (9,
 // d3d9_rsx_draw.cpp), for the profile of the frames over 20 ms.
-enum { kStages = 10 };
+// 10-12: inside sMesh::Submit (mesh.cpp); 13-14: the opaque world's culling (render.cpp); 15: a
+// count of the opaque world meshes drawn, not a time.
+enum { kStages = 16 };
 unsigned long long g_ps3StageTicks[kStages];
 static const char* const s_stageNames[kStages] = { "shadows", "opaque world", "splats", "opaque instances", "sky",
-	"semi instances pre", "semi world", "particles", "semi instances post", "of which draw calls" };
+	"semi instances pre", "semi world", "particles", "semi instances post", "of which draw calls",
+	"mesh setup", "CPU-transformed vertices", "mesh draw calls", "frustum tests", "occluder tests", "" };
 volatile unsigned g_ps3FlipsQueued;	// counted by the renderer (d3d9_rsx.cpp): flips queued, for the frame pacing
 static unsigned long long s_profGateLast;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
@@ -182,7 +185,7 @@ namespace
 		}
 		// The world render's stages: every frame's average, then the slow frames'.
 		if (o < end - 48) o += snprintf(o, end - o, "; world render avg (slow frames):");
-		for (int i = 0; i < kStages && o < end - 64; ++i)
+		for (int i = 0; i < kStages - 1 && o < end - 64; ++i)
 		{
 			o += snprintf(o, end - o, "%s %s ", i ? "," : "", s_stageNames[i]);
 			o = ProfMs(o, end, p.frames ? p.stage[i] / p.frames : 0);
@@ -190,6 +193,9 @@ namespace
 			o = ProfMs(o, end, p.slow ? p.slowStage[i] / p.slow : 0);
 			o += snprintf(o, end - o, ")");
 		}
+		if (o < end - 64)
+			o += snprintf(o, end - o, ", opaque world meshes drawn %u (%u)", (unsigned)(p.frames ? p.stage[15] / p.frames : 0),
+				(unsigned)(p.slow ? p.slowStage[15] / p.slow : 0));
 		if (o < end - 48) { o += snprintf(o, end - o, "; worst frame %u: ", p.worstFrame); o = ProfMs(o, end, p.worstTotal); o += snprintf(o, end - o, " ms ("); }
 		for (int i = 0; i < kProfPhases && o < end - 32; ++i)
 		{
