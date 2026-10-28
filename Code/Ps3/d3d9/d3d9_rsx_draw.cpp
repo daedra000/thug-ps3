@@ -1463,6 +1463,7 @@ static bool s_stateValid;
 // part of the buffer, leaves ZCULL's values behind the buffer's: they are rebuilt
 // (invalidated) before the next draw that uses ZCULL. A clear of the whole buffer resets them.
 static bool s_zcullStale;
+static bool s_zcullControlSent;	// rsxSetZCullControl this frame (ApplyState)
 static u32 s_displayDepthOffset;	// the display's depth buffer (DrawInit)
 static SurfaceDesc s_target;	// the bound target (ApplyTarget)
 static bool s_targetValid;
@@ -1638,7 +1639,9 @@ static void ApplyState(IDirect3DDevice9* dev, bool hasDepth)
 	if (all || s.shade != o.shade) rsxSetShadeModel(s_ctx, s.shade);
 	if (zcull && (all || s.zcull != o.zcull))
 	{
-		if (all) rsxSetZCullControl(s_ctx, GCM_ZCULL_LESS, GCM_ZCULL_LONES);
+		// Once a frame: re-sent with every full state (each recorded draw, see "Draw packets")
+		// it came with tons of flicker.
+		if (!s_zcullControlSent) { rsxSetZCullControl(s_ctx, GCM_ZCULL_LESS, GCM_ZCULL_LONES); s_zcullControlSent = true; }
 		rsxSetZCullEnable(s_ctx, s.zcull ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
 	}
 	s_state = s;
@@ -2134,10 +2137,12 @@ static void RecordPacket(IDirect3DDevice9* dev, PacketSlot* slot, const u32* sta
 	const u32* end = (const u32*)s_ctx->current;
 	if (SegmentChanges() != segBefore || end <= start || (u32)(end - start) > kMaxPacketWords) { ++s_stats.packetFails; return; }
 	const u32 words = (u32)(end - start);
-	// The fragment program's address: the word after its FP_ADDRESS method.
+	// The fragment program's address: the word holding it, after an FP_ADDRESS method (the
+	// last one, should it turn up twice).
 	u32 fpWord = 0xFFFFFFFF;
-	for (u32 i = 0; i + 1 < words; ++i)
-		if (start[i] == ((1u << 18) | 0x08E4u))	// RSX_METHOD(NV40TCL_FP_ADDRESS, 1), as librsx writes it { fpWord = i + 1; break; }
+	const u32 fpValue = (GCM_LOCATION_RSX + 1) | (s_currentFpOffset & 0x1fffffff);
+	for (u32 i = 1; i < words; ++i)
+		if (start[i] == fpValue && (start[i - 1] & 0xFFFC) == 0x08E4u) fpWord = i;
 	if (fpWord == 0xFFFFFFFF) { ++s_stats.packetFails; return; }
 	const size_t bytes = sizeof(DrawPacket) + words * 4;
 	if (s_packetBytes + bytes > kMaxPacketBytes) { ++s_stats.packetFails; return; }
@@ -2615,6 +2620,7 @@ void DrawFrameStart()
 	s_currentFpOffset = 0xFFFFFFFF;
 	memset(s_vcValid, 0, sizeof(s_vcValid));
 	s_vcSerial = 0;
+	s_zcullControlSent = false;
 	s_doneCache = FramesDone();
 	s_doneAge = 0;
 	memset(s_bound, 0, sizeof(s_bound));
