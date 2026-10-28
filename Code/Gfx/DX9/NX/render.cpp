@@ -3244,7 +3244,6 @@ void render_shadow_volumes( sScene *p_scene, uint32 viewport )
 // no_frustum_cull.txt draws every world mesh, no_occlusion.txt skips the occluder test.
 extern uint32 NumOcclusionPolys;
 static int s_ps3NoFrustumCull = -1, s_ps3NoOcclusion = -1;
-static int s_ps3NoPrefetchSwitch = -1;	// no_prefetch.txt: no prefetching of the next meshes (a test switch)
 static bool Ps3CullSwitch(int& flag, const char* name)
 {
 	if (flag < 0)
@@ -3266,68 +3265,10 @@ static sMesh	*visible_mesh_array[VISIBLE_MESH_ARRAY_SIZE];
 /*                                                                */
 /******************************************************************/
 // LWSS: Function looks good
-#ifdef __PLAT_PS3__
-// Mesh after mesh, the draw path stalls on cache misses: a level's meshes, their materials,
-// buffers, textures and the renderer's records for them don't fit in the PPU's 512 KB cache,
-// and each is a chain of pointers (mesh -> buffer wrapper -> buffer -> RSX record). A draw
-// takes a few microseconds, so the next meshes' chains are fetched ahead, one link per mesh:
-// each step only reads pointers from lines fetched a mesh earlier. (Prefetching never faults
-// or changes anything; a wrong guess only costs a little bandwidth.)
-static inline void Ps3PrefetchAhead( sScene *p_scene, int e )
-{
-	sMesh **meshes = p_scene->m_meshes;
-	const int n = p_scene->m_num_mesh_entries;
-	if( e + 5 < n )
-	{
-		const char *m = (const char *)meshes[e + 5];
-		__builtin_prefetch( m ); __builtin_prefetch( m + 128 ); __builtin_prefetch( m + 256 );
-	}
-	if( e + 4 < n )
-	{
-		const sMesh *m = meshes[e + 4];
-		__builtin_prefetch( m->mp_material ); __builtin_prefetch( (const char *)m->mp_material + 128 );
-		__builtin_prefetch( m->mp_vertex_buffer[m->m_current_write_vertex_buffer] );
-		__builtin_prefetch( m->mp_index_buffer[0] );
-	}
-	if( e + 3 < n )
-	{
-		const sMesh *m = meshes[e + 3];
-		const VertexBufferWrapper *v = m->mp_vertex_buffer[m->m_current_write_vertex_buffer];
-		if( v ) __builtin_prefetch( v->vertexBuffer );
-		const IndexBufferWrapper *i = m->mp_index_buffer[0];
-		if( i ) __builtin_prefetch( i->indexBuffer );
-		const sMaterial *mt = m->mp_material;
-		if( mt ) { __builtin_prefetch( mt->mp_tex[0] ); __builtin_prefetch( mt->mp_tex[1] ); }
-	}
-	if( e + 2 < n )
-	{
-		const sMesh *m = meshes[e + 2];
-		const VertexBufferWrapper *v = m->mp_vertex_buffer[m->m_current_write_vertex_buffer];
-		if( v && v->vertexBuffer ) __builtin_prefetch( v->vertexBuffer->m_backend );
-		const IndexBufferWrapper *i = m->mp_index_buffer[0];
-		if( i && i->indexBuffer ) __builtin_prefetch( i->indexBuffer->m_backend );
-		const sMaterial *mt = m->mp_material;
-		if( mt && mt->mp_tex[0] ) __builtin_prefetch( mt->mp_tex[0]->pD3DTexture );
-		if( mt && mt->mp_tex[1] ) __builtin_prefetch( mt->mp_tex[1]->pD3DTexture );
-	}
-	if( e + 1 < n )
-	{
-		const sMesh *m = meshes[e + 1];
-		const sMaterial *mt = m->mp_material;
-		if( mt && mt->mp_tex[0] && mt->mp_tex[0]->pD3DTexture ) __builtin_prefetch( mt->mp_tex[0]->pD3DTexture->m_backend );
-		if( mt && mt->mp_tex[1] && mt->mp_tex[1]->pD3DTexture ) __builtin_prefetch( mt->mp_tex[1]->pD3DTexture->m_backend );
-	}
-}
-#define PS3_PREFETCH_AHEAD( s, e ) do { if( !s_ps3NoPrefetch ) Ps3PrefetchAhead( s, e ); } while( 0 )
-#else
-#define PS3_PREFETCH_AHEAD( s, e ) do { } while( 0 )
-#endif
-
 void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 {
 	sMaterial		*p_material					= NULL;
 #ifdef __PLAT_PS3__
-	const bool s_ps3NoPrefetch = Ps3CullSwitch( s_ps3NoPrefetchSwitch, "no_prefetch.txt" );
 	if( Ps3CullSwitch( s_ps3NoOcclusion, "no_occlusion.txt" ))
 		flags &= ~vRENDER_OCCLUDED;
 	// The opaque pass drew meshes within 50 feet at once and deferred the rest to a second
@@ -3384,7 +3325,6 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 			sMesh *p_mesh = p_scene->m_meshes[e];
 
 			PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
-			PS3_PREFETCH_AHEAD( p_scene, e );
 			
 			if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 			{
@@ -3532,7 +3472,6 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 			sMesh *p_mesh = p_scene->m_meshes[e];
 
 			PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
-			PS3_PREFETCH_AHEAD( p_scene, e );
 
 			if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 			{
@@ -3591,7 +3530,6 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 				sMesh *p_mesh = p_scene->m_meshes[e];
 
 				PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
-				PS3_PREFETCH_AHEAD( p_scene, e );
 
 				if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 				{
@@ -3661,7 +3599,6 @@ void render_scene( sScene *p_scene, uint32 flags, uint32 viewport )
 				sMesh *p_mesh = p_scene->m_meshes[e];
 
 				PREFETCH_MESH( p_mesh );			// Get first 32 bytes of sMesh structure.
-				PS3_PREFETCH_AHEAD( p_scene, e );
 
 				if(( p_mesh->m_flags & sMesh::MESH_FLAG_ACTIVE ) && (( p_mesh->m_flags & ( sMesh::MESH_FLAG_SHADOW_VOLUME | sMesh::MESH_FLAG_BILLBOARD )) == 0 ))
 				{

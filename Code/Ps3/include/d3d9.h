@@ -735,12 +735,6 @@ public:
 	// viewport, material, lights, ambient, fog range, point size): draws with the same serial
 	// skip recomputing and comparing them (RsxPipeline::FillVsConstants).
 	unsigned m_vsSerial;
-	// Bumped by any change to the rest of the state a draw's programs, textures and render
-	// state come from (render target, render/stage/sampler states, textures, FVF, shaders,
-	// pixel shader constants, viewport, scissor, lights): a draw with the same serial as the
-	// previous one reuses its set-up (d3d9_rsx_draw.cpp). Transforms, streams and indices
-	// don't count.
-	unsigned m_stateSerial;
 	RECT m_scissor;
 	DWORD m_fvf;
 	IDirect3DVertexDeclaration9* m_decl;
