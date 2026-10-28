@@ -69,6 +69,10 @@
 
 
 #include <gfx/2D/ScreenElemMan.h>
+#include <gfx/2D/TextElement.h>
+#ifdef __PLAT_PS3__
+#include <ps3_osk.h>
+#endif
 
 #include <sk/objects/skater.h>		   // just for pausing the skater, and for running the "run me now" script
 
@@ -193,6 +197,9 @@ void FrontEnd::AddKeyboardHandler( int max_string_length )
 
 void FrontEnd::RemoveKeyboardHandler( void )
 {
+#ifdef __PLAT_PS3__
+	Ps3Osk::Close();
+#endif
 	m_handle_keyboard_task->Remove();
 }
 
@@ -603,7 +610,37 @@ void FrontEnd::s_handle_keyboard_code( const Tsk::Task< FrontEnd >& task )
 	char makes[256];
 	FrontEnd& mdl = task.GetData();
 		
+#ifdef __PLAT_PS3__
+	// No keyboard on the console: the dialog's text is typed on the system keyboard, and comes
+	// back as keys (Ps3Osk::Read). It opens with the text the dialog has now.
+	static_assert( SIO::vKB_BACKSPACE == 24 && SIO::vKB_ENTER == 25, "the key codes Ps3Osk::Read uses" );
+	{
+		char current[256];
+		current[0] = '\0';
+		Front::CScreenElementManager* p_manager = Front::CScreenElementManager::Instance();
+		Front::CScreenElementPtr p_elem = p_manager->GetElement( CRCD( 0x6df45f28, "keyboard_current_string" ));
+		if( p_elem )
+		{
+			if( (uint32)p_elem->GetType() == CRCD( 0x40d92263, "TextBlockElement" ))
+				((Front::CTextBlockElement*)p_elem.Convert())->GetText( current, sizeof( current ));
+			else if( (uint32)p_elem->GetType() == CRCD( 0x5200dfb6, "TextElement" ))
+			{
+				const char* p_text = ((Front::CTextElement*)p_elem.Convert())->GetText();
+				if( p_text ) { strncpy( current, p_text, sizeof( current ) - 1 ); current[sizeof( current ) - 1] = '\0'; }
+			}
+		}
+		Ps3Osk::Poll( mdl.m_max_kb_string_length, "Enter text", current );
+		num_chars = Ps3Osk::Read( makes, sizeof( makes ));
+		if( num_chars < 0 )
+		{
+			// Cancelled on the system keyboard: the dialog's own back (its cancel script).
+			Obj::CTracker::Instance()->LaunchEvent( CRCD( 0x7ee0fd2a, "pad_back" ), CRCD( 0x31631b98, "keyboard_anchor" ));
+			num_chars = 0;
+		}
+	}
+#else
 	num_chars = SIO::KeyboardRead( makes );
+#endif
 
 	for( i = 0; i < num_chars; i++ )
 	{

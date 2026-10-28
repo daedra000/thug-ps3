@@ -23,6 +23,7 @@
 // 11Dec02 JCB - Andre wanted me to use tolower() instead of strncmpi()
 #include <core/endian.h>
 #include <ctype.h>
+#include <stdio.h>
 
 #include <sys/file/pip.h>
 #include <sys/file/pre.h>
@@ -1047,6 +1048,13 @@ void * LoadAlloc(const char *p_fileName, int *p_filesize, void *p_dest, int maxS
 			if (!p_file)
 			{
 				Dbg_MsgAssert(0,("Could not open file '%s'",p_fileName));
+#ifdef __PLAT_PS3__
+				// (Asserts are compiled out: without this the size of a NULL handle is used, e.g.
+				// a Neversoft skater's PS2-only face, textures\skater_ns\*.img.ps2.)
+				printf("[file] %s: not found\n", p_fileName);
+				if (p_filesize) *p_filesize = 0;
+				return NULL;
+#endif
 			}
 
 			file_size=File::GetFileSize(p_file);
@@ -1054,6 +1062,15 @@ void * LoadAlloc(const char *p_fileName, int *p_filesize, void *p_dest, int maxS
 			{
 				Dbg_MsgAssert(0,("Zero file size for file %s",p_fileName));
 			}
+#ifdef __PLAT_PS3__
+			if (file_size <= 0)
+			{
+				printf("[file] %s: size %d, not loaded\n", p_fileName, file_size);
+				File::Close(p_file);
+				if (p_filesize) *p_filesize = 0;
+				return NULL;
+			}
+#endif
 
 			if (!p_dest)
 			{

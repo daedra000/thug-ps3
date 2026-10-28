@@ -1,6 +1,7 @@
 // THUG PS3: platform start-up, log and system pump (see ps3_platform.h).
 
 #include <ps3_platform.h>
+#include <ps3_osk.h>
 #include <ps3_fs.h>
 
 #include <stdio.h>
@@ -158,7 +159,7 @@ namespace
 		case SYSUTIL_EXIT_GAME:  s_quit = true; s_quitTime = sysGetSystemTime(); break;
 		case SYSUTIL_MENU_OPEN:  s_menuOpen = true; break;
 		case SYSUTIL_MENU_CLOSE: s_menuOpen = false; break;
-		default: break;
+		default: Ps3Osk::OnSysutil(status); break;	// the system keyboard's events
 		}
 	}
 }

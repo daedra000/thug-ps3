@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <io/pad.h>
+#include <ps3_osk.h>
 #include <sys/systime.h>
 
 namespace
@@ -94,6 +95,12 @@ int SDL_PollEvent(SDL_Event*)
 		padData d;
 		if (ioPadGetData(i, &d) == 0 && d.len > 0)
 			s_data[i] = d;
+		if (Ps3Osk::Active())
+		{
+			// The system keyboard has the pad: the game sees it untouched (sticks centred).
+			memset(&s_data[i], 0, sizeof(s_data[i]));
+			s_data[i].ANA_L_H = s_data[i].ANA_L_V = s_data[i].ANA_R_H = s_data[i].ANA_R_V = 0x80;
+		}
 	}
 	// The game would ignore events anyway; it reads state directly.
 	return 0;
