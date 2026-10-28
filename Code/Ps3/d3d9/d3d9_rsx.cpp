@@ -267,6 +267,11 @@ void CmdReserve(u32 words)
 	}
 }
 
+unsigned SegmentChanges()
+{
+	return s_segmentChanges;
+}
+
 u32 FramesDone()
 {
 	return *(vu32*)gcmGetLabelAddress(kFrameLabel);

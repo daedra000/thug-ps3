@@ -32,6 +32,7 @@ struct DeviceGuard
 	// is built) is done once this reaches n + 1, so a "used in frame n, +1" stamp compares
 	// straight against it.
 	u32 FramesDone();
+	unsigned SegmentChanges();	// command-buffer segment changes so far (CmdReserve)
 	void GpuLog(const char* fmt, ...);
 	bool WaitIdle(const char* what);
 
