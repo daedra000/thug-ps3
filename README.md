@@ -23,7 +23,9 @@ sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
 - [x] Little-endian PC data on the big-endian PS3 (see [docs/ps3-byte-order.md](docs/ps3-byte-order.md))
 - [x] RSX renderer: textures, buffers, programs generated from the fixed-function state and the
       game's ps_1_1 shaders, drawing into textures; 720p, the game's widescreen mode on 16:9
-- [x] Input: DualShock 3 (the game's PS2 pad layout maps one to one)
+- [x] Input: DualShock 3 (the game's PS2 pad layout maps one to one), vibration, and the PS2
+      button glyphs in the menus and tips
+- [x] Text entry (skater names and the like) with the PS3's on-screen keyboard
 - [x] Audio: music, level ambience (`streams/pcm/pcm.wad`) and sound effects (16-bit PCM and
       Xbox ADPCM)
 - [x] Movies: the PC data's Bink 1 movies (`Code/Ps3/video/bink_video.cpp`, LGPL 2.1+, derived
@@ -34,9 +36,13 @@ sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
 - [x] Renderer: tiled display and depth buffers, ZCULL, triple buffering; a 4 MB command
       buffer so the CPU and RSX work in parallel
 - [x] Surfaces flashing dark or pale as the camera moved: fixed (patched fragment programs
-      now get a fresh copy for every draw)
-- [ ] Performance: 27–60 fps in New Jersey. Being worked on: frames dropping to 30 fps, and a
-      short hitch when a level's ambient sound changes
+      get a fresh copy for every draw, and the RSX finishes drawing into a texture, such as a
+      shadow, before anything reads it)
+- [x] Frame pacing: frames that reach the screen wait only for the vsync (the TV's 59.94 Hz),
+      not also for a 60 Hz timer of the game's own; that cost a whole extra vsync on many frames
+- [ ] Performance: 60 fps in most places; busy views (over 1,000 level pieces on screen)
+      still drop to 30 fps, as drawing them takes the CPU 17–20 ms. Being worked on: a native
+      PS3 path for drawing the level, in place of the D3D9 layer
 - [ ] Story mode cutscenes past the first (being checked)
 - [ ] Saves (`USRDIR/Save`): written to a `.tmp` file and swapped in when complete; untested
 
@@ -53,17 +59,18 @@ sound. Still being tested; please send `USRDIR/thug-ps3.log` with any report.
    screenshot about every 30 seconds as `USRDIR/thug-frame-NNN.bmp` and log every draw of that
    frame. Each capture pauses the game for several seconds; it is off by default.
 
-Three PKGs are built (each CI run keeps them for 7 days):
+These PKGs are built (each CI run keeps them for 7 days):
 
 | PKG | What it is |
 |-----|------------|
 | `thug-ps3.pkg` | The game. |
 | `thug-ps3-asserts.pkg` | The game with its asserts on, logging to `thug-ps3.log`. For tracking down crashes. |
 | `thug-ps3-headless.pkg` | Test build: loads and runs the game logic without video, audio or pad, writing everything to the log. |
+| `thug-ps3-profile.pkg` | Branches other than `main` only: the game with the renderer's functions timed. Every 10 s the log gets the 40 that take the most CPU time (`[fprof]` lines). Runs slower than the game. |
 
 ## Building
 
-Every push builds both PKGs on GitHub Actions (**Actions** tab → latest run → artifacts). The
+Every push builds the PKGs on GitHub Actions (**Actions** tab → latest run → artifacts). The
 first run builds the PS3 toolchain (about two hours) and caches it.
 
 Locally, on Linux or WSL:
@@ -75,6 +82,8 @@ export PATH=$PS3DEV/bin:$PS3DEV/ppu/bin:$PATH
 
 make -f Makefile.ps3 -j$(nproc)              # thug-ps3.pkg
 make -f Makefile.ps3 HEADLESS=1 -j$(nproc)   # thug-ps3-headless.pkg
+make -f Makefile.ps3 ASSERTS=1 -j$(nproc)    # thug-ps3-asserts.pkg
+make -f Makefile.ps3 PROFILE=1 -j$(nproc)    # thug-ps3-profile.pkg
 ```
 
 `tools/ps3-check-all.sh` type-checks the whole tree with clang and the PSL1GHT headers, without
@@ -96,6 +105,10 @@ needed to play; leave them all out unless asked for one.
 | `rsx_notiles.txt` | No tiled display or depth buffers |
 | `rsx_no_zcull.txt` | ZCULL off |
 | `rsx_keep_texture_data.txt`, `rsx_keep_buffer_data.txt` | Keep the main-memory copies of uploaded textures / vertex buffers |
+| `rsx_no_target_wait.txt` | Don't make the RSX finish drawing into a texture before going on (brings back the shadow flicker) |
+| `rsx_vs_always.txt` | Work out the vertex constants for every draw, even when nothing they come from changed |
+| `rsx_fresh_label.txt` | Read the RSX's frame counter on every check instead of a copy refreshed every 32 draws |
+| `rsx_slow_draws.txt` | Wait 2.5 µs in every draw (timing tests) |
 | `no_frustum_cull.txt` | Draw every world mesh (no sphere test, visibility mask or occluders) |
 | `no_frustum_test.txt`, `no_vis_mask.txt`, `no_occlusion.txt` | Turn off one of those three |
 | `no_transparent_sort.txt` | Draw the sorted see-through meshes in scene order |
