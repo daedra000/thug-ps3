@@ -161,6 +161,7 @@
 #include <sk/language.h>
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>	// Ps3Platform::RequestQuit (QuitGame)
+#include <ps3_fs.h>	// Ps3Fs::Exists (no_neversoft_skaters.txt)
 #endif
 
 bool DumpFunctionTimesTrigger=false;
@@ -12857,6 +12858,25 @@ bool ScriptRotateVector( Script::CStruct* pParams, Script::CScript* pScript )
 // @script | IsPS2 | Returns true if the current hardware is PS2 (proview/devkit/regular).
 bool ScriptIsPS2( Script::CStruct* pParams, Script::CScript* pScript )
 {
+#ifdef __PLAT_PS3__
+	// The Neversoft skaters: naming a created skater after one of the aliases in the CAS
+	// bedroom's master_neversoft_skater_list gives that Neversoft developer's look, as on the
+	// PS2. The PC's check_for_neversoft_skaters only does that when IsPs2 is true (as the
+	// ClownJob'd PC mod does, IsPs2 says yes to that script alone). An empty
+	// USRDIR/no_neversoft_skaters.txt turns it off.
+	if( pScript && pScript->mScriptChecksum == 0x6aec78da )	// check_for_neversoft_skaters
+	{
+		static int s_off = -1;
+		if( s_off < 0 )
+		{
+			char path[600];
+			snprintf( path, sizeof( path ), "%s/no_neversoft_skaters.txt", Ps3Fs::AppDir());
+			s_off = Ps3Fs::Exists( path ) ? 1 : 0;
+			printf( "[cas] Neversoft skater names %s (no_neversoft_skaters.txt %s)\n", s_off ? "off" : "on", s_off ? "present" : "absent" );
+		}
+		return s_off == 0;
+	}
+#endif
 	// lwss add
 #ifdef __PLAT_WN32__
 	return false;
