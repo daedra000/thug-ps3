@@ -70,7 +70,7 @@ void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 // Main loop progress for the log: the frame number, and each phase of the first two frames.
 static unsigned s_ps3Frame = 0;
-extern unsigned long long g_ps3FrameGateTicks;	// d3d9_rsx.cpp: flip and RSX waits at frame starts
+unsigned long long g_ps3FrameGateTicks;	// added to by the renderer (d3d9_rsx.cpp): flip and RSX waits at frame starts
 static unsigned long long s_profGateLast;
 #define PS3_PHASE(name) do { if (s_ps3Frame <= 2) Ps3Platform::Step(name); } while (0)
 

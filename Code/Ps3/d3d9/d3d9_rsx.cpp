@@ -57,8 +57,8 @@
 #include "d3d9_rsx_internal.h"
 
 // Timebase ticks the game thread spent at a frame's start waiting for a flip to happen or for
-// the RSX to catch up (FrameBegin), for the main loop's profile (Mainloop.cpp).
-unsigned long long g_ps3FrameGateTicks;
+// the RSX to catch up (FrameBegin), for the main loop's profile (defined in Mainloop.cpp).
+extern unsigned long long g_ps3FrameGateTicks;
 
 extern "C" const char* Ps3UsbRoot();	// ps3_diag.cpp: first USB drive, or NULL
 
