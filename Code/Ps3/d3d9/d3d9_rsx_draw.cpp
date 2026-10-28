@@ -259,6 +259,7 @@ static u32 s_doneCache;
 static unsigned s_doneAge;
 static bool s_freshDone;	// rsx_fresh_label.txt: read the label every time (a test switch)
 static bool s_vsAlways;		// rsx_vs_always.txt: recompute the vertex constants for every draw (a test switch)
+static bool s_slowDraws;	// rsx_slow_draws.txt: spin 2.5 us in every draw, nothing else changed (a test switch)
 static inline u32 DoneCached()
 {
 	if (s_freshDone) return FramesDone();
@@ -2067,6 +2068,8 @@ void Draw(IDirect3DDevice9* dev, const DrawCall& call)
 		printf("[cap] (next draw goes to render target %ux%u format %d)\n", dev->m_renderTarget->m_width, dev->m_renderTarget->m_height, (int)dev->m_renderTarget->m_format);
 	++s_stats.draws;
 	const unsigned long long t0 = __builtin_ppc_get_timebase();
+	if (s_slowDraws)
+		while (__builtin_ppc_get_timebase() - t0 < 200) {}	// 200 ticks of 79.8 MHz: 2.5 us
 	DoDraw(dev, call);
 	s_dpTotal += __builtin_ppc_get_timebase() - t0;
 }
@@ -2223,6 +2226,8 @@ bool DrawInit()
 	s_keepBufferData = FlagFile("rsx_keep_buffer_data.txt");
 	s_freshDone = FlagFile("rsx_fresh_label.txt");
 	s_vsAlways = FlagFile("rsx_vs_always.txt");
+	s_slowDraws = FlagFile("rsx_slow_draws.txt");
+	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
 	if (s_freshDone) GpuLog("rsx_fresh_label.txt: the fence label is read every time");
 	if (s_vsAlways) GpuLog("rsx_vs_always.txt: vertex constants recomputed for every draw");
 	GpuLog("draw path: a175dd3 savings on, a fresh fragment-program copy per draw");
