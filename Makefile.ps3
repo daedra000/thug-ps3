@@ -8,6 +8,9 @@
 #   make -f Makefile.ps3 ASSERTS=1       the game's asserts compiled in: a failed one logs
 #                                        "[assert] file:line: message" (synced) and the
 #                                        game carries on -> thug-ps3-asserts.pkg
+#   make -f Makefile.ps3 PROFILE=1       the renderer's functions timed on the game thread: the
+#                                        log gets the top 40 by CPU time ([fprof] lines,
+#                                        Code/Ps3/sys/ps3_funcprof.cpp) -> thug-ps3-profile.pkg
 #   make -f Makefile.ps3 WARNINGS=1      also warn about pointer/int casts, uninitialised
 #                                        use and missing returns (tools/warning-gate.py)
 #   make -f Makefile.ps3 clean
@@ -24,6 +27,7 @@ HEADLESS  ?= 0
 DEBUG     ?= 0
 ASSERTS   ?= 0
 WARNINGS  ?= 0
+PROFILE   ?= 0
 
 VARIANT   := release
 ifeq ($(HEADLESS),1)
@@ -31,6 +35,9 @@ ifeq ($(HEADLESS),1)
 endif
 ifeq ($(ASSERTS),1)
   VARIANT := $(if $(filter release,$(VARIANT)),asserts,$(VARIANT)-asserts)
+endif
+ifeq ($(PROFILE),1)
+  VARIANT := $(if $(filter release,$(VARIANT)),profile,$(VARIANT)-profile)
 endif
 ifeq ($(DEBUG),1)
   VARIANT := $(VARIANT)-debug
@@ -73,6 +80,9 @@ endif
 # hanging (Core/Debug/Assert.cpp).
 ifeq ($(ASSERTS),1)
   DEFINES += -DPS3_ASSERTS
+endif
+ifeq ($(PROFILE),1)
+  DEFINES += -DPS3_FUNCPROF=1
 endif
 
 INCLUDES := -I$(SRC)/Ps3/include -I$(SRC) -I$(SRC)/Sk -I$(CASE_INC)
@@ -167,10 +177,18 @@ $(BUILD)/flags.txt: FORCE
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
+# The profile build times the renderer: the engine's graphics code, the D3D9 layer and the
+# RSX code (ps3_funcprof.cpp).
+ifeq ($(PROFILE),1)
+$(BUILD)/obj/Gfx/%.o: PROF_FLAGS := -finstrument-functions
+$(BUILD)/obj/Ps3/d3d9/%.o: PROF_FLAGS := -finstrument-functions
+$(BUILD)/obj/Ps3/rsx/%.o: PROF_FLAGS := -finstrument-functions
+endif
+
 $(BUILD)/obj/%.o: $(SRC)/%.cpp $(BUILD)/flags.txt
 	@mkdir -p $(dir $@)
 	@echo "CXX $*.cpp"
-	@$(CXX) $(CXXFLAGS) -c $< -o $@
+	@$(CXX) $(CXXFLAGS) $(PROF_FLAGS) -c $< -o $@
 
 $(BUILD)/obj/%.o: $(SRC)/%.c $(BUILD)/flags.txt
 	@mkdir -p $(dir $@)
@@ -191,11 +209,14 @@ check-toc:
 
 # The PKG creates USRDIR with an empty Data folder for the user's PC game data.
 $(BUILD)/$(TARGET).pkg: $(BUILD)/$(TARGET).self $(BUILD)/pkgfiles.stamp
-$(BUILD)/pkgfiles.stamp: FORCE
+$(BUILD)/pkgfiles.stamp: FORCE $(if $(filter 1,$(PROFILE)),$(ELF))
 	@rm -rf $(PKGFILES)
 	@mkdir -p $(PKGFILES)/USRDIR/Data
 	@printf "Copy the Data folder of your PC copy of Tony Hawk's Underground here.\n" > $(PKGFILES)/USRDIR/Data/PUT_PC_DATA_HERE.TXT
 	@if [ -f $(ROOT)/ps3/PIC1.PNG ]; then cp $(ROOT)/ps3/PIC1.PNG $(PKGFILES)/PIC1.PNG; fi	# XMB background (1920x1080)
+ifeq ($(PROFILE),1)
+	@ppu-nm -C --defined-only $(ELF) | grep -E '^[0-9a-f]+ [DdTtWw] ' > $(PKGFILES)/USRDIR/thug-ps3.sym	# names for the [fprof] lines
+endif
 	@touch $@
 
 clean:

@@ -143,11 +143,12 @@ jobs:
     needs: toolchain
     runs-on: ubuntu-24.04
     # The asserts build (ASSERTS=1) is new: it doesn't fail the workflow until it has built cleanly.
-    continue-on-error: ${{ matrix.variant == 'asserts' }}
+    continue-on-error: ${{ matrix.variant == 'asserts' || matrix.variant == 'profile' }}
     strategy:
       fail-fast: false
       matrix:
-        variant: [headless, release, asserts]
+        # profile: the release build with the renderer's functions timed (PROFILE=1); not on main
+        variant: [headless, release, asserts, profile]
     steps:
       - uses: actions/checkout@v5
 
@@ -167,6 +168,7 @@ jobs:
           echo "$RUNNER_TEMP/ps3dev/ppu/bin" >> "$GITHUB_PATH"
 
       - name: Build
+        if: matrix.variant != 'profile' || github.ref_name != 'main'
         run: |
           set -o pipefail
           ppu-gcc --version | head -1
@@ -175,7 +177,8 @@ jobs:
           ASSERTS=$([ "${{ matrix.variant }}" = asserts ] && echo 1 || echo 0)
           # release: also the warnings the warning gate checks (they don't change the code)
           WARNINGS=$([ "${{ matrix.variant }}" = release ] && echo 1 || echo 0)
-          make -f Makefile.ps3 HEADLESS=$HEADLESS ASSERTS=$ASSERTS WARNINGS=$WARNINGS -k -j"$(nproc)" 2>&1 | tee build.log
+          PROFILE=$([ "${{ matrix.variant }}" = profile ] && echo 1 || echo 0)
+          make -f Makefile.ps3 HEADLESS=$HEADLESS ASSERTS=$ASSERTS WARNINGS=$WARNINGS PROFILE=$PROFILE -k -j"$(nproc)" 2>&1 | tee build.log
 
       - name: Report ELF size
         if: always()

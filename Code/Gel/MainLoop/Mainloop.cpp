@@ -61,6 +61,7 @@ Dbg_DefineProject( GEL, "GEL Library" )
 void Win32_ApplyInputs();
 #ifdef __PLAT_PS3__
 #include <ps3_platform.h>
+#include <ps3_funcprof.h>
 #include <sys/systime.h>
 #include <gel/scripting/script.h>
 #include <gfx/DX9/NX/nx_init.h>
@@ -418,6 +419,7 @@ void		Manager::MainLoop( void )
 #ifdef __PLAT_PS3__
 	Ps3Platform::StartupFinished();
 	Ps3Platform::Step("main loop started");
+	Ps3FuncProf::Start();	// the profile build only (ps3_funcprof.h)
 #endif
 	bool old_flag = done;	// push the current done flag
 
@@ -862,6 +864,7 @@ void		Manager::MainLoop( void )
 		PS3_PROF_MARK(kProfOther);
 		ProfCommit(profPhase, NxXbox::g_disableRendering, s_ps3Frame, profLast, g_ps3FrameGateTicks - s_profGateLast);
 		memset(g_ps3StageTicks, 0, sizeof(g_ps3StageTicks));
+		Ps3FuncProf::FrameEnd();
 		s_profGateLast = g_ps3FrameGateTicks;
 #endif
  #ifdef	__PLAT_NGPS__		
