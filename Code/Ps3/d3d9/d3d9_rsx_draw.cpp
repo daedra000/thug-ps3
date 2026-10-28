@@ -262,6 +262,10 @@ static unsigned s_doneAge;
 static bool s_freshDone;	// rsx_fresh_label.txt: read the label every time (a test switch)
 static bool s_vsAlways;		// rsx_vs_always.txt: recompute the vertex constants for every draw (a test switch)
 static bool s_slowDraws;		// rsx_slow_draws.txt: spin 2.5 us in every draw, nothing else changed (a test switch)
+// rsx_fp_reuse.txt: fragment programs reused (kept copies, this frame's copy when the constants
+// match) instead of a fresh copy per draw. They flashed in October before the wait after
+// texture targets (s_noTargetWait) existed, which may have been the real cause (a test switch).
+static bool s_fpReuse;
 static bool s_noTargetWait;	// rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture (a test switch)
 static inline u32 DoneCached()
 {
@@ -1336,7 +1340,7 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 {
 	u32 offset = e->localOffset;
 	const u32 usedPlusOne = s_frameSeq + 1;
-	if (e->numConsts)
+	if (e->numConsts && !s_fpReuse)
 	{
 		// A fresh copy in the ring on every draw. Kept copies (F5) and reusing this frame's
 		// copy when the constants matched were the last difference between main, which
@@ -2249,6 +2253,8 @@ bool DrawInit()
 	s_vsAlways = FlagFile("rsx_vs_always.txt");
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
+	s_fpReuse = FlagFile("rsx_fp_reuse.txt");
+	if (s_fpReuse) GpuLog("rsx_fp_reuse.txt: fragment programs reused instead of a fresh copy per draw");
 	if (s_noTargetWait) GpuLog("rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture");
 	if (s_slowDraws) GpuLog("rsx_slow_draws.txt: every draw spins 2.5 us first");
 	if (s_freshDone) GpuLog("rsx_fresh_label.txt: the fence label is read every time");
