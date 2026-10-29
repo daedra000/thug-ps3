@@ -184,7 +184,9 @@ ifeq ($(PROFILE),1)
 # around each vector element access swamped the functions using them, so their time is
 # counted in their callers. The D3D9 layer is built without inlining, so each of its helpers
 # shows up on its own rather than inside the draw function.
-PROF_EXCLUDE := -finstrument-functions-exclude-file-list=Core/Math,d3dx,Ps3/include
+# Matched against the path GCC opened, and the engine includes the maths headers as
+# <core/math/...> through the case-includes tree, so both spellings are listed.
+PROF_EXCLUDE := -finstrument-functions-exclude-file-list=Core/Math,core/math,d3dx,Ps3/include
 $(BUILD)/obj/Gfx/%.o: PROF_FLAGS := -finstrument-functions $(PROF_EXCLUDE)
 $(BUILD)/obj/Ps3/d3d9/%.o: PROF_FLAGS := -finstrument-functions $(PROF_EXCLUDE) -fno-inline
 $(BUILD)/obj/Ps3/rsx/%.o: PROF_FLAGS := -finstrument-functions $(PROF_EXCLUDE)
