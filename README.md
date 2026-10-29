@@ -99,6 +99,8 @@ needed to play; leave them all out unless asked for one.
 | `rsx_capture.txt` | Save a screenshot and log every draw about every 30 s (see Installing) |
 | `rsx_linear_textures.txt` | No texture swizzling (and so no mipmaps) |
 | `rsx_flip_cull.txt` | Cull the other triangle winding (the old mapping) |
+| `rsx_same_state.txt` | A draw after which only the vertex/index buffers changed reuses the previous draw's worked-out state (programs, constants, textures, view, render state) instead of working it out again; the RSX gets the same commands |
+| `rsx_same_state_check.txt` | With `rsx_same_state.txt`: also work it out the long way and log any difference |
 | `rsx_no_draw.txt` | Clear and flip only, draw nothing |
 | `rsx_depth_clamp.txt` | Depth clamp instead of near/far clipping |
 | `rsx_double_buffer.txt` | Two display buffers instead of three |

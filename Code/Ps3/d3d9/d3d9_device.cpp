@@ -467,6 +467,7 @@ IDirect3DDevice9::IDirect3DDevice9(const D3DPRESENT_PARAMETERS* pp)
 		D3DXMatrixIdentity((D3DXMATRIX*)&m_transforms[i]);
 	m_fvf = 0; m_decl = NULL; m_vs = NULL; m_ps = NULL; m_indices = NULL; m_backend = NULL;
 	m_vsSerial = 1;
+	m_stateSerial = 1;
 
 	// D3D9 default render states that matter to the renderer.
 	m_rs[D3DRS_ZENABLE] = D3DZB_TRUE;
@@ -644,6 +645,7 @@ HRESULT IDirect3DDevice9::SetRenderTarget(DWORD index, IDirect3DSurface9* s)
 {
 	if (index != 0) return S_OK;
 	m_renderTarget = s ? s : m_backBuffer;
+	++m_stateSerial;
 	m_viewport.X = m_viewport.Y = 0;
 	m_viewport.Width = m_renderTarget->m_width;
 	m_viewport.Height = m_renderTarget->m_height;
@@ -660,6 +662,7 @@ HRESULT IDirect3DDevice9::GetRenderTarget(DWORD, IDirect3DSurface9** pp)
 
 HRESULT IDirect3DDevice9::SetDepthStencilSurface(IDirect3DSurface9* s)
 {
+	if (m_depthTarget != s) ++m_stateSerial;
 	m_depthTarget = s;
 	return S_OK;
 }
@@ -694,6 +697,7 @@ HRESULT IDirect3DDevice9::SetTransform(D3DTRANSFORMSTATETYPE t, const D3DMATRIX*
 	{
 		m_transforms[t] = *m;
 		++m_vsSerial;
+		++m_stateSerial;
 	}
 	return S_OK;
 }
@@ -704,13 +708,13 @@ HRESULT IDirect3DDevice9::GetTransform(D3DTRANSFORMSTATETYPE t, D3DMATRIX* m)
 	return S_OK;
 }
 
-HRESULT IDirect3DDevice9::SetViewport(const D3DVIEWPORT9* vp) { if (memcmp(&m_viewport, vp, sizeof(*vp))) { m_viewport = *vp; ++m_vsSerial; } return S_OK; }
+HRESULT IDirect3DDevice9::SetViewport(const D3DVIEWPORT9* vp) { if (memcmp(&m_viewport, vp, sizeof(*vp))) { m_viewport = *vp; ++m_vsSerial; ++m_stateSerial; } return S_OK; }
 HRESULT IDirect3DDevice9::GetViewport(D3DVIEWPORT9* vp) { *vp = m_viewport; return S_OK; }
-HRESULT IDirect3DDevice9::SetMaterial(const D3DMATERIAL9* m) { if (memcmp(&m_material, m, sizeof(*m))) { m_material = *m; ++m_vsSerial; } return S_OK; }
+HRESULT IDirect3DDevice9::SetMaterial(const D3DMATERIAL9* m) { if (memcmp(&m_material, m, sizeof(*m))) { m_material = *m; ++m_vsSerial; ++m_stateSerial; } return S_OK; }
 HRESULT IDirect3DDevice9::GetMaterial(D3DMATERIAL9* m) { *m = m_material; return S_OK; }
-HRESULT IDirect3DDevice9::SetLight(DWORD i, const D3DLIGHT9* l) { if (i < 8 && memcmp(&m_lights[i], l, sizeof(*l))) { m_lights[i] = *l; ++m_vsSerial; } return S_OK; }
+HRESULT IDirect3DDevice9::SetLight(DWORD i, const D3DLIGHT9* l) { if (i < 8 && memcmp(&m_lights[i], l, sizeof(*l))) { m_lights[i] = *l; ++m_vsSerial; ++m_stateSerial; } return S_OK; }
 HRESULT IDirect3DDevice9::GetLight(DWORD i, D3DLIGHT9* l) { if (i < 8) *l = m_lights[i]; return S_OK; }
-HRESULT IDirect3DDevice9::LightEnable(DWORD i, BOOL on) { if (i < 8 && m_lightEnabled[i] != on) { m_lightEnabled[i] = on; ++m_vsSerial; } return S_OK; }
+HRESULT IDirect3DDevice9::LightEnable(DWORD i, BOOL on) { if (i < 8 && m_lightEnabled[i] != on) { m_lightEnabled[i] = on; ++m_vsSerial; ++m_stateSerial; } return S_OK; }
 HRESULT IDirect3DDevice9::GetLightEnable(DWORD i, BOOL* on) { *on = i < 8 ? m_lightEnabled[i] : FALSE; return S_OK; }
 
 HRESULT IDirect3DDevice9::SetRenderState(D3DRENDERSTATETYPE s, DWORD v)
@@ -718,6 +722,7 @@ HRESULT IDirect3DDevice9::SetRenderState(D3DRENDERSTATETYPE s, DWORD v)
 	if ((UINT)s < D3DRS_MAX && m_rs[s] != v)
 	{
 		m_rs[s] = v;
+		++m_stateSerial;
 		if (s == D3DRS_AMBIENT || s == D3DRS_FOGSTART || s == D3DRS_FOGEND || s == D3DRS_POINTSIZE) ++m_vsSerial;
 	}
 	return S_OK;
@@ -726,7 +731,7 @@ HRESULT IDirect3DDevice9::GetRenderState(D3DRENDERSTATETYPE s, DWORD* v) { *v = 
 
 HRESULT IDirect3DDevice9::SetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE s, DWORD v)
 {
-	if (stage < 8 && (UINT)s < D3DTSS_MAX) m_tss[stage][s] = v;
+	if (stage < 8 && (UINT)s < D3DTSS_MAX && m_tss[stage][s] != v) { m_tss[stage][s] = v; ++m_stateSerial; }
 	return S_OK;
 }
 
@@ -738,7 +743,7 @@ HRESULT IDirect3DDevice9::GetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATE
 
 HRESULT IDirect3DDevice9::SetSamplerState(DWORD sampler, D3DSAMPLERSTATETYPE s, DWORD v)
 {
-	if (sampler < 16 && (UINT)s < D3DSAMP_MAX) m_ss[sampler][s] = v;
+	if (sampler < 16 && (UINT)s < D3DSAMP_MAX && m_ss[sampler][s] != v) { m_ss[sampler][s] = v; ++m_stateSerial; }
 	return S_OK;
 }
 
@@ -750,7 +755,7 @@ HRESULT IDirect3DDevice9::GetSamplerState(DWORD sampler, D3DSAMPLERSTATETYPE s, 
 
 HRESULT IDirect3DDevice9::SetTexture(DWORD stage, IDirect3DBaseTexture9* t)
 {
-	if (stage < 16) m_textures[stage] = t;
+	if (stage < 16 && m_textures[stage] != t) { m_textures[stage] = t; ++m_stateSerial; }
 	return S_OK;
 }
 
@@ -761,7 +766,7 @@ HRESULT IDirect3DDevice9::GetTexture(DWORD stage, IDirect3DBaseTexture9** pp)
 	return S_OK;
 }
 
-HRESULT IDirect3DDevice9::SetScissorRect(const RECT* r) { m_scissor = *r; return S_OK; }
+HRESULT IDirect3DDevice9::SetScissorRect(const RECT* r) { if (memcmp(&m_scissor, r, sizeof(*r))) { m_scissor = *r; ++m_stateSerial; } return S_OK; }
 HRESULT IDirect3DDevice9::GetScissorRect(RECT* r) { *r = m_scissor; return S_OK; }
 
 HRESULT IDirect3DDevice9::CreateVertexDeclaration(const D3DVERTEXELEMENT9* e, IDirect3DVertexDeclaration9** pp)
@@ -770,9 +775,9 @@ HRESULT IDirect3DDevice9::CreateVertexDeclaration(const D3DVERTEXELEMENT9* e, ID
 	return S_OK;
 }
 
-HRESULT IDirect3DDevice9::SetVertexDeclaration(IDirect3DVertexDeclaration9* d) { m_decl = d; return S_OK; }
+HRESULT IDirect3DDevice9::SetVertexDeclaration(IDirect3DVertexDeclaration9* d) { if (m_decl != d) ++m_stateSerial; m_decl = d; return S_OK; }
 HRESULT IDirect3DDevice9::GetVertexDeclaration(IDirect3DVertexDeclaration9** pp) { *pp = m_decl; return S_OK; }
-HRESULT IDirect3DDevice9::SetFVF(DWORD fvf) { m_fvf = fvf; m_decl = NULL; return S_OK; }
+HRESULT IDirect3DDevice9::SetFVF(DWORD fvf) { if (m_fvf != fvf || m_decl) ++m_stateSerial; m_fvf = fvf; m_decl = NULL; return S_OK; }
 HRESULT IDirect3DDevice9::GetFVF(DWORD* fvf) { *fvf = m_fvf; return S_OK; }
 
 HRESULT IDirect3DDevice9::CreateVertexShader(const DWORD* tokens, IDirect3DVertexShader9** pp)
@@ -790,7 +795,7 @@ HRESULT IDirect3DDevice9::CreateVertexShader(const DWORD* tokens, IDirect3DVerte
 	return S_OK;
 }
 
-HRESULT IDirect3DDevice9::SetVertexShader(IDirect3DVertexShader9* s) { m_vs = s; return S_OK; }
+HRESULT IDirect3DDevice9::SetVertexShader(IDirect3DVertexShader9* s) { if (m_vs != s) ++m_stateSerial; m_vs = s; return S_OK; }
 HRESULT IDirect3DDevice9::GetVertexShader(IDirect3DVertexShader9** pp) { *pp = m_vs; return S_OK; }
 
 HRESULT IDirect3DDevice9::SetVertexShaderConstantF(UINT reg, const float* data, UINT count)
@@ -824,14 +829,14 @@ HRESULT IDirect3DDevice9::CreatePixelShader(const DWORD* tokens, IDirect3DPixelS
 	return S_OK;
 }
 
-HRESULT IDirect3DDevice9::SetPixelShader(IDirect3DPixelShader9* s) { m_ps = s; return S_OK; }
+HRESULT IDirect3DDevice9::SetPixelShader(IDirect3DPixelShader9* s) { if (m_ps != s) ++m_stateSerial; m_ps = s; return S_OK; }
 HRESULT IDirect3DDevice9::GetPixelShader(IDirect3DPixelShader9** pp) { *pp = m_ps; return S_OK; }
 
 HRESULT IDirect3DDevice9::SetPixelShaderConstantF(UINT reg, const float* data, UINT count)
 {
 	if (reg >= 32) return D3DERR_INVALIDCALL;
 	if (reg + count > 32) count = 32 - reg;
-	memcpy(m_psConst[reg], data, count * 16);
+	if (memcmp(m_psConst[reg], data, count * 16)) { memcpy(m_psConst[reg], data, count * 16); ++m_stateSerial; }
 	return S_OK;
 }
 

@@ -98,6 +98,7 @@ static struct Stats
 	unsigned overflowKB;	// ring-full fallbacks: allocated on the side instead of dropping the draw
 	unsigned texBlocks;		// re-uploads that needed a new RSX block (none was idle)
 	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
+	unsigned sameState, sameMismatch;	// rsx_same_state.txt: draws that reused the previous draw's state; check failures
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned targetWaits;	// RSX idle waits after drawing into a texture
 	unsigned long long ringBytes;
@@ -269,6 +270,31 @@ static bool s_fpReuse;
 // rsx_full_state.txt: every draw sends its whole state (a test); rsx_full_keep_state.txt,
 // _view, _textures, _attribs, _fp leave that part out of it (s_fullKeep bits 1, 2, 4, 8, 16).
 static bool s_fullState;
+// rsx_same_state.txt: a draw after which nothing but the vertex/index buffers changed (the
+// device's m_stateSerial is the same) reuses the previous draw's resolved programs, constants
+// and textures, and skips re-applying the view and render state it already sent. What goes to
+// the RSX is unchanged (each draw still gets a fresh fragment-program copy); only the CPU work
+// of working it out again is left out. rsx_same_state_check.txt also works it out the long way
+// for every such draw and logs any difference (a gap in m_stateSerial).
+static bool s_sameState, s_sameCheck;
+struct RsxTexture;
+struct FpEntry;
+struct VpEntry;
+struct SameState
+{
+	bool valid;			// the fields below are a resolved draw's
+	bool applied;		// ApplyView/ApplyState ran with them (s_state/s_view are this state)
+	IDirect3DDevice9* dev;
+	unsigned serial;	// dev->m_stateSerial they came from
+	u32 frame;			// s_frameSeq
+	bool hasDepth;
+	const RsxTexture* tex[4];
+	FpEntry* fp;
+	VpEntry* vp;
+	float fc[9][4];
+	int numTexOut;
+};
+static SameState s_same;
 static unsigned s_fullKeep;
 static bool s_noTargetWait;	// rsx_no_target_wait.txt: no RSX idle wait after drawing into a texture (a test switch)
 static inline u32 DoneCached()
@@ -1307,6 +1333,7 @@ static FpEntry* FragmentProgramFrom(const FpKey& key, const std::string& src, in
 static void FreeFragmentProgram(FpEntry* e)
 {
 	if (s_lastFp == e) s_lastFp = NULL;
+	s_same.valid = false;
 	// The RSX may still run these: freed once those frames are done.
 	DeferFree(e->local, e->localUsed);
 	for (int i = 0; i < kFpSlots; ++i) DeferFree(e->slots[i].mem, e->slots[i].usedPlusOne);
@@ -1881,79 +1908,122 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 			tex[s] = Texture(static_cast<IDirect3DTexture9*>(bt));
 	}
 
-	// Fragment program and its constants. The key is plain data: a pixel shader by pointer
-	// (and fog), or the fixed-function stages (FillFsKey, once per draw).
+	// rsx_same_state.txt: nothing but buffers changed since the last draw (see SameState).
+	const bool same = s_sameState && s_same.valid && s_same.dev == dev && s_same.serial == dev->m_stateSerial &&
+		s_same.frame == s_frameSeq && !memcmp(tex, s_same.tex, sizeof(tex));
 	FpEntry* fp = NULL;
+	VpEntry* vp = NULL;
 	float fc[9][4];
-	memset(fc, 0, sizeof(fc));
-	const bool fog = FogEnabled(dev);
 	int numTexOut = 0;
-	FpKey key;
-	memset(&key, 0, sizeof(key));
-	if (dev->m_ps)
+	if (same && !s_sameCheck)
 	{
-		key.kind = 1;
-		key.fog = fog ? 1 : 0;
-		key.ps = (u64)(uintptr_t)dev->m_ps;
+		fp = s_same.fp;
+		vp = s_same.vp;
+		numTexOut = s_same.numTexOut;
+		memcpy(fc, s_same.fc, sizeof(fc));
+		++s_stats.sameState;
+		DP_MARK(kDpKeys);
+		DP_MARK(kDpVp);
 	}
 	else
 	{
-		const bool has[4] = { tex[0] != NULL, tex[1] != NULL, tex[2] != NULL, tex[3] != NULL };
-		FillFsKey(dev, key.fs, has);
-	}
-	if (s_lastFp && !memcmp(&key, &s_lastFpKey, sizeof(key)))
-		fp = s_lastFp;
-	else
-	{
-		fp = s_fps.Find(key);
-		if (!fp && dev->m_ps)
+		// Fragment program and its constants. The key is plain data: a pixel shader by pointer
+		// (and fog), or the fixed-function stages (FillFsKey, once per draw).
+		memset(fc, 0, sizeof(fc));
+		const bool fog = FogEnabled(dev);
+		FpKey key;
+		memset(&key, 0, sizeof(key));
+		if (dev->m_ps)
 		{
-			const char* src = PixelShaderSource(dev->m_ps);
-			if (!src) return Skip("pixel shader without source");
-			std::string err, prog = PixelShaderProgram(src, fog, &err);
-			if (prog.empty()) GpuLog("pixel shader not translated (%s):\n%s", err.c_str(), src);
-			int mask = 0;
-			for (int t = 0; t < 4; ++t)
+			key.kind = 1;
+			key.fog = fog ? 1 : 0;
+			key.ps = (u64)(uintptr_t)dev->m_ps;
+		}
+		else
+		{
+			const bool has[4] = { tex[0] != NULL, tex[1] != NULL, tex[2] != NULL, tex[3] != NULL };
+			FillFsKey(dev, key.fs, has);
+		}
+		if (s_lastFp && !memcmp(&key, &s_lastFpKey, sizeof(key)))
+			fp = s_lastFp;
+		else
+		{
+			fp = s_fps.Find(key);
+			if (!fp && dev->m_ps)
 			{
-				char want[16];
-				snprintf(want, sizeof(want), "texture[%d]", t);
-				if (prog.find(want) != std::string::npos) mask |= 1 << t;
+				const char* src = PixelShaderSource(dev->m_ps);
+				if (!src) return Skip("pixel shader without source");
+				std::string err, prog = PixelShaderProgram(src, fog, &err);
+				if (prog.empty()) GpuLog("pixel shader not translated (%s):\n%s", err.c_str(), src);
+				int mask = 0;
+				for (int t = 0; t < 4; ++t)
+				{
+					char want[16];
+					snprintf(want, sizeof(want), "texture[%d]", t);
+					if (prog.find(want) != std::string::npos) mask |= 1 << t;
+				}
+				fp = FragmentProgramFrom(key, prog, mask);
 			}
-			fp = FragmentProgramFrom(key, prog, mask);
+			else if (!fp)
+			{
+				int mask = 0;
+				for (int s = 0; s < key.fs.numStages; ++s) if (key.fs.stage[s].hasTexture) mask |= 1 << s;
+				fp = FragmentProgramFrom(key, FixedFunctionFragmentProgram(key.fs), mask);
+			}
+			if (fp)
+			{
+				memcpy(&s_lastFpKey, &key, sizeof(key));
+				s_lastFp = fp;
+			}
 		}
-		else if (!fp)
+		if (dev->m_ps)
 		{
-			int mask = 0;
-			for (int s = 0; s < key.fs.numStages; ++s) if (key.fs.stage[s].hasTexture) mask |= 1 << s;
-			fp = FragmentProgramFrom(key, FixedFunctionFragmentProgram(key.fs), mask);
+			for (int i = 0; i < 8; ++i) memcpy(fc[i], dev->m_psConst[i], 16);
+			ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcPsFogColor]);
 		}
-		if (fp)
+		else
 		{
-			memcpy(&s_lastFpKey, &key, sizeof(key));
-			s_lastFp = fp;
+			ColorToFloats(dev->m_rs[D3DRS_TEXTUREFACTOR], fc[kFcTextureFactor]);
+			ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcFogColor]);
 		}
-	}
-	if (dev->m_ps)
-	{
-		for (int i = 0; i < 8; ++i) memcpy(fc[i], dev->m_psConst[i], 16);
-		ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcPsFogColor]);
-	}
-	else
-	{
-		ColorToFloats(dev->m_rs[D3DRS_TEXTUREFACTOR], fc[kFcTextureFactor]);
-		ColorToFloats(dev->m_rs[D3DRS_FOGCOLOR], fc[kFcFogColor]);
-	}
-	if (!fp || !fp->prog) return Skip("fragment program unavailable");
-	for (int t = 0; t < 4; ++t) if (fp->texMask & (1 << t)) numTexOut = t + 1;
-	if (!dev->m_ps && key.fs.numStages > numTexOut) numTexOut = key.fs.numStages;
+		if (!fp || !fp->prog) return Skip("fragment program unavailable");
+		for (int t = 0; t < 4; ++t) if (fp->texMask & (1 << t)) numTexOut = t + 1;
+		if (!dev->m_ps && key.fs.numStages > numTexOut) numTexOut = key.fs.numStages;
 
-	DP_MARK(kDpKeys);
-	// Vertex program.
-	VsKey vk;
-	FillVsKey(dev, l, numTexOut, vk);
-	VpEntry* vp = VertexProgramFor(vk);
-	if (!vp || !vp->prog) return Skip("vertex program unavailable");
-	DP_MARK(kDpVp);
+		DP_MARK(kDpKeys);
+		// Vertex program.
+		VsKey vk;
+		FillVsKey(dev, l, numTexOut, vk);
+		vp = VertexProgramFor(vk);
+		if (!vp || !vp->prog) return Skip("vertex program unavailable");
+		DP_MARK(kDpVp);
+		if (same)
+		{
+			// rsx_same_state_check.txt: the long way must agree with the reused state.
+			++s_stats.sameState;
+			if (fp != s_same.fp || vp != s_same.vp || numTexOut != s_same.numTexOut || memcmp(fc, s_same.fc, sizeof(fc)))
+			{
+				++s_stats.sameMismatch;
+				LogLimited("samecheck", 20, "rsx_same_state_check: unchanged state serial %u but a different draw set-up (fp %p/%p, vp %p/%p, stages %d/%d, constants %s)",
+					dev->m_stateSerial, (void*)fp, (void*)s_same.fp, (void*)vp, (void*)s_same.vp, numTexOut, s_same.numTexOut,
+					memcmp(fc, s_same.fc, sizeof(fc)) ? "differ" : "same");
+			}
+		}
+		else if (s_sameState)
+		{
+			s_same.valid = true;
+			s_same.applied = false;
+			s_same.dev = dev;
+			s_same.serial = dev->m_stateSerial;
+			s_same.frame = s_frameSeq;
+			s_same.hasDepth = hasDepth;
+			memcpy(s_same.tex, tex, sizeof(tex));
+			s_same.fp = fp;
+			s_same.vp = vp;
+			memcpy(s_same.fc, fc, sizeof(fc));
+			s_same.numTexOut = numTexOut;
+		}
+	}
 
 	// Vertex and index data on the RSX.
 	u32 vbase, stride, ioff = 0;
@@ -2041,8 +2111,16 @@ static bool DoDraw(IDirect3DDevice9* dev, const DrawCall& call)
 		if (!(s_fullKeep & 8)) { s_attrValid = false; s_attribMask = 0xFFFFFFFF; }
 		if (!(s_fullKeep & 16)) s_currentFpOffset = 0xFFFFFFFF;
 	}
-	ApplyView(dev);
-	ApplyState(dev, hasDepth);
+	// The view and render state the RSX has are already this draw's when the previous draw
+	// applied the same resolved state and nothing reset them since.
+	if (!(same && !s_sameCheck && s_same.applied && s_same.hasDepth == hasDepth && s_stateValid && s_viewValid &&
+		s_clipsSent && !s_zcullStale))
+	{
+		ApplyView(dev);
+		ApplyState(dev, hasDepth);
+		if (s_same.valid && s_same.serial == dev->m_stateSerial && s_same.frame == s_frameSeq && s_same.hasDepth == hasDepth)
+			s_same.applied = true;
+	}
 	DP_MARK(kDpState);
 	if (dev->m_vsSerial != s_vcSerial || s_resendPrograms || s_vsAlways)
 	{
@@ -2272,6 +2350,10 @@ bool DrawInit()
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
 	s_fpReuse = FlagFile("rsx_fp_reuse.txt");
 	s_fullState = FlagFile("rsx_full_state.txt");
+	s_sameState = FlagFile("rsx_same_state.txt");
+	s_sameCheck = s_sameState && FlagFile("rsx_same_state_check.txt");
+	if (s_sameState) GpuLog("rsx_same_state.txt: draws with unchanged device state reuse the previous draw's resolved state%s",
+		s_sameCheck ? " (checked against the long way: rsx_same_state_check.txt)" : "");
 	s_fullKeep = (FlagFile("rsx_full_keep_state.txt") ? 1 : 0) | (FlagFile("rsx_full_keep_view.txt") ? 2 : 0) |
 		(FlagFile("rsx_full_keep_textures.txt") ? 4 : 0) | (FlagFile("rsx_full_keep_attribs.txt") ? 8 : 0) |
 		(FlagFile("rsx_full_keep_fp.txt") ? 16 : 0);
@@ -2351,11 +2433,11 @@ const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
-		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
+		"%u fragment-program patches, %u same-state draws (%u check failures), ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
-		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
+		s_stats.fpPatches, s_stats.sameState, s_stats.sameMismatch, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));
@@ -2384,6 +2466,7 @@ static void FreeTexture(void* backend)
 	RsxTexture* r = (RsxTexture*)backend;
 	if (!r) return;
 	for (int u = 0; u < 4; ++u) if (s_bound[u] == r) s_bound[u] = NULL;
+	s_same.valid = false;	// a new record could take this address
 	// The RSX may still read these: freed once the frames that used them are done.
 	DeferFree(r->mem, r->usedPlusOne);
 	for (int i = 0; i < 2; ++i) DeferFree(r->spare[i].mem, r->spare[i].usedPlusOne);
