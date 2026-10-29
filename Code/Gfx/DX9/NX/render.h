@@ -134,6 +134,9 @@ namespace NxXbox
 	
 	// MSM PERFCHANGE - added scale.
 	void	set_camera( Mth::Matrix *p_matrix, Mth::Vector *p_position, float screen_angle, float aspect_ratio, bool render_at_infinity = false );
+#ifdef __PLAT_PS3__
+	bool	Ps3DistanceFogOn();	// draw_distance_fog.txt is on for this camera (render.cpp)
+#endif
 	void	set_frustum_bbox_transform( Mth::Matrix *p_transform );
 	bool	frustum_check_sphere( D3DXVECTOR3 *p_center, float radius );
 	bool	check_radius(D3DXVECTOR3* p_center, float radius); // LWSS add

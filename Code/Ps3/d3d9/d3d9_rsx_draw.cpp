@@ -98,6 +98,7 @@ static struct Stats
 	unsigned overflowKB;	// ring-full fallbacks: allocated on the side instead of dropping the draw
 	unsigned texBlocks;		// re-uploads that needed a new RSX block (none was idle)
 	unsigned fpPatches;		// patched fragment-program copies written (kept or in the ring)
+	unsigned fpSame;		// rsx_fast_draws.txt: draws that kept the bound copy (identical program and constants)
 	unsigned kicks;			// mid-frame command-buffer flushes
 	unsigned targetWaits;	// RSX idle waits after drawing into a texture
 	unsigned long long ringBytes;
@@ -266,6 +267,7 @@ static bool s_slowDraws;		// rsx_slow_draws.txt: spin 2.5 us in every draw, noth
 // match) instead of a fresh copy per draw. They flashed in October before the wait after
 // texture targets (s_noTargetWait) existed, which may have been the real cause (a test switch).
 static bool s_fpReuse;
+static bool s_fastDraws;	// rsx_fast_draws.txt: no fresh fragment-program copy when the bound one is identical (UseFragmentProgram)
 // rsx_full_state.txt: every draw sends its whole state (a test); rsx_full_keep_state.txt,
 // _view, _textures, _attribs, _fp leave that part out of it (s_fullKeep bits 1, 2, 4, 8, 16).
 static bool s_fullState;
@@ -1346,6 +1348,16 @@ static bool UseFragmentProgram(FpEntry* e, const float (*values)[4])
 	const u32 usedPlusOne = s_frameSeq + 1;
 	if (e->numConsts && !s_fpReuse)
 	{
+		// rsx_fast_draws.txt: this frame's last copy of this program is the one bound and has
+		// these very constants, so a fresh copy would be the same bytes loaded again; the RSX
+		// keeps running the bound one. Nothing in RSX memory is rewritten or reused across
+		// programs (what the fresh copies were for); only an identical reload is left out.
+		if (s_fastDraws && e->lastFrame == s_frameSeq && e->lastOffset == s_currentFpOffset &&
+			s_currentFpOffset != 0xFFFFFFFF && SameConsts(e, e->last, values))
+		{
+			++s_stats.fpSame;
+			return true;
+		}
 		// A fresh copy in the ring on every draw. Kept copies (F5) and reusing this frame's
 		// copy when the constants matched were the last difference between main, which
 		// flashed with every other switch on, and the steady bisect builds.
@@ -2268,6 +2280,8 @@ bool DrawInit()
 	s_slowDraws = FlagFile("rsx_slow_draws.txt");
 	s_noTargetWait = FlagFile("rsx_no_target_wait.txt");
 	s_fpReuse = FlagFile("rsx_fp_reuse.txt");
+	s_fastDraws = FlagFile("rsx_fast_draws.txt");
+	if (s_fastDraws) GpuLog("rsx_fast_draws.txt: a draw whose fragment program and constants match the bound copy keeps it");
 	s_fullState = FlagFile("rsx_full_state.txt");
 	s_fullKeep = (FlagFile("rsx_full_keep_state.txt") ? 1 : 0) | (FlagFile("rsx_full_keep_view.txt") ? 2 : 0) |
 		(FlagFile("rsx_full_keep_textures.txt") ? 4 : 0) | (FlagFile("rsx_full_keep_attribs.txt") ? 8 : 0) |
@@ -2348,11 +2362,11 @@ const char* DrawStats()
 {
 	snprintf(s_statsLine, sizeof(s_statsLine),
 		"%u draws, %u drawn, %u skipped, %u to unusable targets; %u texture uploads (%u KB, %u new blocks), %u KB through the ring, %u programs (%u failed), "
-		"%u fragment-program patches, ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
+		"%u fragment-program patches (%u identical kept), ring full %u (%u KB on the side), %u kicks, %u waits after texture targets, %u RSX frees waiting; "
 		"%u textures, %u KB of them in main RAM; copies released after upload: %u textures (%u back), %u KB, %u vertex buffers (%u back), %u KB",
 		s_stats.draws, s_stats.drawn, s_stats.skipped, s_stats.offscreen, s_stats.uploads, s_stats.uploadKB, s_stats.texBlocks,
 		(unsigned)(s_stats.ringBytes / 1024), s_stats.programs, s_stats.programFailures,
-		s_stats.fpPatches, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
+		s_stats.fpPatches, s_stats.fpSame, s_stats.ringFull, s_stats.overflowKB, s_stats.kicks, s_stats.targetWaits, (unsigned)s_deferredCount,
 		::g_ps3TextureCount, (unsigned)(::g_ps3TextureRamBytes / 1024),
 		s_residency.texReleased, s_residency.texRestored, (unsigned)(s_residency.texReleasedBytes / 1024),
 		s_residency.vbReleased, s_residency.vbRestored, (unsigned)(s_residency.vbReleasedBytes / 1024));

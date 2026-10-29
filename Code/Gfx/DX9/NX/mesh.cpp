@@ -997,6 +997,15 @@ void sMesh::Submit( void )
 	D3DXMATRIX v50;
 	D3DXMATRIX v51;
 
+#ifdef __PLAT_PS3__
+	// draw_distance_fog.txt: fog the far end of a shortened draw distance (render.cpp sets the
+	// range and colour per camera). The PC code below turns fog off for every mesh otherwise.
+	if( Ps3DistanceFogOn() && Checksum != -1 )
+	{
+		Nx::CFog::sEnableFog( true );
+		goto PS3_FOG_SET;
+	}
+#endif
 	if (!NxXbox::EngineGlobals.g_Registry_options_flag_2 || Checksum == -1)
 	{
 		goto DISABLE_FOG;
@@ -1026,6 +1035,9 @@ void sMesh::Submit( void )
 DISABLE_FOG:
 		Nx::CFog::sEnableFog(false);
 	}
+#ifdef __PLAT_PS3__
+PS3_FOG_SET:
+#endif
 
 	// Pointless submitting a mesh with zero indices.
 	if( m_num_indices[0] == 0 )

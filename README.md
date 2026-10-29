@@ -109,6 +109,9 @@ needed to play; leave them all out unless asked for one.
 | `rsx_vs_always.txt` | Work out the vertex constants for every draw, even when nothing they come from changed |
 | `rsx_fresh_label.txt` | Read the RSX's frame counter on every check instead of a copy refreshed every 32 draws |
 | `rsx_slow_draws.txt` | Wait 2.5 µs in every draw (timing tests) |
+| `draw_distance_75.txt`, `draw_distance_50.txt` | Draw distance 48000 or 32000 (the Xbox's) instead of the PC's 64000 |
+| `draw_distance_fog.txt` | With either of those, fog over the last fifth of the distance to hide the cut |
+| `rsx_fast_draws.txt` | Keep the bound fragment program when a draw's program and constants are identical, instead of a fresh copy |
 | `no_frustum_cull.txt` | Draw every world mesh (no sphere test, visibility mask or occluders) |
 | `no_frustum_test.txt`, `no_vis_mask.txt`, `no_occlusion.txt` | Turn off one of those three |
 | `no_transparent_sort.txt` | Draw the sorted see-through meshes in scene order |

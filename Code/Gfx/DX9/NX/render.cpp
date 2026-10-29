@@ -2253,6 +2253,37 @@ void set_texture_projection_camera( sTexture *p_texture, XGVECTOR3 *p_pos, XGVEC
 
 
 
+#ifdef __PLAT_PS3__
+// Draw distance. The RSX clips everything past the far plane, but the CPU still did the sphere
+// test, the occluder test and the whole submit for every mesh out there: on a long street that
+// is hundreds of draws a frame that never reach the screen. Meshes wholly past the far plane are
+// now dropped at the sphere test (frustum_check_sphere), which on its own changes nothing on
+// screen. The far plane itself is kisak's PC 64000 (the Xbox's was 32000); the switches pull it
+// in for the CPU time that saves:
+//   draw_distance_75.txt  48000
+//   draw_distance_50.txt  32000, the Xbox draw distance
+//   draw_distance_fog.txt with either, fog over the last fifth of the distance to hide the cut
+// The sky pass (render_at_infinity) is never culled or fogged this way.
+static bool Ps3CullSwitch(int& flag, const char* name);
+static float s_ps3CullDistance = 1.0e30f;	// past this nearest eye depth a sphere is culled
+static bool s_ps3DistanceFog = false;		// this camera fogs the far end (draw_distance_fog.txt)
+
+static float Ps3FarPlane()
+{
+	static int s75 = -1, s50 = -1;
+	if( Ps3CullSwitch( s50, "draw_distance_50.txt" ))
+		return 32000.0f;
+	if( Ps3CullSwitch( s75, "draw_distance_75.txt" ))
+		return 48000.0f;
+	return 64000.0f;
+}
+
+bool Ps3DistanceFogOn()
+{
+	return s_ps3DistanceFog;
+}
+#endif
+
 /******************************************************************/
 /*                                                                */
 /*                                                                */
@@ -2284,6 +2315,25 @@ void set_camera( Mth::Matrix *p_matrix, Mth::Vector *p_position, float screen_an
 	EngineGlobals.near_plane	= 2.0f;
 	//EngineGlobals.far_plane		= 32000.0f;
 	EngineGlobals.far_plane		= 64000.0f; // lwss change for PC
+#ifdef __PLAT_PS3__
+	EngineGlobals.far_plane		= Ps3FarPlane();
+	s_ps3CullDistance			= render_at_infinity ? 1.0e30f : EngineGlobals.far_plane;
+	{
+		static int sFog = -1;
+		s_ps3DistanceFog = !render_at_infinity && EngineGlobals.far_plane < 64000.0f && Ps3CullSwitch( sFog, "draw_distance_fog.txt" );
+	}
+	if( s_ps3DistanceFog )
+	{
+		// Linear fog in eye depth (rsx_shadergen.cpp) over the last fifth of the distance, in
+		// the level's fog colour if it has one, else the clear colour. Level scripts can change
+		// these during logic; setting them per camera keeps them ours.
+		EngineGlobals.fog_start	= EngineGlobals.far_plane * 0.8f;
+		EngineGlobals.fog_end	= EngineGlobals.far_plane;
+		D3DDevice_SetRenderState( D3DRS_FOGSTART,	*((DWORD*)( &EngineGlobals.fog_start )));
+		D3DDevice_SetRenderState( D3DRS_FOGEND,		*((DWORD*)( &EngineGlobals.fog_end )));
+		D3DDevice_SetRenderState( D3DRS_FOGCOLOR,	EngineGlobals.fog_color ? EngineGlobals.fog_color : EngineGlobals.clear_color );
+	}
+#endif
 	EngineGlobals.screen_angle	= screen_angle;
 
 	// Figure width and height of viewport at near clip plane.
@@ -2472,6 +2522,11 @@ bool frustum_check_sphere( D3DXVECTOR3 *p_center, float radius )
 
 	if( -test_out.z + radius < EngineGlobals.near_plane )
 		return false;
+#ifdef __PLAT_PS3__
+	// Wholly past the far plane: the RSX would clip all of it (see Ps3FarPlane).
+	if( boundingSphereNearestZ > s_ps3CullDistance )
+		return false;
+#endif
 
 	float sx_z	= EngineGlobals.ViewFrustumSX * test_out.z;
 	float cx_x	= EngineGlobals.ViewFrustumCX * test_out.x;
